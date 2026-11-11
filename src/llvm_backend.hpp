@@ -796,6 +796,7 @@ lbCallingConventionKind const lb_calling_convention_map[ProcCC_MAX] = {
 	lbCallingConvention_PreserveNone,  // ProcCC_PreserveNone,
 	lbCallingConvention_PreserveMost,  // ProcCC_PreserveMost,
 	lbCallingConvention_PreserveAll,   // ProcCC_PreserveAll,
+	lbCallingConvention_Swift,         // ProcCC_Swift,
 
 };
 

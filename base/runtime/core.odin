@@ -62,6 +62,7 @@ enum u8 {
 	Preserve_None = 11,
 	Preserve_Most = 12,
 	Preserve_All  = 13,
+	Swift         = 14,
 }
 */
 Calling_Convention :: type_of(ODIN_DEFAULT_CALLING_CONVENTION)

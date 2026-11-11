@@ -829,22 +829,30 @@ gb_internal void lb_begin_procedure_body(lbProcedure *p) {
 
 				lbArgType *arg_type = &ft->args[param_index];
 				defer (param_index += 1);
-				// lbArg_Ignore params are not present in the LLVM function signature,
-				// so they don't advance the LLVM signature position
-				defer (if (arg_type->kind != lbArg_Ignore) { llvm_param_index += 1; });
+				defer (llvm_param_index += lb_abi_arg_count(*arg_type));
 
 				if (arg_type->kind == lbArg_Ignore) {
 					// Even though it is an ignored argument, it might still be referenced in the
 					// body.
 					lbValue dummy = lb_add_local_generated(p, e->type, false).addr;
 					lb_add_entity(p->module, e, dummy);
-				} else if (arg_type->kind == lbArg_Direct) {
+				} else if (arg_type->kind == lbArg_Direct || arg_type->kind == lbArg_Expand) {
 					if (e->token.string.len != 0 && !is_blank_ident(e->token.string)) {
 						LLVMTypeRef param_type = lb_type(p->module, e->type);
-						LLVMValueRef original_value = LLVMGetParam(p->value, param_offset+llvm_param_index);
-						LLVMValueRef value = arg_type->coerce_offsets.count > 0
-							? lb_coerce_fields_store(p, original_value, e->type, arg_type)
-							: OdinLLVMBuildTransmute(p, original_value, param_type);
+						LLVMValueRef value = nullptr;
+						if (arg_type->kind == lbArg_Expand) {
+							value = LLVMGetUndef(param_type);
+							unsigned count = lb_abi_arg_count(*arg_type);
+							for (unsigned j = 0; j < count; j++) {
+								LLVMValueRef field = LLVMGetParam(p->value, param_offset+llvm_param_index+j);
+								value = LLVMBuildInsertValue(p->builder, value, field, j, "");
+							}
+						} else {
+							LLVMValueRef original_value = LLVMGetParam(p->value, param_offset+llvm_param_index);
+							value = arg_type->coerce_offsets.count > 0
+								? lb_coerce_fields_store(p, original_value, e->type, arg_type)
+								: OdinLLVMBuildTransmute(p, original_value, param_type);
+						}
 
 						lbValue param = {};
 						param.value = value;
@@ -1230,21 +1238,19 @@ gb_internal lbValue lb_emit_call_internal(lbProcedure *p, lbValue value, lbValue
 		}
 
 		for_array(i, ft->args) {
-			// lbArg_Ignore args are not present in the call arguments, so they must not
-			// advance param_offset (mirrors lb_add_function_type_attributes)
-			if (ft->args[i].kind == lbArg_Ignore) {
+			lbArgType const &arg = ft->args[i];
+			if (arg.kind == lbArg_Ignore) {
 				continue;
 			}
-			LLVMAttributeRef attribute = ft->args[i].attribute;
-			if (attribute != nullptr) {
-				LLVMAddCallSiteAttribute(ret, param_offset, attribute);
+			if (arg.attribute != nullptr) {
+				LLVMAddCallSiteAttribute(ret, param_offset, arg.attribute);
 			}
 			// `byval`'s alignment decides the outgoing stack slot, and LLVM reads it
 			// from the CALL, not the declaration
-			if (ft->args[i].align_attribute != nullptr) {
-				LLVMAddCallSiteAttribute(ret, param_offset, ft->args[i].align_attribute);
+			if (arg.align_attribute != nullptr) {
+				LLVMAddCallSiteAttribute(ret, param_offset, arg.align_attribute);
 			}
-			param_offset += 1;
+			param_offset += lb_abi_arg_count(arg);
 		}
 
 		switch (inlining) {
@@ -1397,7 +1403,12 @@ gb_internal lbValue lb_emit_call(lbProcedure *p, lbValue value, Array<lbValue> c
 			lbValue x = lb_emit_conv(p, args[i], original_type);
 			LLVMTypeRef xt = lb_type(p->module, x.type);
 
-			if (arg->kind == lbArg_Direct) {
+			if (arg->kind == lbArg_Expand) {
+				unsigned count = lb_abi_arg_count(*arg);
+				for (unsigned j = 0; j < count; j++) {
+					array_add(&processed_args, lb_emit_struct_ev(p, x, cast(i32)j));
+				}
+			} else if (arg->kind == lbArg_Direct) {
 				LLVMTypeRef abi_type = arg->cast_type;
 				if (!abi_type) {
 					abi_type = arg->type;

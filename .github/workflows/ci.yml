@@ -228,6 +228,12 @@ jobs:
           ./run.sh
           ABI_CFLAGS=-O2 ./run.sh "" "" -o:speed
 
+      - name: Swift ABI
+        if: matrix.os == 'macos-latest'
+        run: |
+          ./tests/abi/swift/run.sh
+          ./tests/abi/swift/run.sh macosx release
+
       - name: Run demo on WASI WASM32
         run: |
           ./odin build examples/demo -target:wasi_wasm32 -vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:demo

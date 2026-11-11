@@ -4,6 +4,7 @@ enum lbArgKind {
 	lbArg_Direct,
 	lbArg_Indirect,
 	lbArg_Ignore,
+	lbArg_Expand,
 };
 
 struct lbArgType {
@@ -96,6 +97,14 @@ gb_internal bool lb_is_type_kind(LLVMTypeRef type, LLVMTypeKind kind) {
 	return LLVMGetTypeKind(type) == kind;
 }
 
+gb_internal unsigned lb_abi_arg_count(lbArgType const &arg) {
+	switch (arg.kind) {
+	case lbArg_Ignore: return 0;
+	case lbArg_Expand: return LLVMCountStructElementTypes(arg.type);
+	default:           return 1;
+	}
+}
+
 gb_internal LLVMTypeRef lb_function_type_to_llvm_raw(lbFunctionType *ft, bool is_var_arg) {
 	unsigned arg_count = cast(unsigned)ft->args.count;
 	unsigned offset = 0;
@@ -116,6 +125,13 @@ gb_internal LLVMTypeRef lb_function_type_to_llvm_raw(lbFunctionType *ft, bool is
 	GB_ASSERT_MSG(ret != nullptr, "%d", ft->ret.kind);
 
 	unsigned maximum_arg_count = offset+arg_count;
+	if (ft->calling_convention == ProcCC_Swift) {
+		for (unsigned i = 0; i < arg_count; i++) {
+			if (ft->args[i].kind == lbArg_Expand) {
+				maximum_arg_count += lb_abi_arg_count(ft->args[i])-1;
+			}
+		}
+	}
 	LLVMTypeRef *args = gb_alloc_array(permanent_allocator(), LLVMTypeRef, maximum_arg_count);
 	if (offset == 1) {
 		GB_ASSERT(ft->ret.kind == lbArg_Indirect);
@@ -133,6 +149,11 @@ gb_internal LLVMTypeRef lb_function_type_to_llvm_raw(lbFunctionType *ft, bool is
 				arg_type = arg->type;
 			}
 			args[arg_index++] = arg_type;
+		} else if (arg->kind == lbArg_Expand) {
+			unsigned count = lb_abi_arg_count(*arg);
+			for (unsigned j = 0; j < count; j++) {
+				args[arg_index++] = LLVMStructGetTypeAtIndex(arg->type, j);
+			}
 		} else if (arg->kind == lbArg_Indirect) {
 			if (ft->multiple_return_original_type == nullptr || i < ft->original_arg_count) {
 				GB_ASSERT(!lb_is_type_kind(arg->type, LLVMPointerTypeKind));
@@ -212,7 +233,7 @@ gb_internal void lb_add_function_type_attributes(LLVMValueRef fn, lbFunctionType
 			}
 		}
 
-		arg_index++;
+		arg_index += lb_abi_arg_count(*arg);
 	}
 
 	if (offset != 0 && ft->ret.kind == lbArg_Indirect && ft->ret.attribute != nullptr) {
@@ -2702,17 +2723,30 @@ gb_internal LB_ABI_INFO(lb_get_abi_info_internal) {
 	LLVMContextRef c = m->ctx;
 
 	switch (calling_convention) {
+	case ProcCC_Swift:
 	case ProcCC_None:
 	case ProcCC_InlineAsm:
 		{
+			bool is_swift = calling_convention == ProcCC_Swift;
 			lbFunctionType *ft = permanent_alloc_item<lbFunctionType>();
 			ft->ctx = c;
 			ft->args = array_make<lbArgType>(lb_function_type_args_allocator(), arg_count);
 			for (unsigned i = 0; i < arg_count; i++) {
 				ft->args[i] = lb_arg_type_direct(arg_types[i]);
+				if (is_swift && lb_is_type_kind(arg_types[i], LLVMStructTypeKind)) {
+					// Swift lowers the supported mixed record to separate scalar operands.
+					GB_ASSERT(LLVMCountStructElementTypes(arg_types[i]) == 2);
+					ft->args[i].kind = lbArg_Expand;
+				}
 			}
 			if (return_is_defined) {
 				ft->ret = lb_arg_type_direct(return_type);
+				if (is_swift && lb_is_type_kind(return_type, LLVMStructTypeKind)) {
+					LLVMTypeRef fields[2];
+					GB_ASSERT(LLVMCountStructElementTypes(return_type) == gb_count_of(fields));
+					LLVMGetStructElementTypes(return_type, fields);
+					ft->ret.cast_type = LLVMStructTypeInContext(c, fields, gb_count_of(fields), false);
+				}
 			} else {
 				ft->ret = lb_arg_type_direct(LLVMVoidTypeInContext(c));
 			}

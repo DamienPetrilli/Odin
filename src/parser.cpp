@@ -4718,6 +4718,7 @@ gb_internal ProcCallingConvention string_to_calling_convention(String const &s) 
 	if (s == "preserve/none") return ProcCC_PreserveNone;
 	if (s == "preserve/most") return ProcCC_PreserveMost;
 	if (s == "preserve/all")  return ProcCC_PreserveAll;
+	if (s == "swift")         return ProcCC_Swift;
 
 	if (s == "system") {
 		if (build_context.metrics.os == TargetOs_windows) {

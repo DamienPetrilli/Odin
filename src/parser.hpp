@@ -339,6 +339,7 @@ enum ProcCallingConvention : i32 {
 	ProcCC_PreserveNone = 11,
 	ProcCC_PreserveMost = 12,
 	ProcCC_PreserveAll  = 13,
+	ProcCC_Swift        = 14,
 
 	ProcCC_MAX,
 
@@ -361,6 +362,7 @@ gb_global char const *proc_calling_convention_strings[ProcCC_MAX] = {
 	"preserve/none",
 	"preserve/most",
 	"preserve/all",
+	"swift",
 };
 
 gb_internal ProcCallingConvention default_calling_convention(void) {

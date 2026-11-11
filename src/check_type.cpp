@@ -4114,6 +4114,25 @@ gb_internal void check_procedure_param_polymorphic_type(CheckerContext *ctx, Typ
 	}
 }
 
+gb_internal bool is_type_supported_by_swift_abi(Type *type) {
+	type = base_type(type);
+	if (type == t_i64 || type == t_f64 || is_type_pointer(type) || is_type_multi_pointer(type)) {
+		return true;
+	}
+	if (type == nullptr || type->kind != Type_Struct) {
+		return false;
+	}
+
+	TypeStruct &s = type->Struct;
+	wait_for_record_signal(&s.fields_wait_signal, &s.checking_thread);
+	if (s.fields_wait_signal.futex.load() == 0 || s.fields.count != 2 ||
+	    s.is_packed || s.is_raw_union || s.soa_kind != StructSoa_None ||
+	    s.custom_align != 0 || s.custom_min_field_align != 0 || s.custom_max_field_align != 0) {
+		return false;
+	}
+	return base_type(s.fields[0]->type) == t_i64 && base_type(s.fields[1]->type) == t_f64;
+}
+
 // NOTE(bill): 'operands' is for generating non generic procedure type
 gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc_type_node, Array<Operand> const *operands) {
 	ast_node(pt, ProcType, proc_type_node);
@@ -4145,6 +4164,11 @@ gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc
 
 	TargetArchKind arch = build_context.metrics.arch;
 	switch (cc) {
+	case ProcCC_Swift:
+		if (arch != TargetArch_arm64 || build_context.metrics.os != TargetOs_darwin) {
+			error(proc_type_node, "The \"swift\" calling convention is only supported on Darwin arm64");
+		}
+		break;
 	case ProcCC_StdCall:
 	case ProcCC_FastCall:
 		if (arch != TargetArch_i386 && arch != TargetArch_amd64) {
@@ -4179,6 +4203,28 @@ gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc
 	isize result_count = 0;
 	if (params)  param_count  = params ->Tuple.variables.count;
 	if (results) result_count = results->Tuple.variables.count;
+
+	if (cc == ProcCC_Swift) {
+		if (variadic || pt->generic || params_are_polymorphic || result_count > 1) {
+			error(proc_type_node, "The \"swift\" calling convention requires a fixed, non-polymorphic procedure with at most one result");
+			success = false;
+		} else {
+			for (isize i = 0; i < param_count; i++) {
+				Entity *param = params->Tuple.variables[i];
+				if (param->flags & EntityFlag_ByPtr) {
+					error(param->token, "'#by_ptr' cannot be used with the \"swift\" calling convention");
+					success = false;
+				} else if (!is_type_supported_by_swift_abi(param->type)) {
+					error(param->token, "Unsupported parameter type for the \"swift\" calling convention");
+					success = false;
+				}
+			}
+			if (result_count == 1 && !is_type_supported_by_swift_abi(results->Tuple.variables[0]->type)) {
+				error(proc_type_node, "Unsupported result type for the \"swift\" calling convention");
+				success = false;
+			}
+		}
+	}
 
 	if (result_count > 0) {
 		Entity *first = results->Tuple.variables[0];
