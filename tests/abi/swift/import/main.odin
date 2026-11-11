@@ -61,6 +61,8 @@ start :: proc(request: ^Request, value: u64) {
 }
 
 main :: proc() {
+	check_values()
+	check_strings()
 	assert(fixture.add(17, 9) == 26)
 	assert(fixture.add(0xffff_ffff_ffff_ffff, 9) == 8)
 	assert(fixture.mixed(-41, 0.25) == -40.75)

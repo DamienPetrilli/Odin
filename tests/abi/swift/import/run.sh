@@ -29,9 +29,11 @@ swiftc=(xcrun --sdk "$sdk" swiftc -target "$triple" -swift-version 6 -warnings-a
 	-emit-object -o "$build/fixture/SwiftImportFixture.o" \
 	-emit-module-path "$build/fixture/SwiftImportFixture.swiftmodule" "$here/Fixture.swift"
 cp "$here/main.odin" "$build/main.odin"
+cp "$here/values.odin" "$build/values.odin"
+cp "$here/strings.odin" "$build/strings.odin"
 
 # Odin imports, checks and links the Swift module in a single invocation.
-"$ODIN" build "$build/main.odin" -file \
+"$ODIN" build "$build" \
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do \
 	"${odin_target[@]}" "${odin_opt[@]}" -out:"$build/import"
 xcrun nm "$build/import" > "$build/symbols.txt"
@@ -50,6 +52,10 @@ fi
 "$build/import"
 
 # A static archive and repeated imports use the same normal build path.
+# Keep the original module as the SDK and replace only the binary with a newer
+# resilient enum, including an unknown case with a larger, nontrivial payload.
+"${swiftc[@]}" -D EVOLVED_VALUE_ENUM -parse-as-library -enable-library-evolution \
+	-module-name SwiftImportFixture -emit-object -o "$build/fixture/SwiftImportFixture.o" "$here/Fixture.swift"
 xcrun ar rcs "$build/fixture/libSwiftImportFixture.a" "$build/fixture/SwiftImportFixture.o"
 rm "$build/fixture/SwiftImportFixture.o"
 cat > "$build/second.odin" <<'ODIN'
@@ -65,19 +71,29 @@ check_second_import :: proc "contextless" () {
 	assert(second.add(10, 20) == 30)
 }
 ODIN
-"$ODIN" run "$build" "${odin_target[@]}" "${odin_opt[@]}" -out:"$build/repeated"
+"$ODIN" run "$build" "${odin_target[@]}" "${odin_opt[@]}" -define:EVOLVED_VALUE_ENUM=true -out:"$build/repeated"
 
-for selection in narrow generic throwing isolated overloaded future optional inout_value; do
-	cat > "$build/rejected.odin" <<ODIN
+# Check all rejected declarations in one import. Each compiler invocation
+# inspects the Swift module; repeating that for each diagnostic is expensive.
+cat > "$build/rejected.odin" <<'ODIN'
 package rejected
 foreign import fixture "swift:fixture/SwiftImportFixture"
-main :: proc() { _ = fixture.$selection }
+main :: proc() {
 ODIN
-	if "$ODIN" check "$build/rejected.odin" -file "${odin_target[@]}" > "$build/invalid.log" 2>&1; then
-		echo "Expected importer to reject $selection" >&2
+for selection in narrow generic throwing isolated_sync overloaded future optional inout_value direct_value typed_throwing text_later; do
+	printf '\t_ = fixture.%s\n' "$selection" >> "$build/rejected.odin"
+done
+printf '}\n' >> "$build/rejected.odin"
+if "$ODIN" check "$build/rejected.odin" -file "${odin_target[@]}" > "$build/invalid.log" 2>&1; then
+	echo "Expected importer to reject unsupported declarations" >&2
+	exit 1
+fi
+for selection in narrow generic throwing isolated_sync overloaded future optional inout_value direct_value typed_throwing text_later; do
+	if ! grep -F "Swift import:" "$build/invalid.log" | grep -Fq "'$selection'"; then
+		cat "$build/invalid.log" >&2
+		echo "Missing rejection for $selection" >&2
 		exit 1
 	fi
-	grep -q 'Swift import:' "$build/invalid.log"
 done
 
 if "$ODIN" build "$build/main.odin" -file -internal-cached -out:"$build/cached" > "$build/invalid.log" 2>&1; then

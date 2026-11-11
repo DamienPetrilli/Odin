@@ -78,26 +78,58 @@ do not provide cancellation or access to completed task storage.
 Build normally with `odin build app -minimum-os-version:15.0`. For iOS, use
 `-target:darwin_arm64`, `-subtarget:iphone` or `-subtarget:iphonesimulator`, and
 libraries built for that target. Xcode tools supply the SDK, declarations,
-symbols, lowering, and runtime search paths. Temporary Swift inspection source
-and LLVM IR are build inputs only; neither is linked into the application.
+symbols, ownership, lowering, and runtime search paths. Temporary Swift inspection
+source, SIL and LLVM IR are build inputs only; none is linked into the application.
 They are removed unless `-keep-temp-files` is enabled.
 
 ## Supported subset
 
-The initial importer supports nonthrowing free functions with `Int64`, `UInt64`
-and `Double` arguments and one such result or no result, synchronous or async.
-It also supports nonmutating, nonthrowing, zero-argument async methods returning
-Void on nongeneric top-level Swift structs, when inspection verifies an indirect
-borrowed receiver. These are named `Type_method`. Their receiver is a distinct
-typed address of an existing Swift value, not a declaration of its storage
-layout. This subset does not construct, copy or destroy resilient Swift values.
-Keep a receiver alive through completion; nil receivers reject the start.
+The importer supports `Int64`, `UInt64`, `Double`, synchronous String results,
+and synchronous or asynchronous procedures with those arguments. String inputs
+become ordinary Odin `string` parameters. An asynchronous String result is not
+yet exposed: a failed UTF-8 allocation after completion needs a separate error
+contract from Swift `throws`.
 
-Unsupported or ambiguous declarations are omitted and diagnosed when referenced.
-The importer does not guess ABI layouts. Generics, throwing calls, actor-isolated
-functions, arbitrary Swift value types, and general overload resolution remain
-outside this subset. SDK availability is checked against the deployment target;
-this version does not synthesize runtime availability guards.
+Copyable, escapable resilient structs and enums use typed addresses backed by
+Swift metadata. Constructors, methods, getters, nested types and concrete
+single-parameter enum specializations are supported when inspection confirms
+their native calling convention. `Type_copy` creates an independent owned value;
+`Type_destroy` destroys and frees it. Assignment aliases the same address.
+Factory procedures return `(value, ok) #optional_ok`. Nonmutating asynchronous
+receivers and arguments are copied before start returns. A mutating receiver is
+borrowed through completion, so its changes reach the original value. Do not
+access or destroy that receiver while the call is outstanding.
+
+`Type_case` identifies an enum case, including `Unknown_Default` for newer
+resilient cases. `Type_get_case` copies a supported single payload without
+consuming the enum. A payload returned as an owned Swift value needs its own
+destruction. Multi-value case extraction and arbitrary generic specialization
+are not implemented. Optional values are inspected with the same case/payload
+operations; they are not confused with allocation failure.
+
+Swift arrays are owned typed values with `_count`, bounds-checked `_get`,
+`_copy` and `_destroy`. Element access creates an owned copy. A `[String]` input
+accepts `[]string` and copies every element. One supported generic specialization
+accepts a single `Collection<String>` argument using Swift `Array<String>`
+metadata and its standard Collection conformance. This does not implement Odin
+protocol conformances or general Swift generics. An explicit empty `Set` default
+on a single-parameter function may be omitted; nonempty Set construction is
+not supported.
+
+Asynchronous untyped `throws` adds an owned `swift.Error` to the completion.
+A nil error means success; on failure the result is zero-initialized. Release
+the error with `swift.error_release`, or retain it explicitly if another owner
+needs it. Start rejection still means no callback. Synchronous and typed throws
+remain unsupported. Async MainActor procedures execute on the main executor;
+this does not add an actor or async/await system to Odin.
+
+Full argument-label names distinguish declarations, and a unique supported
+procedure also gets its short name. Unsupported or ambiguous declarations are
+omitted and diagnosed when referenced. The importer verifies both native LLVM
+lowering and SIL ownership conventions; it does not infer ownership from a
+pointer or assume that a Swift constructor borrows its arguments. SDK availability
+is checked against the deployment target; runtime availability guards are not
+synthesized.
 
 A macOS host with Xcode, a Darwin arm64 target and LLVM 18 or newer are required.
 The importer accepts API-digester JSON format 8 and rejects unfamiliar lowering.
@@ -108,7 +140,8 @@ Cached builds are rejected until external module dependencies are tracked.
 Native scalar arguments and supplied user data are copied into Swift-owned task
 storage before the start returns. User data can be scalars, distinct IDs, enums,
 pointers, fixed arrays, or records of those, aligned to at most eight bytes.
-Dynamic containers and strings are not accepted. Copying a pointer does not
+Dynamic containers and strings are not accepted as user data; this restriction
+does not apply to imported Swift function parameters. Copying a pointer does not
 retain its pointee or extend its lifetime. The same applies to pointers nested
 inside a copied record.
 
@@ -118,6 +151,46 @@ survive completion. Swift owns and frees the task and its async frames. Nothing
 needs releasing for a generated ID. A GUI application's main run loop delivers
 callbacks; a command-line program must keep that loop running while work remains.
 
-See `run.sh` and `main.odin` for executable scalar round trips, overlapping tasks,
-copied records, borrowed pointers, generated/custom IDs, optional results,
-`or_return`, preserved context, lifetimes and rejection diagnostics.
+The storage around an owned resilient value remembers the Odin allocator that
+created it, even when destruction uses a different context. Its contents retain
+Swift ownership: copying and destruction use value witnesses, and internal Swift
+allocations still belong to Swift. An Odin arena cannot replace Swift's heap.
+Any arena used for outer storage or saved callback context must remain alive
+until those allocations and callbacks are finished.
+
+## Strings
+
+An ordinary Swift declaration:
+
+```swift
+public func decorate(_ text: String) -> String { "[" + text + "]" }
+```
+
+is called using ordinary Odin strings:
+
+```odin
+text := example.decorate("café 🦉") or_return
+defer delete(text)
+```
+
+The bridge copies valid UTF-8 into an owned Swift string. It delivers a returned
+Swift string as an Odin-owned UTF-8 copy using `context.allocator`; free that
+copy with the same allocator. An async call copies its input before returning,
+so the original Odin bytes may then be modified or freed. Conversion preserves
+embedded zero bytes and rejects invalid UTF-8 without calling Swift. Conversion
+or Odin allocation failure returns `ok = false`.
+
+This Darwin implementation uses Foundation's String/NSString conversion and
+Odin's scoped autorelease pool internally. Temporary Objective-C ownership does
+not escape into application code. It is a copying conversion, not a shared
+string representation. Swift allocation failures are governed by Swift's
+runtime; the boolean result does not make all foreign allocations recoverable.
+
+Text retains its UTF-8 contents. Odin `len(string)` counts bytes and Odin string
+equality compares bytes; Swift's character count and canonically equivalent
+Unicode equality are different operations. A plain Odin string does not gain
+Swift's character semantics.
+
+See `run.sh`, `main.odin`, `values.odin` and `strings.odin` for executable round
+trips, overlapping tasks, generated/custom IDs, preserved context, guarded
+allocations, ownership, failure paths and rejection diagnostics.

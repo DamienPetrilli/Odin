@@ -328,6 +328,7 @@ BuiltinProc__type_simple_boolean_begin,
 	BuiltinProc_type_is_unspecialized_polymorphic_record,
 
 	BuiltinProc_type_has_nil,
+	BuiltinProc_type_is_swift_async_data,
 
 BuiltinProc__type_simple_boolean_end,
 
@@ -742,6 +743,7 @@ gb_global BuiltinProc builtin_procs[BuiltinProc_COUNT] = {
 	{STR_LIT("type_is_unspecialized_polymorphic_record"), 1, false, Expr_Expr, BuiltinProcPkg_intrinsics},
 
 	{STR_LIT("type_has_nil"),              1, false, Expr_Expr, BuiltinProcPkg_intrinsics},
+	{STR_LIT("type_is_swift_async_data"),  1, false, Expr_Expr, BuiltinProcPkg_intrinsics},
 	{STR_LIT(""), 0, false, Expr_Stmt, BuiltinProcPkg_intrinsics},
 
 	{STR_LIT("type_is_matrix_row_major"),    1, false, Expr_Expr, BuiltinProcPkg_intrinsics},

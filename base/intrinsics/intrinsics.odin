@@ -51,6 +51,10 @@ swift_async_context_addr :: proc() -> ^rawptr ---
 // through completion. No automatic retain or deep copy is performed.
 swift_async_call :: proc($symbol: string, user_data: $T, completion: $P, ..any) -> bool ---
 swift_async_method_call :: proc($symbol: string, user_data: $T, completion: $P, receiver: $R, ..any) -> bool ---
+
+// Compiler-generated Swift imports use the same copied-data rule as the
+// native async intrinsics. This does not retain pointer targets.
+type_is_swift_async_data :: proc($T: typeid) -> bool ---
 // The current value of the stack pointer
 stack_pointer  :: proc() -> rawptr ---
 // The address of the slot holding the current procedure's return address. amd64, i386, and arm64 targets only.
