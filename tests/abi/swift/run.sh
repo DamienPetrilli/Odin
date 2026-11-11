@@ -83,6 +83,10 @@ check_invalid darwin_arm64 \
 	"'#by_ptr' cannot be used with the \"swift\" calling convention" \
 	'Unsupported result type for the "swift" calling convention' \
 	'The "swift" calling convention requires a fixed, non-polymorphic procedure with at most one result' \
+	'Nested_Arg ::' \
+	'Packed_Arg ::' \
+	'Empty_Arg ::' \
+	'Narrow_Arg ::' \
 	'Odin_Callback ::' \
 	'C_Callback ::' \
 	'C_Callback_Result ::' \

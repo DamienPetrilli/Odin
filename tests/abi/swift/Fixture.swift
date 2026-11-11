@@ -66,3 +66,85 @@ public func updateCallbackState(_ userData: UnsafeMutableRawPointer, _ reading: 
 	state.calls += 1
 	return Reading(page: reading.page + state.calls, progress: reading.progress + 0.125)
 }
+
+@frozen public struct TransactionID: Equatable {
+	public var value: UInt64
+
+	public init(value: UInt64) {
+		self.value = value
+	}
+}
+
+@frozen public struct TextView: Equatable {
+	public var bytes: UnsafePointer<UInt8>
+	public var count: UInt64
+
+	public init(bytes: UnsafePointer<UInt8>, count: UInt64) {
+		self.bytes = bytes
+		self.count = count
+	}
+}
+
+@frozen public struct TransactionKey: Equatable {
+	public var id: UInt64
+	public var originalID: UInt64
+	public var purchasedAt: Double
+	public var status: UInt64
+
+	public init(id: UInt64, originalID: UInt64, purchasedAt: Double, status: UInt64) {
+		self.id = id
+		self.originalID = originalID
+		self.purchasedAt = purchasedAt
+		self.status = status
+	}
+}
+
+@frozen public struct TransactionInfo: Equatable {
+	public var id: UInt64
+	public var originalID: UInt64
+	public var purchasedAt: Double
+	public var status: UInt64
+	public var productOffset: UInt64
+	public var productCount: UInt64
+
+	public init(id: UInt64, originalID: UInt64, purchasedAt: Double, status: UInt64, productOffset: UInt64, productCount: UInt64) {
+		self.id = id
+		self.originalID = originalID
+		self.purchasedAt = purchasedAt
+		self.status = status
+		self.productOffset = productOffset
+		self.productCount = productCount
+	}
+}
+
+public func nextID(_ id: TransactionID) -> TransactionID {
+	TransactionID(value: id.value + 1)
+}
+
+public func dropPrefix(_ text: TextView, _ prefix: UInt64) -> TextView {
+	guard text.count > 0, UInt64(text.bytes.pointee) == prefix else { return text }
+	return TextView(bytes: text.bytes.advanced(by: 1), count: text.count - 1)
+}
+
+public func updateKey(_ status: UInt64, _ key: TransactionKey, _ seconds: Double) -> TransactionKey {
+	var result = key
+	result.id += 1
+	result.status = status
+	result.purchasedAt += seconds
+	return result
+}
+
+public func updateTransaction(_ status: UInt64, _ transaction: TransactionInfo, _ seconds: Double) -> TransactionInfo {
+	var result = transaction
+	result.id += 1
+	result.status = status
+	result.purchasedAt += seconds
+	result.productOffset += 1
+	result.productCount -= 1
+	return result
+}
+
+public func updateTransactionInPlace(_ transaction: UnsafeMutablePointer<TransactionInfo>, _ status: UInt64, _ seconds: Double) -> UnsafeMutablePointer<TransactionInfo> {
+	transaction.pointee = updateTransaction(status, transaction.pointee, seconds)
+	return transaction
+}

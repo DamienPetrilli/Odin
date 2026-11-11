@@ -2,7 +2,7 @@ package swift_abi
 
 Nested :: struct {
 	reading: struct {page: i64, progress: f64},
-	flag:    u8,
+	flag:    u64,
 }
 
 Packed :: struct #packed {
@@ -10,8 +10,13 @@ Packed :: struct #packed {
 	progress: f64,
 }
 
-Nested_Parameter :: proc "swift" (value: Nested)
-Packed_Parameter :: proc "swift" (value: Packed)
+Empty :: struct {}
+Narrow :: struct {code: u32, flags: u32}
+
+Nested_Arg :: proc "swift" (value: Nested)
+Packed_Arg :: proc "swift" (value: Packed)
+Empty_Arg :: proc "swift" (value: Empty)
+Narrow_Arg :: proc "swift" (value: Narrow)
 Slice_Parameter :: proc "swift" (value: []u8)
 By_Ptr_Parameter :: proc "swift" (#by_ptr value: i64)
 String_Result :: proc "swift" () -> string

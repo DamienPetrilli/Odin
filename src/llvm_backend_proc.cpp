@@ -430,7 +430,7 @@ gb_internal lbProcedure *lb_create_procedure(lbModule *m, Entity *entity, bool i
 					lb_add_nocapture_proc_attribute_at_index(p, offset+parameter_index);
 				}
 			}
-			parameter_index += 1;
+			parameter_index += lb_abi_arg_count(*arg);
 		}
 	}
 
@@ -1234,7 +1234,7 @@ gb_internal lbValue lb_emit_call_internal(lbProcedure *p, lbValue value, lbValue
 		if (return_ptr.value != nullptr) {
 			param_offset += 1;
 
-			LLVMAddCallSiteAttribute(ret, 1, lb_create_enum_attribute_with_type(p->module->ctx, "sret", LLVMTypeOf(args[0])));
+			LLVMAddCallSiteAttribute(ret, 1, lb_create_enum_attribute_with_type(p->module->ctx, "sret", ft->ret.type));
 		}
 
 		for_array(i, ft->args) {

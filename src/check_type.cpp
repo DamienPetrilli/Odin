@@ -4114,9 +4114,14 @@ gb_internal void check_procedure_param_polymorphic_type(CheckerContext *ctx, Typ
 	}
 }
 
+gb_internal bool is_swift_abi_scalar(Type *type) {
+	type = base_type(type);
+	return type == t_i64 || type == t_u64 || type == t_f64 || is_type_pointer(type) || is_type_multi_pointer(type);
+}
+
 gb_internal bool is_type_supported_by_swift_abi(Type *type) {
 	type = base_type(type);
-	if (type == t_i64 || type == t_f64 || is_type_pointer(type) || is_type_multi_pointer(type)) {
+	if (is_swift_abi_scalar(type)) {
 		return true;
 	}
 	if (type == nullptr) {
@@ -4131,12 +4136,20 @@ gb_internal bool is_type_supported_by_swift_abi(Type *type) {
 
 	TypeStruct &s = type->Struct;
 	wait_for_record_signal(&s.fields_wait_signal, &s.checking_thread);
-	if (s.fields_wait_signal.futex.load() == 0 || s.fields.count != 2 ||
+	if (s.fields_wait_signal.futex.load() == 0 || s.fields.count == 0 ||
 	    s.is_packed || s.is_raw_union || s.soa_kind != StructSoa_None ||
 	    s.custom_align != 0 || s.custom_min_field_align != 0 || s.custom_max_field_align != 0) {
 		return false;
 	}
-	return base_type(s.fields[0]->type) == t_i64 && base_type(s.fields[1]->type) == t_f64;
+
+	// Full-width scalars have the same offsets in Swift and Odin without
+	// merging narrow integer fields or accounting for nested tail padding.
+	for (Entity *field : s.fields) {
+		if (!is_swift_abi_scalar(field->type)) {
+			return false;
+		}
+	}
+	return true;
 }
 
 // NOTE(bill): 'operands' is for generating non generic procedure type

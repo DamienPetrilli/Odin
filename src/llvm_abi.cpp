@@ -2719,6 +2719,35 @@ namespace lbAbiRiscv64 {
 }
 
 
+gb_internal lbArgType lb_swift_abi_value(LLVMContextRef c, LLVMTypeRef type, bool is_result) {
+	if (!lb_is_type_kind(type, LLVMStructTypeKind)) {
+		return lb_arg_type_direct(type);
+	}
+
+	// The checker only accepts records with full-width scalar fields.
+	// On Apple arm64, Swift passes at most four such components directly.
+	LLVMTypeRef fields[4];
+	unsigned count = LLVMCountStructElementTypes(type);
+	GB_ASSERT(count > 0);
+	if (count > gb_count_of(fields)) {
+		LLVMAttributeRef attr = is_result ? lb_create_enum_attribute_with_type(c, "sret", type) : nullptr;
+		return lb_arg_type_indirect(type, attr);
+	}
+
+	LLVMGetStructElementTypes(type, fields);
+	if (count == 1) {
+		return lb_arg_type_direct(type, fields[0], nullptr, nullptr);
+	}
+	if (is_result) {
+		LLVMTypeRef result_type = LLVMStructTypeInContext(c, fields, count, false);
+		return lb_arg_type_direct(type, result_type, nullptr, nullptr);
+	}
+	lbArgType arg = lb_arg_type_direct(type);
+	arg.kind = lbArg_Expand;
+	return arg;
+}
+
+
 gb_internal LB_ABI_INFO(lb_get_abi_info_internal) {
 	LLVMContextRef c = m->ctx;
 
@@ -2732,24 +2761,10 @@ gb_internal LB_ABI_INFO(lb_get_abi_info_internal) {
 			ft->ctx = c;
 			ft->args = array_make<lbArgType>(lb_function_type_args_allocator(), arg_count);
 			for (unsigned i = 0; i < arg_count; i++) {
-				ft->args[i] = lb_arg_type_direct(arg_types[i]);
-				if (is_swift && lb_is_type_kind(arg_types[i], LLVMStructTypeKind)) {
-					// Swift lowers the supported mixed record to separate scalar operands.
-					GB_ASSERT(LLVMCountStructElementTypes(arg_types[i]) == 2);
-					ft->args[i].kind = lbArg_Expand;
-				}
+				ft->args[i] = is_swift ? lb_swift_abi_value(c, arg_types[i], false) : lb_arg_type_direct(arg_types[i]);
 			}
-			if (return_is_defined) {
-				ft->ret = lb_arg_type_direct(return_type);
-				if (is_swift && lb_is_type_kind(return_type, LLVMStructTypeKind)) {
-					LLVMTypeRef fields[2];
-					GB_ASSERT(LLVMCountStructElementTypes(return_type) == gb_count_of(fields));
-					LLVMGetStructElementTypes(return_type, fields);
-					ft->ret.cast_type = LLVMStructTypeInContext(c, fields, gb_count_of(fields), false);
-				}
-			} else {
-				ft->ret = lb_arg_type_direct(LLVMVoidTypeInContext(c));
-			}
+			LLVMTypeRef result = return_is_defined ? return_type : LLVMVoidTypeInContext(c);
+			ft->ret = is_swift ? lb_swift_abi_value(c, result, true) : lb_arg_type_direct(result);
 			ft->calling_convention = calling_convention;
 			return ft;
 		}

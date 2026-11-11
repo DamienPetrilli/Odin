@@ -81,3 +81,71 @@ withUnsafeMutablePointer(to: &deinitCount) { count in
 	releaseCallbackStateInOdin(retained)
 	precondition(count.pointee == 1)
 }
+
+@_silgen_name("odin_swift_abi_check_records")
+func checkRecordImports() -> Int64
+
+@_silgen_name("odin_swift_abi_next_id")
+func nextIDInOdin(_ id: TransactionID) -> TransactionID
+
+@_silgen_name("odin_swift_abi_drop_prefix")
+func dropPrefixInOdin(_ text: TextView, _ prefix: UInt64) -> TextView
+
+@_silgen_name("odin_swift_abi_update_key")
+func updateKeyInOdin(_ status: UInt64, _ key: TransactionKey, _ seconds: Double) -> TransactionKey
+
+@_silgen_name("odin_swift_abi_update_transaction")
+func updateTransactionInOdin(_ status: UInt64, _ transaction: TransactionInfo, _ seconds: Double) -> TransactionInfo
+
+@_silgen_name("odin_swift_abi_update_transaction_in_place")
+func updateTransactionInPlaceInOdin(_ transaction: UnsafeMutablePointer<TransactionInfo>, _ status: UInt64, _ seconds: Double) -> UnsafeMutablePointer<TransactionInfo>
+
+precondition(MemoryLayout<TransactionID>.size == 8)
+precondition(MemoryLayout<TextView>.size == 16)
+precondition(MemoryLayout<TextView>.offset(of: \.count) == 8)
+precondition(MemoryLayout<TransactionKey>.size == 32)
+precondition(MemoryLayout<TransactionKey>.offset(of: \.purchasedAt) == 16)
+precondition(MemoryLayout<TransactionInfo>.size == 48)
+precondition(MemoryLayout<TransactionInfo>.stride == 48)
+precondition(MemoryLayout<TransactionInfo>.alignment == 8)
+precondition(MemoryLayout<TransactionInfo>.offset(of: \.id) == 0)
+precondition(MemoryLayout<TransactionInfo>.offset(of: \.originalID) == 8)
+precondition(MemoryLayout<TransactionInfo>.offset(of: \.purchasedAt) == 16)
+precondition(MemoryLayout<TransactionInfo>.offset(of: \.status) == 24)
+precondition(MemoryLayout<TransactionInfo>.offset(of: \.productOffset) == 32)
+precondition(MemoryLayout<TransactionInfo>.offset(of: \.productCount) == 40)
+
+let recordFailure = checkRecordImports()
+precondition(recordFailure == 0, "Odin record call to Swift failed at check \(recordFailure)")
+
+let id: UInt64 = 0x8000_0000_0000_0041
+precondition(nextIDInOdin(TransactionID(value: id)) == TransactionID(value: id + 1))
+
+let textBytes: [UInt8] = [0xa5, 0x24, 0x33, 0x5a]
+textBytes.withUnsafeBufferPointer { bytes in
+	let start = bytes.baseAddress!.advanced(by: 1)
+	let text = TextView(bytes: start, count: 2)
+	let empty = TextView(bytes: start.advanced(by: 2), count: 0)
+	let view = dropPrefixInOdin(text, 0x24)
+	precondition(view.bytes == start.advanced(by: 1) && view.count == 1 && view.bytes.pointee == 0x33)
+	precondition(dropPrefixInOdin(text, 0x25) == text)
+	precondition(dropPrefixInOdin(empty, 0x5a) == empty)
+	precondition(bytes.elementsEqual([0xa5, 0x24, 0x33, 0x5a]))
+}
+
+let key = TransactionKey(id: id, originalID: 99, purchasedAt: 42.25, status: 0)
+precondition(updateKeyInOdin(3, key, 0.5) == TransactionKey(id: id + 1, originalID: 99, purchasedAt: 42.75, status: 3))
+
+let transaction = TransactionInfo(id: id, originalID: 99, purchasedAt: 42.25, status: 0, productOffset: 16, productCount: 7)
+let updated = TransactionInfo(id: id + 1, originalID: 99, purchasedAt: 42.75, status: 3, productOffset: 17, productCount: 6)
+precondition(updateTransactionInOdin(3, transaction, 0.5) == updated)
+precondition(transaction == TransactionInfo(id: id, originalID: 99, purchasedAt: 42.25, status: 0, productOffset: 16, productCount: 7))
+
+let beforeTransaction = TransactionInfo(id: 111, originalID: 0, purchasedAt: 0, status: 12, productOffset: 0, productCount: 14)
+let afterTransaction = TransactionInfo(id: 222, originalID: 0, purchasedAt: 0, status: 15, productOffset: 0, productCount: 17)
+var transactions = [beforeTransaction, transaction, afterTransaction]
+transactions.withUnsafeMutableBufferPointer { buffer in
+	let middle = buffer.baseAddress!.advanced(by: 1)
+	precondition(updateTransactionInPlaceInOdin(middle, 3, 0.5) == middle)
+}
+precondition(transactions == [beforeTransaction, updated, afterTransaction])
