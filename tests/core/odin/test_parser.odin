@@ -159,6 +159,42 @@ Bar :: struct {x, y: int /* c4 */} // after`,
 }
 
 @test
+test_parse_swift_parameters :: proc(t: ^testing.T) {
+	context.allocator = context.temp_allocator
+	runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+
+	file := ast.File{
+		fullpath = "test.odin",
+		src = `
+package main
+
+Async :: proc "swift/async" (#swift_async ctx: rawptr, #swift_self receiver: rawptr)
+Sync :: proc "swift" (#swift_result result: rawptr, #swift_self receiver: rawptr)
+`,
+	}
+
+	p := parser.default_parser()
+	if !testing.expect(t, parser.parse_file(&p, &file), "bad parse") {
+		return
+	}
+	testing.expect_value(t, file.syntax_error_count, 0)
+	if !testing.expect_value(t, len(file.decls), 2) {
+		return
+	}
+
+	for decl, i in file.decls {
+		value := decl.derived.(^ast.Value_Decl)
+		proc_type := value.values[0].derived.(^ast.Proc_Type)
+		if !testing.expect_value(t, len(proc_type.params.list), 2) {
+			continue
+		}
+		expected := i == 0 ? ast.Field_Flag.Swift_Async : ast.Field_Flag.Swift_Result
+		testing.expect_value(t, proc_type.params.list[0].flags, ast.Field_Flags{expected})
+		testing.expect_value(t, proc_type.params.list[1].flags, ast.Field_Flags{.Swift_Self})
+	}
+}
+
+@test
 test_parse_base_core_vendor :: proc(t: ^testing.T) {
 	for root in ([]string{ODIN_ROOT + "base", ODIN_ROOT + "core", ODIN_ROOT + "vendor"}) {
 		w := os.walker_create(root)

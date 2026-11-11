@@ -593,6 +593,9 @@ Field_Flag :: enum {
 	By_Ptr,
 	No_Broadcast,
 	No_Capture,
+	Swift_Async,
+	Swift_Self,
+	Swift_Result,
 
 	Results,
 	Tags,
@@ -614,6 +617,9 @@ field_flag_strings := [Field_Flag]string{
 	.By_Ptr             = "#by_ptr",
 	.No_Broadcast       = "#no_broadcast",
 	.No_Capture         = "#no_capture",
+	.Swift_Async         = "#swift_async",
+	.Swift_Self          = "#swift_self",
+	.Swift_Result        = "#swift_result",
 
 	.Results            = "results",
 	.Tags               = "field tag",
@@ -630,6 +636,9 @@ field_hash_flag_strings := []struct{key: string, flag: Field_Flag}{
 	{"by_ptr",       .By_Ptr},
 	{"no_broadcast", .No_Broadcast},
 	{"no_capture",   .No_Capture},
+	{"swift_async",  .Swift_Async},
+	{"swift_self",   .Swift_Self},
+	{"swift_result", .Swift_Result},
 }
 
 
@@ -651,6 +660,9 @@ Field_Flags_Signature :: Field_Flags{
 	.Any_Int,
 	.By_Ptr,
 	.No_Broadcast,
+	.Swift_Async,
+	.Swift_Self,
+	.Swift_Result,
 	.Default_Parameters,
 }
 
