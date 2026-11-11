@@ -4791,6 +4791,7 @@ int main(int arg_count, char const **arg_ptr) {
 		return 1;
 	}
 	defer (destroy_parser(parser));
+	defer (swift_import_cleanup());
 	parser->package_parsed_proc = check_collect_package_entities_worker_proc;
 
 	// TODO(jeroen): Remove the `init_filename` param.

@@ -3949,6 +3949,18 @@ gb_internal lbValue lb_build_builtin_proc(lbProcedure *p, Ast *expr, TypeAndValu
 			return res;
 		}
 
+	case BuiltinProc_swift_async_call:
+		return lb_build_swift_async_call(p, expr, false);
+	case BuiltinProc_swift_async_method_call:
+		return lb_build_swift_async_call(p, expr, true);
+
+	case BuiltinProc_swift_async_context_addr: {
+		lbValue result = {};
+		result.value = lb_call_intrinsic(p, "llvm.swift.async.context.addr", nullptr, 0, nullptr, 0);
+		result.type = tv.type;
+		return result;
+	}
+
 	case BuiltinProc_return_address:
 	case BuiltinProc_frame_address:
 	case BuiltinProc_stack_pointer:

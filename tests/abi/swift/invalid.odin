@@ -34,3 +34,18 @@ check_assignment :: proc() {
 	f: proc "swift" (value: i64) -> i64 = c_scalar
 	_ = f
 }
+
+Missing_Async_Context :: proc "swift/async" (value: rawptr)
+Bad_Async_Context :: proc "swift/async" (#swift_async value: u64)
+Unexpected_Async_Context :: proc "swift" (#swift_async value: rawptr)
+Bad_Indirect_Result :: proc "swift" (arg: u64, #swift_result result: rawptr)
+Swift_Receiver :: proc "swift" (#swift_self receiver: rawptr)
+
+check_swift_register_assignment :: proc(f: Swift_Receiver) {
+	plain: proc "swift" (receiver: rawptr) = f
+	_ = plain
+}
+
+check_swift_async_call :: proc(f: proc "swift/async" (#swift_async ctx: rawptr)) {
+	f(nil)
+}

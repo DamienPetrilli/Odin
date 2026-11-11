@@ -3852,6 +3852,15 @@ gb_internal Type *check_get_params(CheckerContext *ctx, Scope *scope, Ast *_para
 			if (p->flags&FieldFlag_no_capture) {
 				param->flags |= EntityFlag_NoCapture;
 			}
+			if (p->flags&FieldFlag_swift_async) {
+				param->flags |= EntityFlag_SwiftAsync;
+			}
+			if (p->flags&FieldFlag_swift_self) {
+				param->flags |= EntityFlag_SwiftSelf;
+			}
+			if (p->flags&FieldFlag_swift_result) {
+				param->flags |= EntityFlag_SwiftResult;
+			}
 
 
 			param->state = EntityState_Resolved; // NOTE(bill): This should have be resolved whilst determining it
@@ -4184,8 +4193,9 @@ gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc
 	TargetArchKind arch = build_context.metrics.arch;
 	switch (cc) {
 	case ProcCC_Swift:
+	case ProcCC_SwiftAsync:
 		if (arch != TargetArch_arm64 || build_context.metrics.os != TargetOs_darwin) {
-			error(proc_type_node, "The \"swift\" calling convention is only supported on Darwin arm64");
+			error(proc_type_node, "The \"%s\" calling convention is only supported on Darwin arm64", proc_calling_convention_strings[cc]);
 		}
 		break;
 	case ProcCC_StdCall:
@@ -4222,6 +4232,51 @@ gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc
 	isize result_count = 0;
 	if (params)  param_count  = params ->Tuple.variables.count;
 	if (results) result_count = results->Tuple.variables.count;
+
+	bool swift_async = cc == ProcCC_SwiftAsync;
+#if LLVM_VERSION_MAJOR <= 17
+	if (swift_async) {
+		error(proc_type_node, "The \"swift/async\" calling convention requires LLVM 18 or newer");
+		success = false;
+	}
+#endif
+	u64 swift_parameters = 0;
+	for (isize i = 0; i < param_count; i++) {
+		Entity *param = params->Tuple.variables[i];
+		u64 flags = param->flags & EntityFlags_SwiftABI;
+		if (flags == 0) {
+			continue;
+		}
+		if ((cc != ProcCC_Swift && !swift_async) ||
+		    (flags & (flags-1)) != 0 || (flags & swift_parameters) != 0 ||
+		    param->kind != Entity_Variable || !is_type_pointer(param->type)) {
+			error(param->token, "Swift ABI parameter attributes require distinct pointer parameters on a Swift procedure");
+			success = false;
+		}
+		if ((flags & EntityFlag_SwiftAsync) && !swift_async) {
+			error(param->token, "'#swift_async' requires the \"swift/async\" calling convention");
+			success = false;
+		}
+		if ((flags & EntityFlag_SwiftResult) && (swift_async || i != 0 || result_count != 0)) {
+			error(param->token, "'#swift_result' requires the first parameter of a synchronous Swift procedure with no result");
+			success = false;
+		}
+		swift_parameters |= flags;
+	}
+	if (swift_async && (variadic || pt->generic || params_are_polymorphic || result_count != 0 ||
+	                    !(swift_parameters & EntityFlag_SwiftAsync))) {
+		error(proc_type_node, "The \"swift/async\" calling convention requires a fixed procedure with an async context and no result");
+		success = false;
+	}
+	if (swift_async) {
+		for (isize i = 0; i < param_count; i++) {
+			Entity *param = params->Tuple.variables[i];
+			if (param->flags & EntityFlag_ByPtr || !is_swift_abi_scalar(param->type)) {
+				error(param->token, "Unsupported parameter type for the \"swift/async\" calling convention");
+				success = false;
+			}
+		}
+	}
 
 	if (cc == ProcCC_Swift) {
 		if (variadic || pt->generic || params_are_polymorphic || result_count > 1) {

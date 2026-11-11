@@ -218,6 +218,7 @@ struct lbModule {
 	StringMap<lbAddr> objc_selectors;
 	StringMap<lbAddr> objc_ivars;
 	isize             objc_next_block_id;  // Used to name objective-c blocks. Tracked per module.
+	isize             swift_next_async_id; // Used to name Swift async continuations. Tracked per module.
 
 	PtrMap<u64/*type hash*/, lbAddr> map_cell_info_map; // address of runtime.Map_Info
 	PtrMap<u64/*type hash*/, lbAddr> map_info_map;      // address of runtime.Map_Cell_Info
@@ -738,6 +739,7 @@ enum lbCallingConventionKind : unsigned {
 	lbCallingConvention_PreserveMost = 14,
 	lbCallingConvention_PreserveAll = 15,
 	lbCallingConvention_Swift = 16,
+	lbCallingConvention_SwiftTail = 20,
 	lbCallingConvention_CXX_FAST_TLS = 17,
 	lbCallingConvention_PreserveNone = 21,
 	lbCallingConvention_FirstTargetCC = 64,
@@ -797,6 +799,7 @@ lbCallingConventionKind const lb_calling_convention_map[ProcCC_MAX] = {
 	lbCallingConvention_PreserveMost,  // ProcCC_PreserveMost,
 	lbCallingConvention_PreserveAll,   // ProcCC_PreserveAll,
 	lbCallingConvention_Swift,         // ProcCC_Swift,
+	lbCallingConvention_SwiftTail,     // ProcCC_SwiftAsync,
 
 };
 

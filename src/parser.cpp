@@ -4719,6 +4719,7 @@ gb_internal ProcCallingConvention string_to_calling_convention(String const &s) 
 	if (s == "preserve/most") return ProcCC_PreserveMost;
 	if (s == "preserve/all")  return ProcCC_PreserveAll;
 	if (s == "swift")         return ProcCC_Swift;
+	if (s == "swift/async")   return ProcCC_SwiftAsync;
 
 	if (s == "system") {
 		if (build_context.metrics.os == TargetOs_windows) {
@@ -4880,6 +4881,9 @@ gb_global ParseFieldPrefixMapping const parse_field_prefix_mappings[] = {
 	{str_lit("any_int"),      Token_Hash,      FieldFlag_any_int},
 	{str_lit("subtype"),      Token_Hash,      FieldFlag_subtype},
 	{str_lit("by_ptr"),       Token_Hash,      FieldFlag_by_ptr},
+	{str_lit("swift_async"),  Token_Hash,      FieldFlag_swift_async},
+	{str_lit("swift_self"),   Token_Hash,      FieldFlag_swift_self},
+	{str_lit("swift_result"), Token_Hash,      FieldFlag_swift_result},
 	{str_lit("no_broadcast"), Token_Hash,      FieldFlag_no_broadcast},
 };
 
@@ -6931,6 +6935,8 @@ gb_internal bool determine_path_from_string(bool in_checker, Ast *node, String b
 }
 
 
+#include "swift_import.cpp"
+
 gb_internal void parse_setup_import_decl(Parser *p, AstFile *f, String const &base_dir, Ast **decl) {
 	Ast *node = *decl;
 	ast_node(id, ImportDecl, node);
@@ -7014,6 +7020,18 @@ gb_internal void parse_setup_file_decls(Parser *p, AstFile *f, String const &bas
 				GB_ASSERT(fp->kind == Ast_BasicLit);
 				Token fp_token = fp->BasicLit.token;
 				String file_str = string_trim_whitespace(string_value_from_token(f, fp_token));
+				if (string_starts_with(file_str, str_lit("swift:"))) {
+					String path = {};
+					if (!swift_import_setup(node, base_dir, substring(file_str, 6, file_str.len), &path)) {
+						decls[i] = ast_bad_decl(f, fp_token, fp_token);
+						goto end;
+					}
+					Ast *import = ast_import_decl(f, fl->token, fp_token, fl->library_name, fl->docs, fl->comment);
+					import->ImportDecl.fullpath = path;
+					decls[i] = import;
+					try_add_import_path(p, path, file_str, ast_token(node).pos);
+					goto end;
+				}
 				if (is_import_path_absolute(file_str)) {
 					syntax_error(node, "Invalid import path: '%.*s'", LIT(file_str));
 					decls[i] = ast_bad_decl(f, fp_token, fp_token);

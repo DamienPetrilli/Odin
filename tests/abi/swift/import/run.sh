@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+set -eu
+
+here=$(cd "$(dirname "$0")" && pwd)
+: "${ODIN:=$here/../../../../odin}"
+sdk=${1:-macosx}
+mode=${2:-debug}
+odin_target=(-target:darwin_arm64 -minimum-os-version:15.0)
+case "$sdk" in
+	macosx) triple=arm64-apple-macosx15.0 ;;
+	iphoneos) triple=arm64-apple-ios15.0; odin_target+=(-subtarget:iphone) ;;
+	iphonesimulator) triple=arm64-apple-ios15.0-simulator; odin_target+=(-subtarget:iphonesimulator) ;;
+	*) echo "Unsupported SDK: $sdk" >&2; exit 1 ;;
+esac
+case "$mode" in
+	debug) odin_opt=(-debug -o:none); swift_opt=(-g -Onone) ;;
+	release) odin_opt=(-o:speed); swift_opt=(-O) ;;
+	*) echo "Expected debug or release" >&2; exit 1 ;;
+esac
+
+# Exercise spaces in module and library paths as well as normal imports.
+build=$(mktemp -d "${TMPDIR:-/tmp}/odin swift import.XXXXXXXX")
+trap 'rm -rf -- "$build"' EXIT
+mkdir "$build/fixture"
+swiftc=(xcrun --sdk "$sdk" swiftc -target "$triple" -swift-version 6 -warnings-as-errors
+	-module-cache-path "$build/cache" "${swift_opt[@]}")
+# The library author builds an ordinary Swift module, with no interop code.
+"${swiftc[@]}" -parse-as-library -enable-library-evolution -module-name SwiftImportFixture \
+	-emit-object -o "$build/fixture/SwiftImportFixture.o" \
+	-emit-module-path "$build/fixture/SwiftImportFixture.swiftmodule" "$here/Fixture.swift"
+cp "$here/main.odin" "$build/main.odin"
+
+# Odin imports, checks and links the Swift module in a single invocation.
+"$ODIN" build "$build/main.odin" -file \
+	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do \
+	"${odin_target[@]}" "${odin_opt[@]}" -out:"$build/import"
+xcrun nm "$build/import" > "$build/symbols.txt"
+if grep -q OdinSwiftImportProbe "$build/symbols.txt"; then
+	echo "Unexpected Swift inspection code in the application" >&2
+	exit 1
+fi
+grep -q 'SwiftImportFixture.*addLater.*YaF$' "$build/symbols.txt"
+grep -q 'SwiftImportFixture.*addLater.*Tu' "$build/symbols.txt"
+grep -q 'SwiftImportFixture.*3add' "$build/symbols.txt"
+
+if [[ "$sdk" != macosx ]]; then
+	echo "Swift import fixture linked for $sdk ($mode)"
+	exit 0
+fi
+"$build/import"
+
+# A static archive and repeated imports use the same normal build path.
+xcrun ar rcs "$build/fixture/libSwiftImportFixture.a" "$build/fixture/SwiftImportFixture.o"
+rm "$build/fixture/SwiftImportFixture.o"
+cat > "$build/second.odin" <<'ODIN'
+package swift_import_test
+
+import "base:runtime"
+
+foreign import second "swift:fixture/SwiftImportFixture"
+
+@(init)
+check_second_import :: proc "contextless" () {
+	context = runtime.default_context()
+	assert(second.add(10, 20) == 30)
+}
+ODIN
+"$ODIN" run "$build" "${odin_target[@]}" "${odin_opt[@]}" -out:"$build/repeated"
+
+for selection in narrow generic throwing isolated overloaded future optional inout_value; do
+	cat > "$build/rejected.odin" <<ODIN
+package rejected
+foreign import fixture "swift:fixture/SwiftImportFixture"
+main :: proc() { _ = fixture.$selection }
+ODIN
+	if "$ODIN" check "$build/rejected.odin" -file "${odin_target[@]}" > "$build/invalid.log" 2>&1; then
+		echo "Expected importer to reject $selection" >&2
+		exit 1
+	fi
+	grep -q 'Swift import:' "$build/invalid.log"
+done
+
+if "$ODIN" build "$build/main.odin" -file -internal-cached -out:"$build/cached" > "$build/invalid.log" 2>&1; then
+	echo "Expected unsupported cached Swift imports to fail" >&2
+	exit 1
+fi
+grep -q 'Swift imports do not yet support -internal-cached builds' "$build/invalid.log"
+
+if "$ODIN" check "$build/main.odin" -file -target:linux_arm64 > "$build/invalid.log" 2>&1; then
+	echo "Expected unsupported Swift import target to fail" >&2
+	exit 1
+fi
+grep -q 'Swift imports currently require a Darwin arm64 target' "$build/invalid.log"
+
+if "$ODIN" check "$here/invalid.odin" -file -no-entry-point > "$build/invalid.log" 2>&1; then
+	echo "Expected invalid Swift import calls to fail" >&2
+	exit 1
+fi
+for diagnostic in \
+	'requires a constant Swift link name' \
+	'user data must be plain copied data' \
+	'completion user data type does not match' \
+	'result must be i64, u64, or f64' \
+	'completion must be an Odin procedure' \
+	'arguments must be i64, u64, or f64' \
+	'receiver must be a pointer to a live Swift value' \
+	'requires an Odin context'; do
+	if ! grep -Fq "$diagnostic" "$build/invalid.log"; then
+		cat "$build/invalid.log" >&2
+		echo "Missing diagnostic: $diagnostic" >&2
+		exit 1
+	fi
+done
+echo "Swift import tests passed ($mode)"

@@ -86,12 +86,16 @@ enum EntityFlag : u64 {
 
 	EntityFlag_Require = 1ull<<50,
 	EntityFlag_ByPtr   = 1ull<<51, // enforce parameter is passed by pointer
+	EntityFlag_SwiftAsync  = 1ull<<52,
+	EntityFlag_SwiftSelf   = 1ull<<53,
+	EntityFlag_SwiftResult = 1ull<<54,
 
 	EntityFlag_Overridden    = 1ull<<63,
 };
 
 enum : u64 {
 	EntityFlags_IsSubtype = EntityFlag_Using|EntityFlag_Subtype,
+	EntityFlags_SwiftABI = EntityFlag_SwiftAsync|EntityFlag_SwiftSelf|EntityFlag_SwiftResult,
 };
 
 enum EntityState : u32 {

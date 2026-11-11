@@ -28,6 +28,7 @@
 #include "llvm_backend_utility.cpp"
 #include "llvm_backend_expr.cpp"
 #include "llvm_backend_stmt.cpp"
+#include "llvm_backend_swift.cpp"
 #include "llvm_backend_proc.cpp"
 #include "llvm_backend_asm.cpp"
 

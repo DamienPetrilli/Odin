@@ -3586,7 +3586,8 @@ gb_internal bool are_types_identical_internal(Type *x, Type *y, bool check_tuple
 			for_array(i, x->Tuple.variables) {
 				Entity *xe = x->Tuple.variables[i];
 				Entity *ye = y->Tuple.variables[i];
-				if (xe->kind != ye->kind || !are_types_identical_internal(xe->type, ye->type, check_tuple_names)) {
+				if (xe->kind != ye->kind || ((xe->flags ^ ye->flags) & EntityFlags_SwiftABI) != 0 ||
+				    !are_types_identical_internal(xe->type, ye->type, check_tuple_names)) {
 					return false;
 				}
 				if (check_tuple_names) {
@@ -5929,6 +5930,15 @@ gb_internal gbString write_type_to_string(gbString str, Type *type, bool shortha
 				}
 
 				if (var->kind == Entity_Variable) {
+					if (var->flags&EntityFlag_SwiftAsync) {
+						str = gb_string_appendc(str, "#swift_async ");
+					}
+					if (var->flags&EntityFlag_SwiftSelf) {
+						str = gb_string_appendc(str, "#swift_self ");
+					}
+					if (var->flags&EntityFlag_SwiftResult) {
+						str = gb_string_appendc(str, "#swift_result ");
+					}
 					if (var->flags&EntityFlag_CVarArg) {
 						str = gb_string_appendc(str, "#c_vararg ");
 					}

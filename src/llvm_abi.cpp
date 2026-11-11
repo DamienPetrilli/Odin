@@ -2753,6 +2753,7 @@ gb_internal LB_ABI_INFO(lb_get_abi_info_internal) {
 
 	switch (calling_convention) {
 	case ProcCC_Swift:
+	case ProcCC_SwiftAsync:
 	case ProcCC_None:
 	case ProcCC_InlineAsm:
 		{

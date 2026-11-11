@@ -63,6 +63,7 @@ enum u8 {
 	Preserve_Most = 12,
 	Preserve_All  = 13,
 	Swift         = 14,
+	Swift_Async   = 15,
 }
 */
 Calling_Convention :: type_of(ODIN_DEFAULT_CALLING_CONVENTION)

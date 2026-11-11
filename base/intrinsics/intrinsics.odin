@@ -44,6 +44,13 @@ read_cycle_counter_frequency :: proc() -> i64 ---
 return_address :: proc(#const level: u32 = 0) -> rawptr ---
 // The address of the stack frame of the procedure at `level`. A level above 0 is not allowed on wasm targets.
 frame_address  :: proc(#const level: u32 = 0) -> rawptr ---
+swift_async_context_addr :: proc() -> ^rawptr ---
+
+// Used by generated Swift bindings. Arguments are copied into task storage.
+// User data is copied; pointees and values referenced by context are borrowed
+// through completion. No automatic retain or deep copy is performed.
+swift_async_call :: proc($symbol: string, user_data: $T, completion: $P, ..any) -> bool ---
+swift_async_method_call :: proc($symbol: string, user_data: $T, completion: $P, receiver: $R, ..any) -> bool ---
 // The current value of the stack pointer
 stack_pointer  :: proc() -> rawptr ---
 // The address of the slot holding the current procedure's return address. amd64, i386, and arm64 targets only.

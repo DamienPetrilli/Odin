@@ -148,3 +148,38 @@ public func updateTransactionInPlace(_ transaction: UnsafeMutablePointer<Transac
 	transaction.pointee = updateTransaction(status, transaction.pointee, seconds)
 	return transaction
 }
+
+public struct AsyncProbe {
+	public var value: UnsafeMutablePointer<UInt64>
+	public var delta: UInt64
+
+	public func increment() async {
+		await Task.yield()
+		value.pointee += delta
+	}
+
+	public func snapshot() async -> AsyncSnapshot {
+		await Task.yield()
+		return AsyncSnapshot(value.pointee, delta)
+	}
+}
+
+public struct AsyncSnapshot {
+	public var value: UInt64
+	public var delta: UInt64
+
+	init(_ value: UInt64, _ delta: UInt64) {
+		self.value = value
+		self.delta = delta
+	}
+}
+
+public func asyncProbe(_ value: UnsafeMutablePointer<UInt64>, _ delta: UInt64) -> AsyncProbe {
+	precondition(MemoryLayout<AsyncProbe>.size == 16 && MemoryLayout<AsyncProbe>.alignment == 8)
+	precondition(MemoryLayout<AsyncSnapshot>.size == 16 && MemoryLayout<AsyncSnapshot>.alignment == 8)
+	return AsyncProbe(value: value, delta: delta)
+}
+
+public func snapshotValue(_ snapshot: borrowing AsyncSnapshot) -> UInt64 {
+	return snapshot.value + snapshot.delta
+}

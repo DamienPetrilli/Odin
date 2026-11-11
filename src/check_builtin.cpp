@@ -1,3 +1,27 @@
+// Only plain copied data is accepted. Pointer targets remain borrowed; dynamic
+// containers and other descriptors are deliberately not treated as owned data.
+gb_internal bool swift_async_user_data_type(Type *type) {
+	Type *t = base_type(type);
+	if (!t) return false;
+	switch (t->kind) {
+	case Type_Basic:
+		return is_type_integer(t) || is_type_float(t) || is_type_boolean(t) || t == t_rawptr;
+	case Type_Pointer:
+	case Type_MultiPointer:
+	case Type_Enum:
+		return true;
+	case Type_Array:
+		return swift_async_user_data_type(t->Array.elem);
+	case Type_Struct:
+		if (t->Struct.soa_kind != StructSoa_None || t->Struct.is_polymorphic) return false;
+		for (Entity *field : t->Struct.fields) {
+			if (!swift_async_user_data_type(field->type)) return false;
+		}
+		return true;
+	}
+	return false;
+}
+
 typedef bool (BuiltinTypeIsProc)(Type *t);
 
 gb_internal int enum_constant_entity_cmp(void const* a, void const* b) {
@@ -5978,6 +6002,87 @@ gb_internal bool check_builtin_procedure(CheckerContext *c, Operand *operand, As
 	case BuiltinProc_read_cycle_counter:
 		operand->mode = Addressing_Value;
 		operand->type = t_i64;
+		break;
+
+	case BuiltinProc_swift_async_call:
+	case BuiltinProc_swift_async_method_call: {
+		if (build_context.metrics.os != TargetOs_darwin || build_context.metrics.arch != TargetArch_arm64) {
+			error(call, "'swift_async_call' is only supported on Darwin arm64");
+			return false;
+		}
+#if LLVM_VERSION_MAJOR <= 17
+		error(call, "'swift_async_call' requires LLVM 18 or newer");
+		return false;
+#endif
+		if (c->curr_proc_sig == nullptr || c->curr_proc_sig->Proc.calling_convention != ProcCC_Odin) {
+			error(call, "'swift_async_call' requires an Odin context");
+			return false;
+		}
+		if (operand->mode != Addressing_Constant || operand->value.kind != ExactValue_String ||
+		    !string_starts_with(operand->value.value_string, str_lit("$s"))) {
+			error(ce->args[0], "'swift_async_call' requires a constant Swift link name");
+			return false;
+		}
+		Operand data = {}, callback = {};
+		check_expr(c, &data, ce->args[1]);
+		check_expr(c, &callback, ce->args[2]);
+		if (!swift_async_user_data_type(data.type) || type_align_of(data.type) > 8) {
+			error(ce->args[1], "Swift async user data must be plain copied data with alignment at most eight bytes");
+			return false;
+		}
+		Type *ct = base_type(callback.type);
+		if (ct == nullptr || ct->kind != Type_Proc || ct->Proc.calling_convention != ProcCC_Odin ||
+		    ct->Proc.is_polymorphic || ct->Proc.variadic || ct->Proc.result_count != 0 ||
+		    ct->Proc.param_count < 1 || ct->Proc.param_count > 2) {
+			error(ce->args[2], "Swift async completion must be an Odin procedure taking user data and an optional scalar result");
+			return false;
+		}
+		if (!are_types_identical(ct->Proc.params->Tuple.variables[0]->type, data.type)) {
+			error(ce->args[2], "Swift async completion user data type does not match");
+			return false;
+		}
+		if (ct->Proc.param_count == 2) {
+			Type *rt = base_type(ct->Proc.params->Tuple.variables[1]->type);
+			if (rt != t_i64 && rt != t_u64 && rt != t_f64) {
+				error(ce->args[2], "Swift async result must be i64, u64, or f64");
+				return false;
+			}
+		}
+		bool has_self = id == BuiltinProc_swift_async_method_call;
+		if (has_self) {
+			Operand receiver = {};
+			check_expr(c, &receiver, ce->args[3]);
+			if (!is_type_pointer(receiver.type)) {
+				error(ce->args[3], "Swift async receiver must be a pointer to a live Swift value");
+				return false;
+			}
+		}
+		for (isize i = has_self ? 4 : 3; i < ce->args.count; i++) {
+			Operand arg = {};
+			check_expr(c, &arg, ce->args[i]);
+			Type *at = base_type(arg.type);
+			if (at != t_i64 && at != t_u64 && at != t_f64) {
+				error(ce->args[i], "Swift async arguments must be i64, u64, or f64");
+				return false;
+			}
+		}
+		add_package_dependency(c, "runtime", "swift_async_start");
+		add_package_dependency(c, "runtime", "swift_async_payload");
+		add_package_dependency(c, "runtime", "swift_async_prepare");
+		add_package_dependency(c, "runtime", "swift_async_complete");
+		operand->mode = Addressing_Value;
+		operand->type = t_bool;
+		operand->value = {};
+		break;
+	}
+
+	case BuiltinProc_swift_async_context_addr:
+		if (c->curr_proc_sig == nullptr || c->curr_proc_sig->Proc.calling_convention != ProcCC_SwiftAsync) {
+			error(call, "'swift_async_context_addr' requires a Swift async procedure");
+			return false;
+		}
+		operand->mode = Addressing_Value;
+		operand->type = alloc_type_pointer(t_rawptr);
 		break;
 
 	case BuiltinProc_return_address:

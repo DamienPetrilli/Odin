@@ -1570,6 +1570,10 @@ gb_internal bool check_proc_params_assignable(CheckerContext *c, Type *dst, Type
 			Entity *edst = dst_tuple.variables[i];
 			Entity *esrc = src_tuple.variables[i];
 
+			if ((edst->flags ^ esrc->flags) & EntityFlags_SwiftABI) {
+				return false;
+			}
+
 			if (edst->kind != esrc->kind || !are_types_identical(edst->type, esrc->type)) {
 
 				// Pointers to subtype fields that are at byte offset 0 are OK
@@ -6575,7 +6579,11 @@ gb_internal Entity *check_selector(CheckerContext *c, Operand *operand, Ast *nod
 			bool allow_builtin = false;
 			if (!is_entity_declared_for_selector(entity, import_scope, &allow_builtin)) {
 				ERROR_BLOCK();
-				error(node, "'%.*s' is not declared by '%.*s'", LIT(entity_name), LIT(import_name));
+				if (swift_import_unsupported(e->ImportName.path, entity_name)) {
+					error(node, "Swift import: '%.*s' is unavailable for this target, overloaded, or outside the supported ABI subset", LIT(entity_name));
+				} else {
+					error(node, "'%.*s' is not declared by '%.*s'", LIT(entity_name), LIT(import_name));
+				}
 				operand->mode = Addressing_Invalid;
 				operand->expr = node;
 
@@ -10147,6 +10155,12 @@ gb_internal ExprKind check_call_expr(CheckerContext *c, Operand *operand, Ast *c
 		}
 	}
 
+	bool swift_async_call = pt->kind == Type_Proc && pt->Proc.calling_convention == ProcCC_SwiftAsync;
+	bool swift_async_caller = c->curr_proc_sig != nullptr &&
+	                          c->curr_proc_sig->Proc.calling_convention == ProcCC_SwiftAsync;
+	if (swift_async_call && (!swift_async_caller || tailing != ProcTailing_must_tail)) {
+		error(call, "A Swift async procedure must be called with '#must_tail' from a Swift async procedure");
+	}
 	switch (tailing) {
 	case ProcTailing_none:
 		break;
@@ -10157,7 +10171,8 @@ gb_internal ExprKind check_call_expr(CheckerContext *c, Operand *operand, Ast *c
 			error(call, "'#must_tail' cannot be applied to a call of a procedure with the \"%s\" calling convention",
 			      proc_calling_convention_strings[pt->Proc.calling_convention]);
 			error_line("\tSuggestion: Use the \"preserve/none\" calling convention\n");
-		} else if (c->curr_proc_sig == nullptr || !are_types_identical(c->curr_proc_sig, pt)) {
+		} else if (!(swift_async_call && swift_async_caller) &&
+		           (c->curr_proc_sig == nullptr || !are_types_identical(c->curr_proc_sig, pt))) {
 			ERROR_BLOCK();
 			gbString a = type_to_string(pt);
 			gbString b = type_to_string(c->curr_proc_sig);

@@ -73,6 +73,9 @@ enum BuiltinProcId {
 
 	BuiltinProc_return_address,
 	BuiltinProc_frame_address,
+	BuiltinProc_swift_async_context_addr,
+	BuiltinProc_swift_async_call,
+	BuiltinProc_swift_async_method_call,
 	BuiltinProc_stack_pointer,
 	BuiltinProc_address_of_return_address,
 
@@ -488,6 +491,9 @@ gb_global BuiltinProc builtin_procs[BuiltinProc_COUNT] = {
 
 	{STR_LIT("return_address"),            0, true,  Expr_Expr, BuiltinProcPkg_intrinsics},
 	{STR_LIT("frame_address"),             0, true,  Expr_Expr, BuiltinProcPkg_intrinsics},
+	{STR_LIT("swift_async_context_addr"),  0, false, Expr_Expr, BuiltinProcPkg_intrinsics},
+	{STR_LIT("swift_async_call"),          3, true,  Expr_Expr, BuiltinProcPkg_intrinsics},
+	{STR_LIT("swift_async_method_call"),   4, true,  Expr_Expr, BuiltinProcPkg_intrinsics},
 	{STR_LIT("stack_pointer"),             0, false, Expr_Expr, BuiltinProcPkg_intrinsics},
 	{STR_LIT("address_of_return_address"), 0, false, Expr_Expr, BuiltinProcPkg_intrinsics},
 

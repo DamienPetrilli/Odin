@@ -2782,6 +2782,28 @@ gb_internal LLVMTypeRef lb_type_internal_for_procedures_raw(lbModule *m, Type *t
 		}
 	}
 
+	if (type->Proc.params != nullptr && (type->Proc.calling_convention == ProcCC_Swift ||
+	                                    type->Proc.calling_convention == ProcCC_SwiftAsync)) {
+		unsigned index = 0;
+		for (Entity *e : type->Proc.params->Tuple.variables) {
+			if (e->kind != Entity_Variable || (e->flags & EntityFlag_CVarArg)) {
+				continue;
+			}
+			lbArgType *arg = &ft->args[index++];
+			if (e->flags & EntityFlag_SwiftAsync) {
+				arg->attribute = lb_create_enum_attribute(m->ctx, "swiftasync");
+			} else if (e->flags & EntityFlag_SwiftSelf) {
+				arg->attribute = lb_create_enum_attribute(m->ctx, "swiftself");
+			} else if (e->flags & EntityFlag_SwiftResult) {
+				LLVMTypeRef opaque = LLVMGetTypeByName2(m->ctx, "swift.opaque");
+				if (opaque == nullptr) {
+					opaque = LLVMStructCreateNamed(m->ctx, "swift.opaque");
+				}
+				arg->attribute = lb_create_enum_attribute_with_type(m->ctx, "sret", opaque);
+			}
+		}
+	}
+
 	map_set(&m->function_type_map, type, ft);
 	LLVMTypeRef new_abi_fn_type = lb_function_type_to_llvm_raw(ft, type->Proc.c_vararg);
 

@@ -340,6 +340,7 @@ enum ProcCallingConvention : i32 {
 	ProcCC_PreserveMost = 12,
 	ProcCC_PreserveAll  = 13,
 	ProcCC_Swift        = 14,
+	ProcCC_SwiftAsync   = 15,
 
 	ProcCC_MAX,
 
@@ -363,6 +364,7 @@ gb_global char const *proc_calling_convention_strings[ProcCC_MAX] = {
 	"preserve/most",
 	"preserve/all",
 	"swift",
+	"swift/async",
 };
 
 gb_internal ProcCallingConvention default_calling_convention(void) {
@@ -407,6 +409,9 @@ enum FieldFlag : u32 {
 	FieldFlag_no_broadcast = 1<<9, // disallow array programming
 
 	FieldFlag_no_capture  = 1<<11,
+	FieldFlag_swift_async = 1<<12,
+	FieldFlag_swift_self  = 1<<13,
+	FieldFlag_swift_result = 1<<14,
 
 	// Internal use by the parser only
 	FieldFlag_Tags      = 1<<15,
@@ -419,7 +424,7 @@ enum FieldFlag : u32 {
 	// Parameter List Restrictions
 	FieldFlag_Signature = FieldFlag_ellipsis|FieldFlag_using|FieldFlag_no_alias|FieldFlag_c_vararg|
 	                      FieldFlag_const|FieldFlag_any_int|FieldFlag_by_ptr|FieldFlag_no_broadcast|
-	                      FieldFlag_no_capture,
+	                      FieldFlag_no_capture|FieldFlag_swift_async|FieldFlag_swift_self|FieldFlag_swift_result,
 
 	FieldFlag_Struct    = FieldFlag_using|FieldFlag_subtype|FieldFlag_Tags,
 };

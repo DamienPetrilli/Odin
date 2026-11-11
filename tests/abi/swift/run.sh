@@ -54,12 +54,19 @@ cp "$here/exports.odin" "$build/exports.odin"
 
 "${swiftc[@]}" -I "$build" "$here/main.swift" "$build/Fixture.o" "$build/exports.o" -o "$build/abi"
 
+cp "$here/async.odin" "$build/async.odin"
+"$ODIN" build "$build/async.odin" -file -build-mode:obj -use-single-module \
+	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do \
+	"${odin_target[@]}" "${odin_opt[@]}" -out:"$build/async.o"
+"${swiftc[@]}" -framework CoreFoundation "$build/Fixture.o" "$build/async.o" -o "$build/async"
+ODIN="$ODIN" bash "$here/import/run.sh" "$sdk" "${2:-debug}"
 if [[ "$sdk" != macosx ]]; then
 	echo "Swift ABI fixture linked for $sdk"
 	exit 0
 fi
 
 "$build/abi"
+"$build/async"
 
 check_invalid() {
 	local target=$1
@@ -90,6 +97,12 @@ check_invalid darwin_arm64 \
 	'Odin_Callback ::' \
 	'C_Callback ::' \
 	'C_Callback_Result ::' \
+	'The "swift/async" calling convention requires a fixed procedure with an async context and no result' \
+	'Swift ABI parameter attributes require distinct pointer parameters on a Swift procedure' \
+	"'#swift_async' requires the \"swift/async\" calling convention" \
+	"'#swift_result' requires the first parameter of a synchronous Swift procedure with no result" \
+	"A Swift async procedure must be called with '#must_tail' from a Swift async procedure" \
+	'plain: proc "swift" (receiver: rawptr) = f' \
 	'The calling conventions differ between the procedure signature types'
 check_invalid linux_arm64 'The "swift" calling convention is only supported on Darwin arm64'
 echo "Swift ABI tests passed"
