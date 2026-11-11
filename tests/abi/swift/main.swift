@@ -16,6 +16,19 @@ func changeInPlaceInOdin(_ reading: UnsafeMutablePointer<Reading>, _ pages: Int6
 @_silgen_name("odin_swift_abi_fill_bytes")
 func fillBytesInOdin(_ output: UnsafeMutablePointer<UInt8>, _ capacity: Int64) -> Int64
 
+@_silgen_name("odin_swift_abi_call_callback")
+func callCallbackInOdin(_ callback: ReadingCallback, _ userData: UnsafeMutableRawPointer, _ reading: Reading) -> Reading
+
+// Odin resolves the Swift symbol as a thin procedure value.
+@_silgen_name("odin_swift_abi_swift_callback")
+func swiftCallback() -> ReadingCallback
+
+@_silgen_name("odin_swift_abi_retain_callback_state")
+func retainCallbackStateInOdin(_ state: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer
+
+@_silgen_name("odin_swift_abi_release_callback_state")
+func releaseCallbackStateInOdin(_ state: UnsafeMutableRawPointer)
+
 precondition(MemoryLayout<Reading>.size == 16)
 precondition(MemoryLayout<Reading>.stride == 16)
 precondition(MemoryLayout<Reading>.alignment == 8)
@@ -49,3 +62,22 @@ data.withUnsafeMutableBufferPointer { bytes in
 	precondition(fillBytesInOdin(start, Int64(bytes.count - 2)) == 3)
 }
 precondition(data == [0xa5, 13, 29, 61, 255, 0x5a])
+
+var deinitCount: Int64 = 0
+withUnsafeMutablePointer(to: &deinitCount) { count in
+	let initial = makeCallbackState(count)
+	let retained = retainCallbackStateInOdin(initial)
+	precondition(retained == initial)
+	releaseCallbackState(initial)
+	precondition(count.pointee == 0)
+
+	let callback = swiftCallback()
+	let first = callCallbackInOdin(callback, retained, original)
+	let second = callCallbackInOdin(callback, retained, original)
+	precondition(first == Reading(page: 42, progress: 0.375))
+	precondition(second == Reading(page: 43, progress: 0.375))
+	precondition(count.pointee == 0)
+
+	releaseCallbackStateInOdin(retained)
+	precondition(count.pointee == 1)
+}

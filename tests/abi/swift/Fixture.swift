@@ -29,3 +29,40 @@ public func fillBytes(_ output: UnsafeMutablePointer<UInt8>, _ capacity: Int64) 
 	bytes[2] = 61
 	return 3
 }
+
+public typealias ReadingCallback = @convention(thin) (UnsafeMutableRawPointer, Reading) -> Reading
+
+public func callCallback(_ callback: ReadingCallback, _ userData: UnsafeMutableRawPointer, _ reading: Reading) -> Reading {
+	callback(userData, reading)
+}
+
+private final class CallbackState {
+	let deinitCount: UnsafeMutablePointer<Int64>
+	var calls: Int64 = 0
+
+	init(_ deinitCount: UnsafeMutablePointer<Int64>) {
+		self.deinitCount = deinitCount
+	}
+
+	deinit {
+		deinitCount.pointee += 1
+	}
+}
+
+public func makeCallbackState(_ deinitCount: UnsafeMutablePointer<Int64>) -> UnsafeMutableRawPointer {
+	Unmanaged.passRetained(CallbackState(deinitCount)).toOpaque()
+}
+
+public func retainCallbackState(_ state: UnsafeMutableRawPointer) -> UnsafeMutableRawPointer {
+	Unmanaged<CallbackState>.fromOpaque(state).retain().toOpaque()
+}
+
+public func releaseCallbackState(_ state: UnsafeMutableRawPointer) {
+	Unmanaged<CallbackState>.fromOpaque(state).release()
+}
+
+public func updateCallbackState(_ userData: UnsafeMutableRawPointer, _ reading: Reading) -> Reading {
+	let state = Unmanaged<CallbackState>.fromOpaque(userData).takeUnretainedValue()
+	state.calls += 1
+	return Reading(page: reading.page + state.calls, progress: reading.progress + 0.125)
+}

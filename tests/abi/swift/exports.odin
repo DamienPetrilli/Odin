@@ -7,6 +7,9 @@ Reading :: struct {
 	progress: f64,
 }
 
+Reading_Callback :: proc "swift" (user_data: rawptr, reading: Reading) -> Reading
+Callback_State_Ref :: distinct rawptr
+
 #assert(size_of(Reading) == 16)
 #assert(size_of([2]Reading) == 32)
 #assert(align_of(Reading) == 8)
@@ -25,6 +28,18 @@ foreign fixture {
 
 	@(link_name="$s15SwiftABIFixture9fillBytesys5Int64VSpys5UInt8VG_ADtF")
 	fill_bytes :: proc "swift" (output: [^]u8, capacity: i64) -> i64 ---
+
+	@(link_name="$s15SwiftABIFixture12callCallbackyAA7ReadingVADSv_ADtXf_SvADtF")
+	call_callback :: proc "swift" (callback: Reading_Callback, user_data: rawptr, reading: Reading) -> Reading ---
+
+	@(link_name="$s15SwiftABIFixture19updateCallbackStateyAA7ReadingVSv_ADtF")
+	update_callback_state :: proc "swift" (user_data: rawptr, reading: Reading) -> Reading ---
+
+	@(link_name="$s15SwiftABIFixture19retainCallbackStateyS2vF")
+	retain_callback_state :: proc "swift" (state: Callback_State_Ref) -> Callback_State_Ref ---
+
+	@(link_name="$s15SwiftABIFixture20releaseCallbackStateyySvF")
+	release_callback_state :: proc "swift" (state: Callback_State_Ref) ---
 }
 
 @(export)
@@ -52,6 +67,32 @@ odin_swift_abi_fill_bytes :: proc "swift" (output: [^]u8, capacity: i64) -> i64 
 	output[1] = 29
 	output[2] = 61
 	return 3
+}
+
+@(export)
+odin_swift_abi_call_callback :: proc "swift" (callback: Reading_Callback, user_data: rawptr, reading: Reading) -> Reading {
+	return callback(user_data, reading)
+}
+
+@(export)
+odin_swift_abi_swift_callback :: proc "swift" () -> Reading_Callback {
+	return update_callback_state
+}
+
+@(export)
+odin_swift_abi_retain_callback_state :: proc "swift" (state: Callback_State_Ref) -> Callback_State_Ref {
+	return retain_callback_state(state)
+}
+
+@(export)
+odin_swift_abi_release_callback_state :: proc "swift" (state: Callback_State_Ref) {
+	release_callback_state(state)
+}
+
+update_callback_count :: proc "swift" (user_data: rawptr, reading: Reading) -> Reading {
+	calls := cast(^i64)user_data
+	calls^ += 1
+	return {page = reading.page + calls^, progress = reading.progress + 0.125}
 }
 
 @(export)
@@ -83,6 +124,16 @@ odin_swift_abi_check_imports :: proc "swift" () -> i64 {
 	}
 	if fill_bytes(output, 4) != 3 || bytes != ([6]u8{0xa5, 13, 29, 61, 255, 0x5a}) {
 		return 5
+	}
+
+	callback_data := [3]i64{111, 0, 222}
+	user_data := rawptr(&callback_data[1])
+	first := call_callback(update_callback_count, user_data, original)
+	second := call_callback(update_callback_count, user_data, original)
+	if first != (Reading{page = 42, progress = 0.375}) ||
+	   second != (Reading{page = 43, progress = 0.375}) ||
+	   callback_data != ([3]i64{111, 2, 222}) {
+		return 6
 	}
 	return 0
 }

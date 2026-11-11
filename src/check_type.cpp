@@ -4119,7 +4119,13 @@ gb_internal bool is_type_supported_by_swift_abi(Type *type) {
 	if (type == t_i64 || type == t_f64 || is_type_pointer(type) || is_type_multi_pointer(type)) {
 		return true;
 	}
-	if (type == nullptr || type->kind != Type_Struct) {
+	if (type == nullptr) {
+		return false;
+	}
+	if (type->kind == Type_Proc) {
+		return type->Proc.calling_convention == ProcCC_Swift;
+	}
+	if (type->kind != Type_Struct) {
 		return false;
 	}
 

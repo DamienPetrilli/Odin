@@ -83,6 +83,9 @@ check_invalid darwin_arm64 \
 	"'#by_ptr' cannot be used with the \"swift\" calling convention" \
 	'Unsupported result type for the "swift" calling convention' \
 	'The "swift" calling convention requires a fixed, non-polymorphic procedure with at most one result' \
+	'Odin_Callback ::' \
+	'C_Callback ::' \
+	'C_Callback_Result ::' \
 	'The calling conventions differ between the procedure signature types'
 check_invalid linux_arm64 'The "swift" calling convention is only supported on Darwin arm64'
 echo "Swift ABI tests passed"

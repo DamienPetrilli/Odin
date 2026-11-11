@@ -17,6 +17,9 @@ By_Ptr_Parameter :: proc "swift" (#by_ptr value: i64)
 String_Result :: proc "swift" () -> string
 Variadic_Parameter :: proc "swift" (value: ..i64)
 Multiple_Results :: proc "swift" () -> (i64, f64)
+Odin_Callback :: proc "swift" (f: proc ())
+C_Callback :: proc "swift" (f: proc "c" ())
+C_Callback_Result :: proc "swift" () -> proc "c" ()
 
 c_scalar :: proc "c" (value: i64) -> i64 {
 	return value
