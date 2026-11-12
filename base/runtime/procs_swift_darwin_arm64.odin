@@ -32,6 +32,10 @@ Swift_Async_Executor :: struct {
 }
 
 foreign {
+	@(link_name="swift_retain")
+	swift_async_retain :: proc "c" (task: rawptr) -> rawptr ---
+	@(link_name="swift_task_getCurrent")
+	swift_async_current :: proc "swift" () -> rawptr ---
 	@(link_name="swift_task_create_common")
 	swift_async_create :: proc "swift" (flags: u64, options, future_type, entry, capture: rawptr, context_size: u64) -> Swift_Async_Task_And_Frame ---
 	@(link_name="swift_task_alloc")
@@ -50,10 +54,10 @@ swift_async_payload :: proc "contextless" (frame: rawptr) -> rawptr {
 	return rawptr(uintptr(frame) + size_of(Swift_Async_Task_Frame))
 }
 
-swift_async_start :: proc(entry, descriptor, capture: rawptr, capture_size: int, invoke: proc(rawptr), completion: rawptr) -> bool {
+swift_async_start :: proc(entry, descriptor, capture: rawptr, capture_size: int, invoke: proc(rawptr), completion: rawptr) -> rawptr {
 	desc := cast(^Swift_Async_Descriptor)descriptor
 	if completion == nil || desc == nil || desc.context_size < size_of(Swift_Async_Frame) {
-		return false
+		return nil
 	}
 	discard_result :: 1 << 14
 	size := u64(size_of(Swift_Async_Task_Frame) + capture_size)
@@ -62,10 +66,12 @@ swift_async_start :: proc(entry, descriptor, capture: rawptr, capture_size: int,
 	task.frame.invoke = invoke
 	task.frame.odin_context = context
 	mem_copy_non_overlapping(swift_async_payload(task.frame), capture, capture_size)
-	// Transfer the owned task reference to execution. Swift releases it after
-	// the root continuation finishes, including its trailing capture storage.
+	// Execution consumes one reference. Keep the creation reference for the
+	// caller, independently of completion and the lifetime of captured values.
+	// Retain before enqueue: another thread may run the task immediately.
+	swift_async_retain(task.task)
 	swift_async_enqueue(task.task, swift_async_main_executor())
-	return true
+	return task.task
 }
 
 swift_async_prepare :: proc "contextless" (parent, resume: rawptr) -> rawptr {

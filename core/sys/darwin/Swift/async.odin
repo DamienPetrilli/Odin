@@ -11,8 +11,6 @@ Async_Context :: runtime.Swift_Async_Frame
 
 Async_Method :: proc "swift/async" (#swift_async async_ctx: ^Async_Context, #swift_self receiver: rawptr)
 Async_Result_Method :: proc "swift/async" (result: rawptr, #swift_async async_ctx: ^Async_Context, #swift_self receiver: rawptr)
-@(private)
-Completion_Invoker :: proc (user_data, completion: rawptr)
 
 async_call :: proc {
 	async_call_void,
@@ -20,19 +18,19 @@ async_call :: proc {
 }
 
 // Start a non-throwing Swift method on the main executor. The caller owns the
-// receiver, any uninitialized result storage, and user data. Keep them alive
+// receiver and any uninitialized result storage. Keep them alive
 // through the callback, which runs on the main executor with a copy of the
 // caller's Odin context. The values referenced by that context must also stay
-// valid through completion. A false return means no callback will run.
+// valid through completion. A rejected start returns nil, false; no callback
+// runs. The returned task owns one reference; completion borrows that handle.
 @(require_results)
 async_call_void :: proc(
 	method: Async_Method,
 	descriptor: ^Async_Descriptor,
 	receiver: rawptr,
-	user_data: $T,
-	completion: proc(user_data: T),
-) -> bool where intrinsics.type_is_pointer(T) {
-	return start(rawptr(method), descriptor, receiver, nil, user_data, rawptr(completion), completion_invoker(T))
+	completion: proc(Task),
+) -> (task: Task, ok: bool) #optional_ok {
+	return start(rawptr(method), descriptor, receiver, nil, completion)
 }
 
 @(require_results)
@@ -40,20 +38,12 @@ async_call_result :: proc(
 	method: Async_Result_Method,
 	descriptor: ^Async_Descriptor,
 	receiver, result: rawptr,
-	user_data: $T,
-	completion: proc(user_data: T),
-) -> bool where intrinsics.type_is_pointer(T) {
+	completion: proc(Task),
+) -> (task: Task, ok: bool) #optional_ok {
 	if result == nil {
-		return false
+		return nil, false
 	}
-	return start(rawptr(method), descriptor, receiver, result, user_data, rawptr(completion), completion_invoker(T))
-}
-
-@(private)
-completion_invoker :: proc($T: typeid) -> Completion_Invoker {
-	return proc(user_data, completion: rawptr) {
-		(cast(proc(user_data: T))completion)(cast(T)user_data)
-	}
+	return start(rawptr(method), descriptor, receiver, result, completion)
 }
 
 @(private)
@@ -63,9 +53,7 @@ Task_Context :: struct {
 	context_size: u64,
 	receiver:     rawptr,
 	result:       rawptr,
-	user_data:    rawptr,
-	completion:   rawptr,
-	invoke:       Completion_Invoker,
+	completion:   proc(Task),
 	odin_context: runtime.Context,
 }
 
@@ -76,12 +64,11 @@ Task_Resume :: proc "swift/async" (#swift_async async_ctx: ^Async_Context, #swif
 start :: proc(
 	method: rawptr,
 	descriptor: ^Async_Descriptor,
-	receiver, result, user_data: rawptr,
-	completion: rawptr,
-	invoke: Completion_Invoker,
-) -> bool {
+	receiver, result: rawptr,
+	completion: proc(Task),
+) -> (Task, bool) {
 	if method == nil || descriptor == nil || descriptor.context_size < size_of(Async_Context) || receiver == nil || completion == nil {
-		return false
+		return nil, false
 	}
 
 	discard_result :: 1 << 14
@@ -92,14 +79,12 @@ start :: proc(
 	async_ctx.context_size = u64(descriptor.context_size)
 	async_ctx.receiver = receiver
 	async_ctx.result = result
-	async_ctx.user_data = user_data
 	async_ctx.completion = completion
-	async_ctx.invoke = invoke
 	async_ctx.odin_context = context
-	// Transfer the task's owned reference to execution. The Swift runtime
-	// releases it when the task's final continuation runs.
+	// Keep the creation reference for the caller and retain for execution.
+	runtime.swift_async_retain(task.task)
 	runtime.swift_async_enqueue(task.task, runtime.swift_async_main_executor())
-	return true
+	return Task(task.task), true
 }
 
 @(private)
@@ -129,6 +114,6 @@ method_resumed :: proc "swift/async" (#swift_async child: ^Async_Context) {
 complete_on_main :: proc "swift/async" (#swift_async async_ctx: ^Async_Context) {
 	task := cast(^Task_Context)async_ctx
 	context = task.odin_context
-	task.invoke(task.user_data, task.completion)
+	task.completion(Task(runtime.swift_async_current()))
 	#must_tail (cast(Task_Resume)async_ctx.resume)(async_ctx, nil)
 }

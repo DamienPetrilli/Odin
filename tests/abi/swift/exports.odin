@@ -270,3 +270,13 @@ odin_swift_abi_check_records :: proc "swift" () -> i64 {
 	}
 	return 0
 }
+
+foreign fixture {
+	@(link_name="$s15SwiftABIFixture10invertFlagyS2bF")
+	invert_flag :: proc "swift" (value: bool) -> bool ---
+}
+
+@(export, link_name="odin_swift_abi_invert_flag")
+invert_flag_round_trip :: proc "swift" (value: bool) -> bool {
+	return invert_flag(value)
+}

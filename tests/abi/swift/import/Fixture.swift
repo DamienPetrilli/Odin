@@ -250,3 +250,38 @@ public struct ValueSequence {
 	public static var current: ValueSequence { ValueSequence() }
 	public func makeIterator() -> Iterator { Iterator() }
 }
+
+// These are ordinary Swift APIs. Odin creates and controls their tasks through
+// the native runtime; the fixture contains no Odin-specific entry points.
+nonisolated(unsafe) private var cancellationStarts: UInt64 = 0
+nonisolated(unsafe) private var cancellationHandlers: UInt64 = 0
+
+public func cancellationStarted() -> UInt64 {
+	lifetimeLock.lock()
+	defer { lifetimeLock.unlock() }
+	return cancellationStarts
+}
+public func cancellationHandled() -> UInt64 {
+	lifetimeLock.lock()
+	defer { lifetimeLock.unlock() }
+	return cancellationHandlers
+}
+public func waitForCancellation(_ value: Value) async -> UInt64 {
+	let handled = cancellationHandled()
+	return await withTaskCancellationHandler {
+		lifetimeLock.withLock { cancellationStarts += 1 }
+		// Observing the flag can race with handler delivery/removal. Keep this
+		// operation suspended until its handler has actually signalled it.
+		while !Task.isCancelled || cancellationHandled() == handled { await Task.yield() }
+		return value.value
+	} onCancel: {
+		lifetimeLock.withLock { cancellationHandlers += 1 }
+	}
+}
+public func cancellationState() async -> UInt64 {
+	Task.isCancelled ? 1 : 0
+}
+public func cancellationError(_ value: Value) async throws -> Value {
+	try Task.checkCancellation()
+	return value
+}

@@ -1,6 +1,6 @@
 // Native async imports use a task-owned record for arguments and completion.
 // Imported calls have scalar arguments/results and an optional borrowed
-// receiver. User data never crosses the Swift ABI; it is copied for Odin.
+// receiver. Completion borrows the native task handle from the runtime.
 
 gb_internal Type *lb_swift_async_proc_type(Type **params, isize count, bool has_self = false) {
 	Type *tuple = alloc_type_tuple_from_field_types(params, count, false, true);
@@ -30,9 +30,8 @@ gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool ha
 	ast_node(ce, CallExpr, expr);
 	lbModule *m = p->module;
 	String symbol = type_and_value_of_expr(ce->args[0]).value.value_string;
-	isize arg_count = ce->args.count - 3;
-	lbValue user_data = lb_build_expr(p, ce->args[1]);
-	lbValue callback = lb_build_expr(p, ce->args[2]);
+	isize arg_count = ce->args.count - 2;
+	lbValue callback = lb_build_expr(p, ce->args[1]);
 	Type *callback_type = base_type(callback.type);
 	Type *result_type = nullptr;
 	if (callback_type->Proc.param_count == 2) {
@@ -40,9 +39,8 @@ gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool ha
 	}
 
 	auto values = array_make<lbValue>(temporary_allocator());
-	array_add(&values, user_data);
 	array_add(&values, callback);
-	for (isize i = 3; i < ce->args.count; i++) {
+	for (isize i = 2; i < ce->args.count; i++) {
 		array_add(&values, lb_build_expr(p, ce->args[i]));
 	}
 	auto fields = array_make<LLVMTypeRef>(temporary_allocator());
@@ -71,7 +69,7 @@ gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool ha
 	auto native_params = array_make<Type *>(temporary_allocator());
 	array_add(&native_params, t_rawptr);
 	for (isize i = 0; i < arg_count; i++) {
-		array_add(&native_params, values[i+2].type);
+		array_add(&native_params, values[i+1].type);
 	}
 	Type *native_type = lb_swift_async_proc_type(native_params.data, native_params.count, has_self);
 	char *native_name = alloc_cstring(permanent_allocator(), symbol);
@@ -92,7 +90,7 @@ gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool ha
 		array_clear(&args);
 		array_add(&args, child);
 		for (isize i = 0; i < arg_count; i++) {
-			array_add(&args, lb_swift_capture_load(entry, capture_type, capture.value, cast(unsigned)(i+2), values[i+2].type));
+			array_add(&args, lb_swift_capture_load(entry, capture_type, capture.value, cast(unsigned)(i+1), values[i+1].type));
 		}
 		lb_emit_call(entry, lbValue{native, native_type}, args, ProcInlining_none, ProcTailing_must_tail);
 		LLVMBuildRetVoid(entry->builder);
@@ -123,9 +121,10 @@ gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool ha
 	lb_begin_procedure_body(invoke);
 	{
 		LLVMValueRef capture = LLVMGetParam(invoke->value, 0);
-		lbValue completion = lb_swift_capture_load(invoke, capture_type, capture, 1, callback.type);
+		lbValue completion = lb_swift_capture_load(invoke, capture_type, capture, 0, callback.type);
 		auto args = array_make<lbValue>(temporary_allocator());
-		array_add(&args, lb_swift_capture_load(invoke, capture_type, capture, 0, user_data.type));
+		lbValue task = lb_emit_runtime_call(invoke, "swift_async_current", args);
+		array_add(&args, lb_emit_conv(invoke, task, callback_type->Proc.params->Tuple.variables[0]->type));
 		if (result_type) {
 			array_add(&args, lb_swift_capture_load(invoke, capture_type, capture, cast(unsigned)values.count, result_type));
 		}

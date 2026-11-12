@@ -58,7 +58,12 @@ value_calls: int
 error_calls: int
 iterator_calls: int
 
-iterator_received :: proc(iterator: fixture.ValueSequence_Iterator, result: fixture.Optional_Validation_Value) {
+test_iterator: fixture.ValueSequence_Iterator
+mutating_value: fixture.Value
+
+iterator_received :: proc(task: swift.Task, result: fixture.Optional_Validation_Value) {
+	_ = take_expected(task)
+	iterator := test_iterator
 	defer fixture.Optional_Validation_Value_destroy(result)
 	iterator_calls += 1
 	if iterator_calls == 1 {
@@ -69,8 +74,9 @@ iterator_received :: proc(iterator: fixture.ValueSequence_Iterator, result: fixt
 		fixture.Validation_Value_destroy(validation)
 		assert(fixture.Value_value(value) == 73)
 		fixture.Value_destroy(value)
-		_, ok := fixture.ValueSequence_Iterator_next(iterator, iterator, iterator_received)
+		next, ok := fixture.ValueSequence_Iterator_next(iterator, iterator_received)
 		assert(ok)
+		track_task(next)
 	} else {
 		assert(iterator_calls == 2 && fixture.Optional_Validation_Value_case(result) == .None)
 		value, found := fixture.Optional_Validation_Value_get_some(result)
@@ -107,7 +113,8 @@ check_enums :: proc() {
 	assert(fixture.live_value_count() == 0)
 }
 
-check_error :: proc(expected: u64, error: swift.Error) {
+check_error :: proc(task: swift.Task, error: swift.Error) {
+	expected := take_expected(task)
 	assert((error == nil) == (expected != 0))
 	if error != nil {
 		copy := swift.error_retain(error)
@@ -117,23 +124,24 @@ check_error :: proc(expected: u64, error: swift.Error) {
 	error_calls += 1
 }
 
-checked_value :: proc(expected: u64, value: fixture.Value, error: swift.Error) {
+checked_value :: proc(task: swift.Task, value: fixture.Value, error: swift.Error) {
 	if error == nil {
-		assert(fixture.Value_value(value) == expected)
+		assert(fixture.Value_value(value) == expected_values[task])
 		fixture.Value_destroy(value)
 	} else {
 		assert(value == nil)
 	}
-	check_error(expected, error)
+	check_error(task, error)
 }
 
-checked_scalar :: proc(expected, value: u64, error: swift.Error) {
-	assert(value == expected)
-	check_error(expected, error)
+checked_scalar :: proc(task: swift.Task, value: u64, error: swift.Error) {
+	assert(value == expected_values[task])
+	check_error(task, error)
 }
 
-value_finished :: proc(id: swift.Request_Id, value: fixture.Value) {
-	assert(id != 0 && pthread_main_np() == 1)
+value_finished :: proc(task: swift.Task, value: fixture.Value) {
+	_ = take_expected(task)
+	assert(task != nil && pthread_main_np() == 1)
 	assert(context.user_ptr == &value_calls)
 	assert(fixture.Value_value(value) == 26)
 	// All copied input values have been destroyed before this callback. Only
@@ -142,14 +150,15 @@ value_finished :: proc(id: swift.Request_Id, value: fixture.Value) {
 	value_calls += 1
 }
 
-read_finished :: proc(id: u64, result: u64) {
-	assert(id == 73 && result == 17)
+read_finished :: proc(task: swift.Task, result: u64) {
+	assert(take_expected(task) == 73 && result == 17)
 	value_calls += 1
 }
 
-mutation_finished :: proc(value: fixture.Value) {
-	assert(fixture.Value_value(value) == 26)
-	fixture.Value_destroy(value)
+mutation_finished :: proc(task: swift.Task) {
+	_ = take_expected(task)
+	assert(fixture.Value_value(mutating_value) == 26)
+	fixture.Value_destroy(mutating_value)
 	value_calls += 1
 }
 
@@ -202,40 +211,50 @@ check_values :: proc() {
 	// then the uninitialized result. No completion or leaked copy is allowed.
 	for remaining in 0..<3 {
 		state.remaining = remaining
-		id, ok := fixture.add_values_later(a, b, value_finished)
-		assert(!ok && id == 0 && value_calls == 0)
+		task, ok := fixture.add_values_later(a, b, value_finished)
+		assert(!ok && task == nil && value_calls == 0)
 		assert(fixture.live_value_count() == 2)
 		assert(state.allocations - state.frees == 2)
 	}
 	state.remaining = -1
 	context.user_ptr = &value_calls
-	_, ok := fixture.add_values_later(a, b, value_finished)
+	task, ok := fixture.add_values_later(a, b, value_finished)
 	assert(ok)
-	_, ok = fixture.Value_adding_later(a, 9, value_finished)
+	track_task(task)
+	task, ok = fixture.Value_adding_later(a, 9, value_finished)
 	assert(ok)
-	_, ok = fixture.Value_read_later(a, u64(73), read_finished)
+	track_task(task)
+	task, ok = fixture.Value_read_later(a, read_finished)
 	assert(ok)
+	track_task(task, 73)
 	for amount in ([2]u64{0, 9}) {
 		expected := u64(0)
 		if amount != 0 { expected = 26 }
-		_, ok = fixture.Value_checked_adding_later(a, amount, expected, checked_value)
+		task, ok = fixture.Value_checked_adding_later(a, amount, checked_value)
 		assert(ok)
-		_, ok = fixture.checked_later(amount, amount, checked_scalar)
+		track_task(task, expected)
+		task, ok = fixture.checked_later(amount, checked_scalar)
 		assert(ok)
-		_, ok = fixture.checked_void_later(amount, amount, check_error)
+		track_task(task, amount)
+		task, ok = fixture.checked_void_later(amount, check_error)
 		assert(ok)
+		track_task(task, amount)
 	}
 	fixture.Value_destroy(a)
 	fixture.Value_destroy(b)
 	// A mutating receiver is borrowed, so changes must reach the original.
 	a = fixture.make_value(17) or_else panic("Value factory failed")
-	_, ok = fixture.Value_increment_later(a, 9, a, mutation_finished)
+	mutating_value = a
+	task, ok = fixture.Value_increment_later(a, 9, mutation_finished)
 	assert(ok)
+	track_task(task)
 	sequence := fixture.ValueSequence_current() or_else panic("Sequence getter")
 	iterator := fixture.ValueSequence_make_iterator(sequence) or_else panic("Iterator")
 	fixture.ValueSequence_destroy(sequence)
-	_, ok = fixture.ValueSequence_Iterator_next(iterator, iterator, iterator_received)
+	test_iterator = iterator
+	task, ok = fixture.ValueSequence_Iterator_next(iterator, iterator_received)
 	assert(ok)
+	track_task(task)
 	begin := time.tick_now()
 	for value_calls != 4 || error_calls != 6 || iterator_calls != 2 {
 		cf.RunLoopRunInMode(cf.kRunLoopDefaultMode, 0.01, false)

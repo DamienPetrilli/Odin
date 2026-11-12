@@ -33,14 +33,18 @@ Request :: struct {
 	calls:    int,
 }
 
-incremented :: proc(request: ^Request) {
+incremented :: proc(task: swift.Task) {
+	request := cast(^Request)context.user_ptr
+	assert(task != nil)
 	assert(context.user_ptr == request)
 	assert(pthread_main_np() == 1)
 	assert(request.value == request.expected)
 	request.calls += 1
 }
 
-received_snapshot :: proc(request: ^Request) {
+received_snapshot :: proc(task: swift.Task) {
+	request := cast(^Request)context.user_ptr
+	assert(task != nil)
 	assert(context.user_ptr == request)
 	assert(pthread_main_np() == 1)
 	assert(snapshot_value(&request.result) == request.expected)
@@ -54,13 +58,15 @@ main :: proc() {
 	init_probe(&b.probe, &b.value, 4)
 	{
 		context.user_ptr = &a
-		started := swift.async_call(increment, &increment_descriptor, &a.probe, &a, incremented)
+		task, started := swift.async_call(increment, &increment_descriptor, &a.probe, incremented)
 		assert(started)
+		swift.task_release(task)
 	}
 	{
 		context.user_ptr = &b
-		started := swift.async_call(snapshot, &snapshot_descriptor, &b.probe, &b.result, &b, received_snapshot)
+		task, started := swift.async_call(snapshot, &snapshot_descriptor, &b.probe, &b.result, received_snapshot)
 		assert(started)
+		swift.task_release(task)
 	}
 	assert(a.calls == 0 && b.calls == 0)
 

@@ -31,6 +31,7 @@ swiftc=(xcrun --sdk "$sdk" swiftc -target "$triple" -swift-version 6 -warnings-a
 cp "$here/main.odin" "$build/main.odin"
 cp "$here/values.odin" "$build/values.odin"
 cp "$here/strings.odin" "$build/strings.odin"
+cp "$here/tasks.odin" "$build/tasks.odin"
 
 # Odin imports, checks and links the Swift module in a single invocation.
 "$ODIN" build "$build" \
@@ -114,8 +115,7 @@ if "$ODIN" check "$here/invalid.odin" -file -no-entry-point > "$build/invalid.lo
 fi
 for diagnostic in \
 	'requires a constant Swift link name' \
-	'user data must be plain copied data' \
-	'completion user data type does not match' \
+	'completion task handle must have a rawptr base type' \
 	'result must be i64, u64, or f64' \
 	'completion must be an Odin procedure' \
 	'arguments must be i64, u64, or f64' \

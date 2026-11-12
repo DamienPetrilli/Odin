@@ -120,7 +120,7 @@ gb_internal String swift_import_name(String name, bool parameter = false) {
 	String s = make_string_c(result);
 	bool reserved = s == "_" || s == "context" || s == "nil" || s == "true" || s == "false" ||
 	                s == "intrinsics" || s == "runtime" || s == "swift_library" || s == "swift" || s == "main";
-	reserved |= parameter && (s == "user_data" || s == "completion" || s == "receiver" || s == "id" || s == "ok" ||
+	reserved |= parameter && (s == "completion" || s == "receiver" || s == "task" || s == "ok" ||
 	                          s == "entry" || s == "resumed" || s == "invoke");
 	reserved |= string_starts_with(s, str_lit("_swift_"));
 	for (isize i = Token__KeywordBegin+1; i < Token__KeywordEnd; i++) {
@@ -750,77 +750,62 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		return gb_string_appendc(source, "}\n\n");
 	}
 
-	source = gb_string_append_fmt(source, "%.*s :: proc {_swift_%.*s_data, _swift_%.*s_auto}\n\n", LIT(name), LIT(name), LIT(name));
-	for (int automatic = 0; automatic < 2; automatic++) {
-		char const *id_type = automatic ? "swift.Request_Id" : "T";
-		source = gb_string_append_fmt(source, "@(private, require_results)\n_swift_%.*s_%s :: proc(%s%s", LIT(name), automatic ? "auto" : "data", params, gb_string_length(params) ? ", " : "");
-		if (!automatic) source = gb_string_appendc(source, "user_data: $T, ");
-		source = gb_string_append_fmt(source, "completion: proc(%s", id_type);
-		if (fn.result.odin) source = gb_string_append_fmt(source, ", %s", fn.result.odin);
-		if (fn.is_throwing) source = gb_string_appendc(source, ", swift.Error");
-		source = gb_string_append_fmt(source, ")) -> (id: %s, ok: bool) #optional_ok {\n", id_type);
-		if (automatic) {
-			source = gb_string_appendc(source, "\tuser_data := swift.request_id_generate()\n\tif user_data == 0 { return }\n");
-			source = gb_string_append_fmt(source, "\treturn _swift_%.*s_data(", LIT(name));
-			if (receiver) source = gb_string_appendc(source, "receiver, ");
-			for (auto const &param : fn.parameters) if (!param.empty_set) source = gb_string_append_fmt(source, "%.*s, ", LIT(param.name));
-			source = gb_string_appendc(source, "user_data, completion)\n}\n\n");
-			continue;
-		}
-		source = gb_string_appendc(source, "\t#assert(intrinsics.type_is_swift_async_data(T) && align_of(T) <= 8, \"Swift async user data must be plain copied data with alignment at most eight bytes\")\n\tif completion == nil");
-		if (receiver) source = gb_string_appendc(source, " || receiver == nil");
-		for (auto const &param : fn.parameters) if (param.type.nominal && !param.empty_set && !swift_import_kind(param.type, SwiftImportValue_String) && !swift_import_string_array(param.type)) source = gb_string_append_fmt(source, " || %.*s == nil", LIT(param.name));
-		source = gb_string_appendc(source, " { return }\n\tCapture :: struct {\n\t\tuser_data: T,\n\t\tcompletion: type_of(completion),\n");
-		if (receiver) source = gb_string_appendc(source, "\t\treceiver: rawptr,\n");
-		for_array(i, fn.parameters) if (!fn.parameters[i].empty_set) source = gb_string_append_fmt(source, "\t\targ%td: %s,\n", i, swift_import_native_type(fn.parameters[i].type));
-		if (fn.is_collection) source = gb_string_appendc(source, "\t\tcollection_metadata, collection_witness: rawptr,\n");
-		if (fn.result.odin) source = gb_string_append_fmt(source, "\t\tresult: %s,\n", owned_result ? "rawptr" : fn.result.odin);
-		if (fn.is_throwing) source = gb_string_appendc(source, "\t\terror: swift.Error,\n");
-		source = gb_string_appendc(source, "\t}\n\t_swift_capture := Capture{user_data = user_data, completion = completion}\n");
-		if (receiver) {
-			if (fn.is_mutating) source = gb_string_appendc(source, "\t_swift_capture.receiver = rawptr(receiver)\n");
-			else source = gb_string_append_fmt(source, "\t_swift_capture.receiver = swift.value_copy(rawptr(receiver), _swift_%.*s_metadata(0).type) or_return\n\tdefer if !ok { swift.value_destroy(_swift_capture.receiver, _swift_%.*s_metadata(0).type) }\n", LIT(fn.owner->name), LIT(fn.owner->name));
-		}
-		for_array(i, fn.parameters) {
-			auto const &param = fn.parameters[i];
-			if (param.empty_set) continue;
-			if (swift_import_kind(param.type, SwiftImportValue_String)) {
-				source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = swift.string_from_odin(%.*s) or_return\n\tdefer if !ok { swift.string_destroy(&_swift_capture.arg%td) }\n", i, LIT(param.name), i);
-			} else if (param.type.nominal) {
-				if (swift_import_string_array(param.type)) source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = swift.array_from_strings(%.*s, _swift_%.*s_metadata(0).type) or_return\n", i, LIT(param.name), LIT(param.type.nominal->name));
-				else source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = swift.value_copy(rawptr(%.*s), _swift_%.*s_metadata(0).type) or_return\n", i, LIT(param.name), LIT(param.type.nominal->name));
-				source = gb_string_append_fmt(source, "\tdefer if !ok { swift.value_destroy(_swift_capture.arg%td, _swift_%.*s_metadata(0).type) }\n", i, LIT(param.type.nominal->name));
-				if (fn.is_collection && swift_import_string_array(param.type)) source = gb_string_append_fmt(source, "\t_swift_capture.collection_metadata = _swift_%.*s_metadata(0).type\n\t_swift_capture.collection_witness = swift.array_collection_witness(_swift_capture.collection_metadata)\n", LIT(param.type.nominal->name));
-			} else source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = %.*s\n", i, LIT(param.name));
-		}
-		if (owned_result) source = gb_string_append_fmt(source, "\t_swift_capture.result = swift.value_allocate(_swift_%.*s_metadata(0).type) or_return\n\tdefer if !ok { swift.value_free_uninitialized(_swift_capture.result) }\n", LIT(fn.result.nominal->name));
-		source = gb_string_appendc(source, "\tentry :: proc \"swift/async\" (#swift_async frame: rawptr, #swift_self _: rawptr) {\n\t\tcapture := cast(^Capture)runtime.swift_async_payload(frame)\n\t\tchild := runtime.swift_async_prepare(frame, rawptr(resumed))\n");
-		source = gb_string_append_fmt(source, "\t\t#must_tail _swift_%.*s_native(%scast(^runtime.Swift_Async_Frame)child%s%s)\n\t}\n", LIT(name), indirect_result ? "capture.result, " : "", gb_string_length(arguments) ? ", " : "", arguments);
-		source = gb_string_appendc(source, "\tresumed :: proc \"swift/async\" (#swift_async child: ^runtime.Swift_Async_Frame");
-		if (fn.result.odin && !indirect_result) source = gb_string_append_fmt(source, ", result: %s", swift_import_native_type(fn.result));
-		if (fn.is_throwing) source = gb_string_appendc(source, ", #swift_self error: swift.Error");
-		source = gb_string_appendc(source, ") {\n");
-		if (fn.is_throwing || (fn.result.odin && !indirect_result)) {
-			source = gb_string_appendc(source, "\t\tcapture := cast(^Capture)runtime.swift_async_payload(child.parent)\n");
-			if (fn.is_throwing) source = gb_string_appendc(source, "\t\tcapture.error = error\n");
-			if (fn.result.odin && !indirect_result) source = gb_string_append_fmt(source, "\t\t%s%s = result%s\n", fn.is_throwing ? "if error == nil { " : "", owned_result ? "(cast(^rawptr)capture.result)^" : "capture.result", fn.is_throwing ? " }" : "");
-		}
-		source = gb_string_appendc(source, "\t\t#must_tail runtime.swift_async_complete(child)\n\t}\n\tinvoke :: proc(pointer: rawptr) {\n\t\tcapture := cast(^Capture)pointer\n");
-		if (receiver && !fn.is_mutating) source = gb_string_append_fmt(source, "\t\tswift.value_destroy(capture.receiver, _swift_%.*s_metadata(0).type)\n", LIT(fn.owner->name));
-		for_array(i, fn.parameters) {
-			auto const &param = fn.parameters[i];
-			if (param.empty_set) continue;
-			if (param.consumed) {
-				if (param.type.nominal && param.type.nominal->kind != SwiftImportValue_String) source = gb_string_append_fmt(source, "\t\tswift.value_free_uninitialized(capture.arg%td)\n", i);
-			} else if (swift_import_kind(param.type, SwiftImportValue_String)) source = gb_string_append_fmt(source, "\t\tswift.string_destroy(&capture.arg%td)\n", i);
-			else if (param.type.nominal) source = gb_string_append_fmt(source, "\t\tswift.value_destroy(capture.arg%td, _swift_%.*s_metadata(0).type)\n", i, LIT(param.type.nominal->name));
-		}
-		if (fn.is_throwing && owned_result) source = gb_string_appendc(source, "\t\tif capture.error != nil {\n\t\t\tswift.value_free_uninitialized(capture.result)\n\t\t\tcapture.result = nil\n\t\t}\n");
-		source = gb_string_appendc(source, "\t\tcapture.completion(capture.user_data");
-		if (fn.result.odin) source = gb_string_append_fmt(source, ", %s(capture.result)", fn.result.odin);
-		if (fn.is_throwing) source = gb_string_appendc(source, ", capture.error");
-		source = gb_string_append_fmt(source, ")\n\t}\n\tok = runtime.swift_async_start(rawptr(entry), &_swift_%.*s_descriptor, &_swift_capture, size_of(Capture), invoke, rawptr(completion))\n\tif ok { id = user_data }\n\treturn\n}\n\n", LIT(name));
+	source = gb_string_append_fmt(source, "@(require_results)\n%.*s :: proc(%s%scompletion: proc(swift.Task", LIT(name), params, gb_string_length(params) ? ", " : "");
+	if (fn.result.odin) source = gb_string_append_fmt(source, ", %s", fn.result.odin);
+	if (fn.is_throwing) source = gb_string_appendc(source, ", swift.Error");
+	source = gb_string_appendc(source, ")) -> (task: swift.Task, ok: bool) #optional_ok {\n\tif completion == nil");
+	if (receiver) source = gb_string_appendc(source, " || receiver == nil");
+	for (auto const &param : fn.parameters) if (param.type.nominal && !param.empty_set && !swift_import_kind(param.type, SwiftImportValue_String) && !swift_import_string_array(param.type)) source = gb_string_append_fmt(source, " || %.*s == nil", LIT(param.name));
+	source = gb_string_appendc(source, " { return }\n\tCapture :: struct {\n\t\tcompletion: type_of(completion),\n");
+	if (receiver) source = gb_string_appendc(source, "\t\treceiver: rawptr,\n");
+	for_array(i, fn.parameters) if (!fn.parameters[i].empty_set) source = gb_string_append_fmt(source, "\t\targ%td: %s,\n", i, swift_import_native_type(fn.parameters[i].type));
+	if (fn.is_collection) source = gb_string_appendc(source, "\t\tcollection_metadata, collection_witness: rawptr,\n");
+	if (fn.result.odin) source = gb_string_append_fmt(source, "\t\tresult: %s,\n", owned_result ? "rawptr" : fn.result.odin);
+	if (fn.is_throwing) source = gb_string_appendc(source, "\t\terror: swift.Error,\n");
+	source = gb_string_appendc(source, "\t}\n\t_swift_capture := Capture{completion = completion}\n");
+	if (receiver) {
+		if (fn.is_mutating) source = gb_string_appendc(source, "\t_swift_capture.receiver = rawptr(receiver)\n");
+		else source = gb_string_append_fmt(source, "\t_swift_capture.receiver = swift.value_copy(rawptr(receiver), _swift_%.*s_metadata(0).type) or_return\n\tdefer if !ok { swift.value_destroy(_swift_capture.receiver, _swift_%.*s_metadata(0).type) }\n", LIT(fn.owner->name), LIT(fn.owner->name));
 	}
+	for_array(i, fn.parameters) {
+		auto const &param = fn.parameters[i];
+		if (param.empty_set) continue;
+		if (swift_import_kind(param.type, SwiftImportValue_String)) {
+			source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = swift.string_from_odin(%.*s) or_return\n\tdefer if !ok { swift.string_destroy(&_swift_capture.arg%td) }\n", i, LIT(param.name), i);
+		} else if (param.type.nominal) {
+			if (swift_import_string_array(param.type)) source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = swift.array_from_strings(%.*s, _swift_%.*s_metadata(0).type) or_return\n", i, LIT(param.name), LIT(param.type.nominal->name));
+			else source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = swift.value_copy(rawptr(%.*s), _swift_%.*s_metadata(0).type) or_return\n", i, LIT(param.name), LIT(param.type.nominal->name));
+			source = gb_string_append_fmt(source, "\tdefer if !ok { swift.value_destroy(_swift_capture.arg%td, _swift_%.*s_metadata(0).type) }\n", i, LIT(param.type.nominal->name));
+			if (fn.is_collection && swift_import_string_array(param.type)) source = gb_string_append_fmt(source, "\t_swift_capture.collection_metadata = _swift_%.*s_metadata(0).type\n\t_swift_capture.collection_witness = swift.array_collection_witness(_swift_capture.collection_metadata)\n", LIT(param.type.nominal->name));
+		} else source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = %.*s\n", i, LIT(param.name));
+	}
+	if (owned_result) source = gb_string_append_fmt(source, "\t_swift_capture.result = swift.value_allocate(_swift_%.*s_metadata(0).type) or_return\n\tdefer if !ok { swift.value_free_uninitialized(_swift_capture.result) }\n", LIT(fn.result.nominal->name));
+	source = gb_string_appendc(source, "\tentry :: proc \"swift/async\" (#swift_async frame: rawptr, #swift_self _: rawptr) {\n\t\tcapture := cast(^Capture)runtime.swift_async_payload(frame)\n\t\tchild := runtime.swift_async_prepare(frame, rawptr(resumed))\n");
+	source = gb_string_append_fmt(source, "\t\t#must_tail _swift_%.*s_native(%scast(^runtime.Swift_Async_Frame)child%s%s)\n\t}\n", LIT(name), indirect_result ? "capture.result, " : "", gb_string_length(arguments) ? ", " : "", arguments);
+	source = gb_string_appendc(source, "\tresumed :: proc \"swift/async\" (#swift_async child: ^runtime.Swift_Async_Frame");
+	if (fn.result.odin && !indirect_result) source = gb_string_append_fmt(source, ", result: %s", swift_import_native_type(fn.result));
+	if (fn.is_throwing) source = gb_string_appendc(source, ", #swift_self error: swift.Error");
+	source = gb_string_appendc(source, ") {\n");
+	if (fn.is_throwing || (fn.result.odin && !indirect_result)) {
+		source = gb_string_appendc(source, "\t\tcapture := cast(^Capture)runtime.swift_async_payload(child.parent)\n");
+		if (fn.is_throwing) source = gb_string_appendc(source, "\t\tcapture.error = error\n");
+		if (fn.result.odin && !indirect_result) source = gb_string_append_fmt(source, "\t\t%s%s = result%s\n", fn.is_throwing ? "if error == nil { " : "", owned_result ? "(cast(^rawptr)capture.result)^" : "capture.result", fn.is_throwing ? " }" : "");
+	}
+	source = gb_string_appendc(source, "\t\t#must_tail runtime.swift_async_complete(child)\n\t}\n\tinvoke :: proc(pointer: rawptr) {\n\t\tcapture := cast(^Capture)pointer\n");
+	if (receiver && !fn.is_mutating) source = gb_string_append_fmt(source, "\t\tswift.value_destroy(capture.receiver, _swift_%.*s_metadata(0).type)\n", LIT(fn.owner->name));
+	for_array(i, fn.parameters) {
+		auto const &param = fn.parameters[i];
+		if (param.empty_set) continue;
+		if (param.consumed) {
+			if (param.type.nominal && param.type.nominal->kind != SwiftImportValue_String) source = gb_string_append_fmt(source, "\t\tswift.value_free_uninitialized(capture.arg%td)\n", i);
+		} else if (swift_import_kind(param.type, SwiftImportValue_String)) source = gb_string_append_fmt(source, "\t\tswift.string_destroy(&capture.arg%td)\n", i);
+		else if (param.type.nominal) source = gb_string_append_fmt(source, "\t\tswift.value_destroy(capture.arg%td, _swift_%.*s_metadata(0).type)\n", i, LIT(param.type.nominal->name));
+	}
+	if (fn.is_throwing && owned_result) source = gb_string_appendc(source, "\t\tif capture.error != nil {\n\t\t\tswift.value_free_uninitialized(capture.result)\n\t\t\tcapture.result = nil\n\t\t}\n");
+	source = gb_string_appendc(source, "\t\tcapture.completion(swift.Task(runtime.swift_async_current())");
+	if (fn.result.odin) source = gb_string_append_fmt(source, ", %s(capture.result)", fn.result.odin);
+	if (fn.is_throwing) source = gb_string_appendc(source, ", capture.error");
+	source = gb_string_append_fmt(source, ")\n\t}\n\ttask = swift.Task(runtime.swift_async_start(rawptr(entry), &_swift_%.*s_descriptor, &_swift_capture, size_of(Capture), invoke, rawptr(completion)))\n\tok = task != nil\n\treturn\n}\n\n", LIT(name));
 	return source;
 }
 
@@ -1217,20 +1202,12 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			source = gb_string_appendc(source, " ---\n}\n\n");
 			continue;
 		}
-		source = gb_string_append_fmt(source, "%.*s :: proc {_swift_%.*s_data, _swift_%.*s_auto}\n\n", LIT(fn.odin_name), LIT(fn.odin_name), LIT(fn.odin_name));
-		for (int automatic = 0; automatic < 2; automatic++) {
-			char const *id_type = automatic ? "swift.Request_Id" : "T";
-			source = gb_string_append_fmt(source, "@(private, require_results)\n_swift_%.*s_%s :: proc(%s%s", LIT(fn.odin_name), automatic ? "auto" : "data", params, gb_string_length(params) ? ", " : "");
-			if (!automatic) source = gb_string_appendc(source, "user_data: $T, ");
-			source = gb_string_append_fmt(source, "completion: proc(user_data: %s", id_type);
-			if (fn.result.odin) source = gb_string_append_fmt(source, ", result: %s", fn.result.odin);
-			source = gb_string_append_fmt(source, ")) -> (id: %s, ok: bool) #optional_ok {\n\tif completion == nil", id_type);
-			source = gb_string_appendc(source, " {\n\t\treturn\n\t}\n");
-			if (automatic) source = gb_string_appendc(source, "\tuser_data := swift.request_id_generate()\n\tif user_data == 0 {\n\t\treturn\n\t}\n");
-			source = gb_string_append_fmt(source, "\tok = intrinsics.%s(\"%.*s\", user_data, completion", "swift_async_call", LIT(fn.symbol));
-			for (auto const &param : fn.parameters) source = gb_string_append_fmt(source, ", %.*s", LIT(param.name));
-			source = gb_string_appendc(source, ")\n\tif ok {\n\t\tid = user_data\n\t}\n\treturn\n}\n\n");
-		}
+		source = gb_string_append_fmt(source, "@(require_results)\n%.*s :: proc(%s%scompletion: proc(swift.Task", LIT(fn.odin_name), params, gb_string_length(params) ? ", " : "");
+		if (fn.result.odin) source = gb_string_append_fmt(source, ", %s", fn.result.odin);
+		source = gb_string_appendc(source, ")) -> (task: swift.Task, ok: bool) #optional_ok {\n");
+		source = gb_string_append_fmt(source, "\ttask = swift.Task(intrinsics.swift_async_call(\"%.*s\", completion", LIT(fn.symbol));
+		for (auto const &param : fn.parameters) source = gb_string_append_fmt(source, ", %.*s", LIT(param.name));
+		source = gb_string_appendc(source, "))\n\treturn task, task != nil\n}\n\n");
 	}
 	for (auto const &fn : functions) {
 		if (fn.base_name == fn.odin_name) continue;

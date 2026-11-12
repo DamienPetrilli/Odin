@@ -183,3 +183,5 @@ public func asyncProbe(_ value: UnsafeMutablePointer<UInt64>, _ delta: UInt64) -
 public func snapshotValue(_ snapshot: borrowing AsyncSnapshot) -> UInt64 {
 	return snapshot.value + snapshot.delta
 }
+
+public func invertFlag(_ value: Bool) -> Bool { !value }

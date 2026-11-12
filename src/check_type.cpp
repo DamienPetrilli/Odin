@@ -4130,7 +4130,7 @@ gb_internal bool is_swift_abi_scalar(Type *type) {
 
 gb_internal bool is_type_supported_by_swift_abi(Type *type) {
 	type = base_type(type);
-	if (is_swift_abi_scalar(type)) {
+	if (type == t_bool || is_swift_abi_scalar(type)) {
 		return true;
 	}
 	if (type == nullptr) {

@@ -1,27 +1,3 @@
-// Only plain copied data is accepted. Pointer targets remain borrowed; dynamic
-// containers and other descriptors are deliberately not treated as owned data.
-gb_internal bool swift_async_user_data_type(Type *type) {
-	Type *t = base_type(type);
-	if (!t) return false;
-	switch (t->kind) {
-	case Type_Basic:
-		return is_type_integer(t) || is_type_float(t) || is_type_boolean(t) || t == t_rawptr;
-	case Type_Pointer:
-	case Type_MultiPointer:
-	case Type_Enum:
-		return true;
-	case Type_Array:
-		return swift_async_user_data_type(t->Array.elem);
-	case Type_Struct:
-		if (t->Struct.soa_kind != StructSoa_None || t->Struct.is_polymorphic) return false;
-		for (Entity *field : t->Struct.fields) {
-			if (!swift_async_user_data_type(field->type)) return false;
-		}
-		return true;
-	}
-	return false;
-}
-
 typedef bool (BuiltinTypeIsProc)(Type *t);
 
 gb_internal int enum_constant_entity_cmp(void const* a, void const* b) {
@@ -90,7 +66,6 @@ gb_global BuiltinTypeIsProc *builtin_type_is_procs[BuiltinProc__type_simple_bool
 	is_type_polymorphic_record_unspecialized,
 
 	type_has_nil,
-	swift_async_user_data_type,
 };
 
 
@@ -6024,41 +5999,36 @@ gb_internal bool check_builtin_procedure(CheckerContext *c, Operand *operand, As
 			error(ce->args[0], "'swift_async_call' requires a constant Swift link name");
 			return false;
 		}
-		Operand data = {}, callback = {};
-		check_expr(c, &data, ce->args[1]);
-		check_expr(c, &callback, ce->args[2]);
-		if (!swift_async_user_data_type(data.type) || type_align_of(data.type) > 8) {
-			error(ce->args[1], "Swift async user data must be plain copied data with alignment at most eight bytes");
-			return false;
-		}
+		Operand callback = {};
+		check_expr(c, &callback, ce->args[1]);
 		Type *ct = base_type(callback.type);
 		if (ct == nullptr || ct->kind != Type_Proc || ct->Proc.calling_convention != ProcCC_Odin ||
 		    ct->Proc.is_polymorphic || ct->Proc.variadic || ct->Proc.result_count != 0 ||
 		    ct->Proc.param_count < 1 || ct->Proc.param_count > 2) {
-			error(ce->args[2], "Swift async completion must be an Odin procedure taking user data and an optional scalar result");
+			error(ce->args[1], "Swift async completion must be an Odin procedure taking a task handle and an optional scalar result");
 			return false;
 		}
-		if (!are_types_identical(ct->Proc.params->Tuple.variables[0]->type, data.type)) {
-			error(ce->args[2], "Swift async completion user data type does not match");
+		if (base_type(ct->Proc.params->Tuple.variables[0]->type) != t_rawptr) {
+			error(ce->args[1], "Swift async completion task handle must have a rawptr base type");
 			return false;
 		}
 		if (ct->Proc.param_count == 2) {
 			Type *rt = base_type(ct->Proc.params->Tuple.variables[1]->type);
 			if (rt != t_i64 && rt != t_u64 && rt != t_f64) {
-				error(ce->args[2], "Swift async result must be i64, u64, or f64");
+				error(ce->args[1], "Swift async result must be i64, u64, or f64");
 				return false;
 			}
 		}
 		bool has_self = id == BuiltinProc_swift_async_method_call;
 		if (has_self) {
 			Operand receiver = {};
-			check_expr(c, &receiver, ce->args[3]);
+			check_expr(c, &receiver, ce->args[2]);
 			if (!is_type_pointer(receiver.type)) {
-				error(ce->args[3], "Swift async receiver must be a pointer to a live Swift value");
+				error(ce->args[2], "Swift async receiver must be a pointer to a live Swift value");
 				return false;
 			}
 		}
-		for (isize i = has_self ? 4 : 3; i < ce->args.count; i++) {
+		for (isize i = has_self ? 3 : 2; i < ce->args.count; i++) {
 			Operand arg = {};
 			check_expr(c, &arg, ce->args[i]);
 			Type *at = base_type(arg.type);
@@ -6071,8 +6041,9 @@ gb_internal bool check_builtin_procedure(CheckerContext *c, Operand *operand, As
 		add_package_dependency(c, "runtime", "swift_async_payload");
 		add_package_dependency(c, "runtime", "swift_async_prepare");
 		add_package_dependency(c, "runtime", "swift_async_complete");
+		add_package_dependency(c, "runtime", "swift_async_current");
 		operand->mode = Addressing_Value;
-		operand->type = t_bool;
+		operand->type = t_rawptr;
 		operand->value = {};
 		break;
 	}
@@ -7719,7 +7690,6 @@ gb_internal bool check_builtin_procedure(CheckerContext *c, Operand *operand, As
 	case BuiltinProc_type_is_specialized_polymorphic_record:
 	case BuiltinProc_type_is_unspecialized_polymorphic_record:
 	case BuiltinProc_type_has_nil:
-	case BuiltinProc_type_is_swift_async_data:
 		GB_ASSERT(BuiltinProc__type_simple_boolean_begin < id && id < BuiltinProc__type_simple_boolean_end);
 
 		operand->value = exact_value_bool(false);

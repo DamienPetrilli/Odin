@@ -13,13 +13,14 @@ actor_calls: int
 
 COLLECTION_TEXT :: "A longer UTF-8 string: 日本語, café, and 🦉\x00tail"
 
-string_counted :: proc(expected, count: u64) {
-	assert(count == expected && pthread_main_np() == 1)
+string_counted :: proc(task: swift.Task, count: u64) {
+	assert(count == take_expected(task) && pthread_main_np() == 1)
 	string_calls += 1
 }
 
-string_received :: proc(id: swift.Request_Id) {
-	assert(id != 0 && pthread_main_np() == 1)
+string_received :: proc(task: swift.Task) {
+	_ = take_expected(task)
+	assert(task != nil && pthread_main_np() == 1)
 	string_calls += 1
 }
 
@@ -52,20 +53,22 @@ check_strings :: proc() {
 		// The caller may overwrite and free its UTF-8 immediately after start.
 		// The Swift task must own independent text through suspension.
 		input := strings.clone(sample)
-		id, ok := fixture.utf8_count_later(input, u64(len(sample)), string_counted)
-		assert(ok && id == u64(len(sample)))
+		task, ok := fixture.utf8_count_later(input, string_counted)
+		assert(ok)
+		track_task(task, u64(len(sample)))
 		if len(input) != 0 { mem.set(raw_data(input), 0xff, len(input)) }
 		delete(input)
 	}
 	assert(fixture.receive_text("hello"))
-	_, started := fixture.receive_text_later("hello", string_received)
+	task, started := fixture.receive_text_later("hello", string_received)
 	assert(started)
+	track_task(task)
 	for invalid in ([]string{"\xff", "\xc0\x80", "\xed\xa0\x80", "\xf0\x9f"}) {
 		text, ok := fixture.decorate(invalid)
 		assert(!ok && len(text) == 0)
 		assert(!fixture.receive_text(invalid))
-		bad_id, bad_started := fixture.utf8_count_later(invalid, u64(99), string_counted)
-		assert(!bad_started && bad_id == 0)
+		bad_task, bad_started := fixture.utf8_count_later(invalid, string_counted)
+		assert(!bad_started && bad_task == nil)
 	}
 	state.remaining = 0
 	text, ok := fixture.decorate("allocation failure")
@@ -80,7 +83,8 @@ check_strings :: proc() {
 	check_collections()
 }
 
-texts_received :: proc(expected: u64, values: fixture.Array_TextValue, error: swift.Error) {
+texts_received :: proc(task: swift.Task, values: fixture.Array_TextValue, error: swift.Error) {
+	expected := take_expected(task)
 	defer swift.error_release(error)
 	if expected == 0 {
 		assert(values == nil && error != nil)
@@ -96,8 +100,9 @@ texts_received :: proc(expected: u64, values: fixture.Array_TextValue, error: sw
 	collection_calls += 1
 }
 
-echo_received :: proc(id: swift.Request_Id, values: fixture.Array_String) {
-	assert(id != 0 && fixture.Array_String_count(values) == 1)
+echo_received :: proc(task: swift.Task, values: fixture.Array_String) {
+	_ = take_expected(task)
+	assert(task != nil && fixture.Array_String_count(values) == 1)
 	text := fixture.Array_String_get(values, 0) or_else panic("String array element")
 	fixture.Array_String_destroy(values)
 	assert(text == COLLECTION_TEXT)
@@ -105,8 +110,9 @@ echo_received :: proc(id: swift.Request_Id, values: fixture.Array_String) {
 	collection_calls += 1
 }
 
-accepted_text :: proc(expected: u64, outcome: fixture.ValueOutcome, error: swift.Error) {
+accepted_text :: proc(task: swift.Task, outcome: fixture.ValueOutcome, error: swift.Error) {
 	assert(pthread_main_np() == 1)
+	expected := take_expected(task)
 	defer swift.error_release(error)
 	if expected == 0 {
 		assert(outcome == nil && error != nil)
@@ -120,8 +126,9 @@ accepted_text :: proc(expected: u64, outcome: fixture.ValueOutcome, error: swift
 	actor_calls += 1
 }
 
-isolated_finished :: proc(id: swift.Request_Id, result: u64) {
-	assert(id != 0 && result == 1 && pthread_main_np() == 1)
+isolated_finished :: proc(task: swift.Task, result: u64) {
+	_ = take_expected(task)
+	assert(task != nil && result == 1 && pthread_main_np() == 1)
 	actor_calls += 1
 }
 
@@ -151,23 +158,28 @@ check_collections :: proc() {
 	assert(!valid && invalid == nil && state.allocations == state.frees)
 	input := strings.clone(COLLECTION_TEXT)
 	names := []string{input}
-	_, ok := fixture.TextValue_lookup(names, u64(1), texts_received)
+	task, ok := fixture.TextValue_lookup(names, texts_received)
 	assert(ok)
-	_, ok = fixture.echo_texts_later(names, echo_received)
+	track_task(task, 1)
+	task, ok = fixture.echo_texts_later(names, echo_received)
 	assert(ok)
+	track_task(task)
 	mem.set(raw_data(input), 0xff, len(input))
 	delete(input)
 	names[0] = "overwritten"
-	_, ok = fixture.TextValue_lookup(nil, u64(0), texts_received)
+	task, ok = fixture.TextValue_lookup(nil, texts_received)
 	assert(ok)
+	track_task(task)
 	for text in ([]string{"", COLLECTION_TEXT}) {
 		value := fixture.TextValue_init(text) or_else panic("Text initialization")
-		_, ok = fixture.TextValue_accept(value, u64(len(text)), accepted_text)
+		task, ok = fixture.TextValue_accept(value, accepted_text)
 		assert(ok)
+		track_task(task, u64(len(text)))
 		fixture.TextValue_destroy(value)
 	}
-	_, ok = fixture.isolated(isolated_finished)
+	task, ok = fixture.isolated(isolated_finished)
 	assert(ok)
+	track_task(task)
 	begin := time.tick_now()
 	for collection_calls != 3 || actor_calls != 3 {
 		cf.RunLoopRunInMode(cf.kRunLoopDefaultMode, 0.01, false)

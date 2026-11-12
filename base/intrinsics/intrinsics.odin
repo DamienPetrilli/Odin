@@ -46,15 +46,12 @@ return_address :: proc(#const level: u32 = 0) -> rawptr ---
 frame_address  :: proc(#const level: u32 = 0) -> rawptr ---
 swift_async_context_addr :: proc() -> ^rawptr ---
 
-// Used by generated Swift bindings. Arguments are copied into task storage.
-// User data is copied; pointees and values referenced by context are borrowed
-// through completion. No automatic retain or deep copy is performed.
-swift_async_call :: proc($symbol: string, user_data: $T, completion: $P, ..any) -> bool ---
-swift_async_method_call :: proc($symbol: string, user_data: $T, completion: $P, receiver: $R, ..any) -> bool ---
+// Used by generated Swift bindings. Returns an owned native task reference,
+// or nil if the start was rejected. Completion borrows that same handle.
+// Arguments are copied; values referenced by context remain borrowed.
+swift_async_call :: proc($symbol: string, completion: $P, ..any) -> rawptr ---
+swift_async_method_call :: proc($symbol: string, completion: $P, receiver: $R, ..any) -> rawptr ---
 
-// Compiler-generated Swift imports use the same copied-data rule as the
-// native async intrinsics. This does not retain pointer targets.
-type_is_swift_async_data :: proc($T: typeid) -> bool ---
 // The current value of the stack pointer
 stack_pointer  :: proc() -> rawptr ---
 // The address of the slot holding the current procedure's return address. amd64, i386, and arm64 targets only.

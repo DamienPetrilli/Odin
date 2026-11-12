@@ -35,45 +35,34 @@ Swift names become snake case, so `addLater` becomes `add_later`:
 
 ```odin
 value := example.add(17, 9)
-id, ok := example.add_later(17, 9, finished)
+task, ok := example.add_later(17, 9, finished)
+if ok {
+	// Store task, or release it now if no further control is needed.
+	swift.task_release(task)
+}
 
-finished :: proc(id: swift.Request_Id, result: u64) {
-	// Use id to correlate this completion with the accepted start.
+finished :: proc(task: swift.Task, result: u64) {
+	// task is borrowed here; it identifies the same native operation.
 }
 ```
 
-Import `swift "core:sys/darwin/Swift"` for `Request_Id`. Omitting user data
-requests a generated nonzero ID. Supplying data copies and returns that value
-instead, without generating an extra ID:
-
-```odin
-Book_Id :: distinct u64
-
-id, ok := example.add_later(17, 9, Book_Id(73), book_finished)
-
-book_finished :: proc(id: Book_Id, result: u64) {
-	// id is 73.
-}
-```
-
-Both forms return `(id, ok) #optional_ok`. The second result may be omitted;
-that does not assert success. A procedure returning a suitable boolean result
-can propagate a rejected start using the existing `or_return` operator:
+Import `swift "core:sys/darwin/Swift"` for `Task` and its lifetime operations.
+Starts return `(task, ok) #optional_ok`. The existing `or_return` operator works:
 
 ```odin
 start :: proc() -> bool {
-	id := example.add_later(17, 9, finished) or_return
-	// Record id before returning to the main run loop.
+	task := example.add_later(17, 9, finished) or_return
+	defer swift.task_release(task)
+	// This example deliberately requests cancellation before returning.
+	swift.task_cancel(task)
 	return true
 }
 ```
 
-`ok` reports whether the start was accepted, not whether a later operation
-succeeded. On failure the ID is zero-initialized and no callback runs. Zero is
-valid as supplied data, so check `ok` when that distinction matters. Generated
-IDs do not wrap or repeat within a linked copy of the support package; exhaustion
-rejects the start. They are correlation values, not retained task handles, and
-do not provide cancellation or access to completed task storage.
+`ok` reports whether the start was accepted, not whether the operation later
+succeeded. A rejected start returns nil, false and no callback runs. Omitting
+`ok` does not assert success. There is no generated ID or custom callback payload.
+Use the native task handle to identify application-owned records.
 
 Build normally with `odin build app -minimum-os-version:15.0`. For iOS, use
 `-target:darwin_arm64`, `-subtarget:iphone` or `-subtarget:iphonesimulator`, and
@@ -137,19 +126,35 @@ Cached builds are rejected until external module dependencies are tracked.
 
 ## Memory and callbacks
 
-Native scalar arguments and supplied user data are copied into Swift-owned task
-storage before the start returns. User data can be scalars, distinct IDs, enums,
-pointers, fixed arrays, or records of those, aligned to at most eight bytes.
-Dynamic containers and strings are not accepted as user data; this restriction
-does not apply to imported Swift function parameters. Copying a pointer does not
-retain its pointee or extend its lifetime. The same applies to pointers nested
-inside a copied record.
+Native scalar arguments are copied into Swift-owned task storage before start
+returns. Nontrivial imported inputs follow the copy/borrow rules below. Each
+successful start returns one owned native task reference. Copying `Task` copies
+its address without retaining; `swift.task_retain` acquires another reference,
+and `swift.task_release` drops one. No extra object or ID table is allocated by
+the bridge. Addresses can be reused after final release.
 
-Completions run once on the main executor with a copy of the caller's Odin
-context. Referenced allocators and other context data remain borrowed and must
-survive completion. Swift owns and frees the task and its async frames. Nothing
-needs releasing for a generated ID. A GUI application's main run loop delivers
-callbacks; a command-line program must keep that loop running while work remains.
+Completion borrows the same task handle. It may retain that handle beyond the
+callback, but must not release the borrowed reference itself. Releasing a reference
+owned by application storage during completion is valid. Execution independently
+keeps the task alive, even when the caller releases its reference before completion.
+A retained completed task does not keep the bridge's copied inputs alive.
+
+`swift.task_cancel` requests cooperative cancellation. It may synchronously run
+Swift cancellation handlers; release locks those handlers might acquire before
+calling it. `swift.task_is_cancelled` reports the request, not completion. An
+operation may ignore cancellation and succeed. Cancellation and release neither
+wait nor suppress completion; completion runs once if the operation returns.
+Each concurrent user must have a live reference throughout its accesses.
+
+Completions run on the main executor with a copy of the caller's Odin context.
+Referenced allocators and context data stay borrowed and must survive completion.
+Mutating receivers likewise remain exclusively borrowed through completion.
+Cancellation does not permit early teardown of any of these resources. Swift
+owns the task and its async frames. A GUI application's main run loop delivers
+callbacks; a command-line program must keep that loop running. Starts from the
+main thread can register their returned handles before returning to the run loop.
+From other threads completion can race with start returning; synchronize shared
+application storage accordingly. Cancellation is not a synchronization barrier.
 
 The storage around an owned resilient value remembers the Odin allocator that
 created it, even when destruction uses a different context. Its contents retain
@@ -195,8 +200,8 @@ equality compares bytes; Swift's character count and canonically equivalent
 Unicode equality are different operations. A plain Odin string does not gain
 Swift's character semantics.
 
-See `run.sh`, `main.odin`, `values.odin` and `strings.odin` for executable round
-trips, overlapping tasks, generated/custom IDs, preserved context, guarded
+See `run.sh`, `main.odin`, `values.odin` `strings.odin` and `tasks.odin` for executable round
+trips, overlapping tasks, native handle identity, preserved context, guarded
 allocations, ownership, failure paths and rejection diagnostics.
 
 The separate `../strings/run.sh` fixture checks Foundation-free linkage,

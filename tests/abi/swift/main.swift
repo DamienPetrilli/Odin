@@ -149,3 +149,8 @@ transactions.withUnsafeMutableBufferPointer { buffer in
 	precondition(updateTransactionInPlaceInOdin(middle, 3, 0.5) == middle)
 }
 precondition(transactions == [beforeTransaction, updated, afterTransaction])
+
+@_silgen_name("odin_swift_abi_invert_flag")
+func invertFlagRoundTrip(_ value: Bool) -> Bool
+precondition(invertFlagRoundTrip(false))
+precondition(!invertFlagRoundTrip(true))
