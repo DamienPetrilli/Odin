@@ -59,6 +59,7 @@ cp "$here/async.odin" "$build/async.odin"
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do \
 	"${odin_target[@]}" "${odin_opt[@]}" -out:"$build/async.o"
 "${swiftc[@]}" -framework CoreFoundation "$build/Fixture.o" "$build/async.o" -o "$build/async"
+ODIN="$ODIN" bash "$here/strings/run.sh" "$sdk" "${2:-debug}"
 ODIN="$ODIN" bash "$here/import/run.sh" "$sdk" "${2:-debug}"
 if [[ "$sdk" != macosx ]]; then
 	echo "Swift ABI fixture linked for $sdk"
@@ -94,6 +95,11 @@ check_invalid darwin_arm64 \
 	'Packed_Arg ::' \
 	'Empty_Arg ::' \
 	'Narrow_Arg ::' \
+	'Leading_Byte ::' \
+	'Multiple_Bytes ::' \
+	'Byte_Only ::' \
+	'Indirect_Tag ::' \
+	'Indirect_Tag_Result ::' \
 	'Odin_Callback ::' \
 	'C_Callback ::' \
 	'C_Callback_Result ::' \

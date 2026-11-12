@@ -177,14 +177,18 @@ The bridge copies valid UTF-8 into an owned Swift string. It delivers a returned
 Swift string as an Odin-owned UTF-8 copy using `context.allocator`; free that
 copy with the same allocator. An async call copies its input before returning,
 so the original Odin bytes may then be modified or freed. Conversion preserves
-embedded zero bytes and rejects invalid UTF-8 without calling Swift. Conversion
-or Odin allocation failure returns `ok = false`.
+embedded zero bytes and rejects invalid UTF-8 before calling the imported
+function. Conversion or Odin allocation failure returns `ok = false`.
 
-This Darwin implementation uses Foundation's String/NSString conversion and
-Odin's scoped autorelease pool internally. Temporary Objective-C ownership does
-not escape into application code. It is a copying conversion, not a shared
-string representation. Swift allocation failures are governed by Swift's
-runtime; the boolean result does not make all foreign allocations recoverable.
+Conversion uses Swift standard-library ABI entry points to validate and construct
+an owned String, count its UTF-8 bytes and copy them into Odin storage. Swift
+validates input directly; there is no separate Odin validation pass. Destruction
+uses Swift's native string release operation without a type-metadata lookup. It does not use
+Foundation, NSString or an autorelease pool. The native string representation is
+passed through without decoding its small-string flags or object storage. Swift
+allocation failures are governed by Swift's runtime; the boolean result does not
+make all foreign allocations recoverable. This does not extend the current
+Darwin arm64 target support to other platforms.
 
 Text retains its UTF-8 contents. Odin `len(string)` counts bytes and Odin string
 equality compares bytes; Swift's character count and canonically equivalent
@@ -194,3 +198,8 @@ Swift's character semantics.
 See `run.sh`, `main.odin`, `values.odin` and `strings.odin` for executable round
 trips, overlapping tasks, generated/custom IDs, preserved context, guarded
 allocations, ownership, failure paths and rejection diagnostics.
+
+The separate `../strings/run.sh` fixture checks Foundation-free linkage,
+standard-library strings in both directions, independent storage after owner
+release, invalid UTF-8 and failed allocation. It also checks the trailing-byte
+aggregate ABI used by Swift's UTF-8 copy result.

@@ -4151,10 +4151,14 @@ gb_internal bool is_type_supported_by_swift_abi(Type *type) {
 		return false;
 	}
 
-	// Full-width scalars have the same offsets in Swift and Odin without
-	// merging narrow integer fields or accounting for nested tail padding.
-	for (Entity *field : s.fields) {
-		if (!is_swift_abi_scalar(field->type)) {
+	// Full-width scalars have the same offsets in Swift and Odin. An isolated
+	// trailing byte also has its own component (for example, Optional<Int>).
+	// Indirect values must have equal size and stride in both languages.
+	// Other narrow fields require merging; nested records can reuse tail padding.
+	for_array(i, s.fields) {
+		Type *field_type = s.fields[i]->type;
+		bool trailing_byte = i > 0 && i+1 == s.fields.count && s.fields.count <= 4 && base_type(field_type) == t_u8;
+		if (!is_swift_abi_scalar(field_type) && !trailing_byte) {
 			return false;
 		}
 	}

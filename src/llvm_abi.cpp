@@ -2724,25 +2724,31 @@ gb_internal lbArgType lb_swift_abi_value(LLVMContextRef c, LLVMTypeRef type, boo
 		return lb_arg_type_direct(type);
 	}
 
-	// The checker only accepts records with full-width scalar fields.
+	// The checker accepts full-width fields and an optional trailing byte.
 	// On Apple arm64, Swift passes at most four such components directly.
 	LLVMTypeRef fields[4];
 	unsigned count = LLVMCountStructElementTypes(type);
 	GB_ASSERT(count > 0);
+	// Odin represents trailing padding explicitly; it is not an ABI component.
+	if (lb_is_type_kind(LLVMStructGetTypeAtIndex(type, count-1), LLVMArrayTypeKind)) {
+		count -= 1;
+	}
 	if (count > gb_count_of(fields)) {
 		LLVMAttributeRef attr = is_result ? lb_create_enum_attribute_with_type(c, "sret", type) : nullptr;
 		return lb_arg_type_indirect(type, attr);
 	}
 
-	LLVMGetStructElementTypes(type, fields);
+	for (unsigned i = 0; i < count; i++) {
+		fields[i] = LLVMStructGetTypeAtIndex(type, i);
+	}
 	if (count == 1) {
 		return lb_arg_type_direct(type, fields[0], nullptr, nullptr);
 	}
+	LLVMTypeRef abi_type = LLVMStructTypeInContext(c, fields, count, false);
 	if (is_result) {
-		LLVMTypeRef result_type = LLVMStructTypeInContext(c, fields, count, false);
-		return lb_arg_type_direct(type, result_type, nullptr, nullptr);
+		return lb_arg_type_direct(type, abi_type, nullptr, nullptr);
 	}
-	lbArgType arg = lb_arg_type_direct(type);
+	lbArgType arg = lb_arg_type_direct(abi_type);
 	arg.kind = lbArg_Expand;
 	return arg;
 }
