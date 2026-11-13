@@ -86,6 +86,17 @@ iterator_received :: proc(task: swift.Task, result: fixture.Optional_Validation_
 }
 
 check_enums :: proc() {
+	named := fixture.named_payload() or_else panic("Named generic payload")
+	assert(fixture.NamedPayload_Value_case(named) == .Named)
+	payload := fixture.NamedPayload_Value_get_named(named) or_else panic("Named payload")
+	fixture.NamedPayload_Value_destroy(named)
+	assert(fixture.GenericTypeParam_first(payload) == 11 && fixture.GenericTypeParam_last(payload) == 55)
+	fixture.GenericTypeParam_destroy(payload)
+	void_value := fixture.named_void() or_else panic("Nominal Void result")
+	assert(fixture.Void_value(void_value) == 73)
+	fixture.Void_destroy(void_value)
+	fixture.actual_void()
+
 	for selection in 0..<3 {
 		result := fixture.value_outcome(u64(selection)) or_else panic("Enum result")
 		if selection == 1 {

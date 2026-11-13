@@ -43,7 +43,7 @@ build=$(mktemp -d "${TMPDIR:-/tmp}/odin-swift-abi.XXXXXXXX")
 trap 'rm -rf -- "$build"' EXIT
 
 swiftc=(xcrun --sdk "$sdk" swiftc -target "$triple" -swift-version 6 -warnings-as-errors
-	-module-cache-path "$build/cache" "${swift_opt[@]}")
+	-module-cache-path "${TMPDIR:-/tmp}/odin-swift-module-cache" "${swift_opt[@]}")
 "${swiftc[@]}" -parse-as-library -enable-library-evolution -module-name SwiftABIFixture \
 	-emit-object -o "$build/Fixture.o" -emit-module-path "$build/SwiftABIFixture.swiftmodule" "$here/Fixture.swift"
 
@@ -61,6 +61,7 @@ cp "$here/async.odin" "$build/async.odin"
 "${swiftc[@]}" -framework CoreFoundation "$build/Fixture.o" "$build/async.o" -o "$build/async"
 ODIN="$ODIN" bash "$here/strings/run.sh" "$sdk" "${2:-debug}"
 ODIN="$ODIN" bash "$here/import/run.sh" "$sdk" "${2:-debug}"
+ODIN="$ODIN" bash "$here/export/run.sh" "$sdk" "${2:-debug}"
 if [[ "$sdk" != macosx ]]; then
 	echo "Swift ABI fixture linked for $sdk"
 	exit 0
@@ -68,6 +69,9 @@ fi
 
 "$build/abi"
 "$build/async"
+if [[ "${2:-debug}" == debug ]]; then
+	ODIN="$ODIN" bash "$here/import/cache.sh"
+fi
 
 check_invalid() {
 	local target=$1

@@ -565,6 +565,8 @@ struct BuildContext {
 	BuildModeKind build_mode;
 	bool   keep_executable;
 	bool   generate_docs;
+	bool   swift_export;
+	String swift_module_name;
 	bool   custom_optimization_level;
 	i32    optimization_level;
 	bool   show_timings;

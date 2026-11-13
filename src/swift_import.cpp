@@ -108,6 +108,24 @@ gb_internal isize swift_import_index(String text, String part) {
 	return -1;
 }
 
+// These names are used unqualified by the generated Odin declarations.
+// A foreign declaration must not change their meaning or calling convention.
+gb_internal bool swift_import_reserved_name(String name) {
+	char const *reserved[] = {
+		"_", "context", "nil", "true", "false", "intrinsics", "runtime", "swift_library", "swift", "main",
+		"bool", "int", "rawptr", "string", "u32", "u64", "i64", "f64",
+	};
+	for (auto value : reserved) if (name == make_string_c(value)) return true;
+	if (string_starts_with(name, str_lit("_swift_"))) return true;
+	for (isize i = Token__KeywordBegin+1; i < Token__KeywordEnd; i++) {
+		if (name == token_strings[i]) return true;
+	}
+	for (auto const &proc : builtin_procs) {
+		if (proc.pkg == BuiltinProcPkg_builtin && name == proc.name) return true;
+	}
+	return false;
+}
+
 gb_internal String swift_import_name(String name, bool parameter = false) {
 	gbString result = gb_string_make(permanent_allocator(), "");
 	for (isize i = 0; i < name.len; i++) {
@@ -118,14 +136,9 @@ gb_internal String swift_import_name(String name, bool parameter = false) {
 		result = gb_string_append_length(result, &c, 1);
 	}
 	String s = make_string_c(result);
-	bool reserved = s == "_" || s == "context" || s == "nil" || s == "true" || s == "false" ||
-	                s == "intrinsics" || s == "runtime" || s == "swift_library" || s == "swift" || s == "main";
+	bool reserved = swift_import_reserved_name(s);
 	reserved |= parameter && (s == "completion" || s == "receiver" || s == "task" || s == "ok" ||
 	                          s == "entry" || s == "resumed" || s == "invoke");
-	reserved |= string_starts_with(s, str_lit("_swift_"));
-	for (isize i = Token__KeywordBegin+1; i < Token__KeywordEnd; i++) {
-		reserved |= s == token_strings[i];
-	}
 	if (reserved) result = gb_string_appendc(result, "_");
 	return make_string_c(result);
 }
@@ -139,21 +152,27 @@ gb_internal String swift_import_read(String path) {
 	return make_string(cast(u8 *)contents.data, contents.size);
 }
 
-gb_internal bool swift_import_write(Ast *node, String path, gbString text) {
+gb_internal bool swift_import_write(Ast *node, String path, gbString text, bool exporting = false) {
+	char const *label = exporting ? "Swift export" : "Swift import";
 	gbFile file = {};
 	if (gb_file_create(&file, alloc_cstring(permanent_allocator(), path)) != gbFileError_None) {
-		syntax_error(node, "Swift import: could not create '%.*s'", LIT(path));
+		syntax_error(node, "%s: could not create '%.*s'", label, LIT(path));
 		return false;
 	}
 	bool ok = gb_file_write(&file, text, gb_string_length(text));
 	gb_file_close(&file);
-	if (!ok) syntax_error(node, "Swift import: could not write '%.*s'", LIT(path));
+	if (!ok) syntax_error(node, "%s: could not write '%.*s'", label, LIT(path));
 	return ok;
 }
 
 // Use an argument vector, not a shell command. SDK/module/library paths may
 // contain spaces or shell metacharacters. Parsing workers may run concurrently.
-gb_internal bool swift_import_exec(Ast *node, String directory, Array<String> const &args, String *output) {
+gb_internal bool swift_import_exec(Ast *node, String directory, Array<String> const &args, String *output, bool exporting = false) {
+	char const *label = exporting ? "Swift export" : "Swift import";
+	u64 started = time_stamp_time_now();
+	defer (if (build_context.show_more_timings) {
+		gb_printf_err("%s %.*s: %.3f s\n", exporting ? "Swift export" : "Swift inspection", LIT(args[0]), cast(f64)(time_stamp_time_now()-started)/time_stamp__freq());
+	});
 	auto argv = array_make<char *>(permanent_allocator());
 	array_add(&argv, cast(char *)"/usr/bin/xcrun");
 	for (String arg : args) array_add(&argv, alloc_cstring(permanent_allocator(), arg));
@@ -163,7 +182,7 @@ gb_internal bool swift_import_exec(Ast *node, String directory, Array<String> co
 	posix_spawn_file_actions_t actions;
 	int status = posix_spawn_file_actions_init(&actions);
 	if (status != 0) {
-		syntax_error(node, "Swift import: cannot initialize tool process: %s", strerror(status));
+		syntax_error(node, "%s: cannot initialize tool process: %s", label, strerror(status));
 		return false;
 	}
 	defer (posix_spawn_file_actions_destroy(&actions));
@@ -172,19 +191,19 @@ gb_internal bool swift_import_exec(Ast *node, String directory, Array<String> co
 	pid_t pid = 0;
 	if (status == 0) status = posix_spawn(&pid, argv[0], &actions, nullptr, argv.data, environ);
 	if (status != 0) {
-		syntax_error(node, "Swift import: cannot run Xcode tool: %s", strerror(status));
+		syntax_error(node, "%s: cannot run Xcode tool: %s", label, strerror(status));
 		return false;
 	}
 	int wait_status = 0;
 	while (waitpid(pid, &wait_status, 0) < 0) {
 		if (errno == EINTR) continue;
-		syntax_error(node, "Swift import: cannot wait for Xcode tool: %s", strerror(errno));
+		syntax_error(node, "%s: cannot wait for Xcode tool: %s", label, strerror(errno));
 		return false;
 	}
 	if (!WIFEXITED(wait_status) || WEXITSTATUS(wait_status) != 0) {
 		String message = swift_import_read(err_path);
 		message.len = gb_min(message.len, 4096);
-		syntax_error(node, "Swift import: %.*s failed\n%.*s", LIT(args[0]), LIT(message));
+		syntax_error(node, "%s: %.*s failed\n%.*s", label, LIT(args[0]), LIT(message));
 		return false;
 	}
 	if (output) *output = swift_import_read(out_path);
@@ -219,9 +238,9 @@ gb_internal SwiftImportType swift_import_nominal_type(SwiftImportNominal *type) 
 }
 
 gb_internal bool swift_import_named_type(String usr, SwiftImportType *type, Array<SwiftImportNominal *> const &types) {
-	if (usr == "s:s6UInt64V") *type = {"UInt64", "u64", "i64", nullptr};
-	else if (usr == "s:s5Int64V") *type = {"Int64", "i64", "i64", nullptr};
-	else if (usr == "s:Sd") *type = {"Double", "f64", "double", nullptr};
+	if (usr == "s:s6UInt64V") *type = {"Swift.UInt64", "u64", "i64", nullptr};
+	else if (usr == "s:s5Int64V") *type = {"Swift.Int64", "i64", "i64", nullptr};
+	else if (usr == "s:Sd") *type = {"Swift.Double", "f64", "double", nullptr};
 	else {
 		for (SwiftImportNominal *nominal : types) {
 			if (nominal->usr == usr && !nominal->is_template && !nominal->argument) {
@@ -291,11 +310,11 @@ gb_internal bool swift_import_api_type(JsonValue *api, SwiftImportType *type, Ar
 	String name = swift_import_string(api, "name");
 	if (kind == "TypeNameAlias" && children.count == 1) return swift_import_api_type(children[0], type, types, argument);
 	if (kind != "TypeNominal") return false;
-	if (name == "GenericTypeParam" && argument) {
+	String usr = swift_import_string(api, "usr");
+	if (name == "GenericTypeParam" && !usr.len && argument) {
 		*type = swift_import_nominal_type(argument);
 		return true;
 	}
-	String usr = swift_import_string(api, "usr");
 	if (usr == "s:SS" && children.count == 0) {
 		*type = swift_import_nominal_type(swift_import_string_type(types));
 		return true;
@@ -306,13 +325,14 @@ gb_internal bool swift_import_api_type(JsonValue *api, SwiftImportType *type, Ar
 	if (!swift_import_api_type(children[0], &parameter, types, argument)) return false;
 	if (!parameter.nominal) {
 		if (usr != "s:Sa" || !parameter.swift) return false;
-		String name = make_string_c(parameter.swift);
+		String swift_name = make_string_c(parameter.swift);
+		String name = substring(swift_name, 6, swift_name.len);
 		for (auto candidate : *types) if (candidate->is_scalar && candidate->name == name) parameter.nominal = candidate;
 		if (!parameter.nominal) {
 			auto scalar = gb_alloc_item(permanent_allocator(), SwiftImportNominal);
 			*scalar = {};
 			scalar->name = name;
-			scalar->swift_name = concatenate_strings(permanent_allocator(), str_lit("Swift."), name);
+			scalar->swift_name = swift_name;
 			scalar->is_scalar = true;
 			array_add(types, scalar);
 			parameter.nominal = scalar;
@@ -334,7 +354,8 @@ gb_internal bool swift_import_type(Slice<JsonValue *> fragments, bool result, Sw
 		}
 	}
 	String text = make_string_c(spelling);
-	if (result && (text.len == 0 || text == "()" || text == "Void")) return true;
+	if (result && (text.len == 0 || text == "()" ||
+	    ((text == "Void" || text == "Swift.Void") && usr == "s:s4Voida"))) return true;
 	if (count == 0) return false;
 	if (!swift_import_named_type(usr, type, types)) return false;
 	for (isize i = 0; i < text.len; i++) {
@@ -353,7 +374,8 @@ gb_internal bool swift_import_type(Slice<JsonValue *> fragments, bool result, Sw
 		}
 		return text.len != 0;
 	}
-	return text == make_string_c(type->swift) || text == concatenate_strings(permanent_allocator(), str_lit("Swift."), make_string_c(type->swift));
+	String swift_name = make_string_c(type->swift);
+	return text == swift_name || text == substring(swift_name, 6, swift_name.len);
 }
 
 gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftImportFunction *fn, Array<SwiftImportNominal *> *types) {
@@ -848,6 +870,36 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	return source;
 }
 
+gb_internal bool swift_import_check_type_names(Ast *node, Array<SwiftImportNominal *> const &types) {
+	for_array(i, types) {
+		auto type = types[i];
+		if (type->is_scalar) continue;
+		if (swift_import_reserved_name(type->name)) {
+			syntax_error(node, "Swift import: type '%.*s' conflicts with a name used by generated Odin declarations", LIT(type->name));
+			return false;
+		}
+		for (isize j = 0; j < i; j++) {
+			if (!types[j]->is_scalar && types[j]->name == type->name) {
+				syntax_error(node, "Swift import: types '%.*s' and '%.*s' map to the same Odin name '%.*s'",
+					LIT(types[j]->swift_name), LIT(type->swift_name), LIT(type->name));
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
+gb_internal bool swift_import_add_name(Ast *node, Array<String> *names, String name) {
+	for (auto previous : *names) {
+		if (previous == name) {
+			syntax_error(node, "Swift import: generated Odin name '%.*s' is ambiguous", LIT(name));
+			return false;
+		}
+	}
+	array_add(names, name);
+	return true;
+}
+
 gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	char const *sdk_name = "macosx";
 	if (selected_subtarget == Subtarget_iPhone) sdk_name = "iphoneos";
@@ -866,8 +918,10 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	array_add(&common, build_context.metrics.target_triplet);
 	array_add(&common, str_lit("-I"));
 	array_add(&common, pkg->path);
+	// Swift validates cached modules against their dependencies and toolchain.
+	// Keep this cache between imports, but always inspect the current API/ABI.
 	array_add(&common, str_lit("-module-cache-path"));
-	array_add(&common, swift_import_path(pkg->directory, "cache"));
+	array_add(&common, swift_import_path(temporary_directory(permanent_allocator()), "odin-swift-module-cache"));
 
 	array_clear(&args);
 	array_add(&args, str_lit("swift-symbolgraph-extract"));
@@ -924,7 +978,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			if (part->kind != Json_String || !swift_import_identifier(part->string)) { valid = false; break; }
 			if (gb_string_length(name)) name = gb_string_appendc(name, "_");
 			name = gb_string_append_length(name, part->string.text, part->string.len);
-			swift_name = gb_string_append_fmt(swift_name, ".%.*s", LIT(part->string));
+			swift_name = gb_string_append_fmt(swift_name, ".`%.*s`", LIT(part->string));
 		}
 		if (!valid || gb_string_length(name) == 0) continue;
 		auto type = gb_alloc_item(permanent_allocator(), SwiftImportNominal);
@@ -941,6 +995,8 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		}
 		array_add(&types, type);
 	}
+
+	if (!swift_import_check_type_names(node, types)) return false;
 
 	auto functions = array_make<SwiftImportFunction>(permanent_allocator());
 	array_init(&pkg->unsupported, permanent_allocator());
@@ -1063,6 +1119,8 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		for (auto &c : type->cases) c.tag = c.has_payload ? payload++ : empty++;
 	}
 
+	if (!swift_import_check_type_names(node, types)) return false;
+
 	gbString probe = gb_string_make(permanent_allocator(), "");
 	probe = gb_string_append_fmt(probe, "import %.*s\n", LIT(pkg->module));
 	for_array(i, types) {
@@ -1071,7 +1129,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		for_array(j, types[i]->cases) {
 			auto const &c = types[i]->cases[j];
 			if (!c.available) continue;
-			probe = gb_string_append_fmt(probe, "public func case_%td_%td(_ value: %.*s) -> Bool { if case .`%.*s` = value { return true }; return false }\n", i, j, LIT(types[i]->swift_name), LIT(c.name));
+			probe = gb_string_append_fmt(probe, "public func case_%td_%td(_ value: %.*s) -> Swift.Bool { if case .`%.*s` = value { return true }; return false }\n", i, j, LIT(types[i]->swift_name), LIT(c.name));
 		}
 	}
 	for_array(i, functions) {
@@ -1189,6 +1247,44 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		}
 	}
 
+	// Validate the whole emitted namespace, including ownership helpers. Never
+	// let an unsupported Swift member silently resolve to one of our helpers.
+	auto names = array_make<String>(permanent_allocator());
+	for (auto type : types) {
+		if (!type->supported || type->is_scalar || type->kind == SwiftImportValue_String || swift_import_slice(type)) continue;
+		if (!swift_import_add_name(node, &names, type->name)) return false;
+		char const *suffixes[] = {"_copy", "_destroy", "_count", "_get", "_Case", "_case"};
+		for (isize i = 0; i < gb_count_of(suffixes); i++) {
+			if (i >= 2 && i <= 3 && !(type->kind == SwiftImportValue_Array && type->argument->supported)) continue;
+			if (i >= 4 && !type->is_enum) continue;
+			String name = concatenate_strings(permanent_allocator(), type->name, make_string_c(suffixes[i]));
+			if (!swift_import_add_name(node, &names, name)) return false;
+		}
+		if (!type->is_enum) continue;
+		auto variants = array_make<String>(permanent_allocator());
+		array_add(&variants, str_lit("Unknown_Default"));
+		for (auto const &c : type->cases) {
+			if (!c.available) continue;
+			String variant = copy_string(permanent_allocator(), c.name);
+			variant.text[0] = gb_char_to_upper(variant[0]);
+			if (!swift_import_add_name(node, &variants, variant)) return false;
+			if (!c.has_payload || !c.payload.odin || (c.payload.nominal && !c.payload.nominal->supported)) continue;
+			String name = concatenate3_strings(permanent_allocator(), type->name, str_lit("_get_"), swift_import_name(c.name));
+			if (!swift_import_add_name(node, &names, name)) return false;
+		}
+	}
+	for (auto name : pkg->unsupported) {
+		for (auto generated : names) {
+			if (name == generated) {
+				syntax_error(node, "Swift import: unsupported declaration '%.*s' conflicts with a generated Odin helper", LIT(name));
+				return false;
+			}
+		}
+	}
+	for (auto const &fn : functions) {
+		if (!swift_import_add_name(node, &names, fn.odin_name)) return false;
+	}
+
 	// The target's Swift driver identifies its runtime search paths. Let the
 	// normal Odin linker link the original object/archive and its autolinks.
 	array_clear(&args);
@@ -1217,8 +1313,21 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	flags = gb_string_appendc(flags, "-Wl,-rpath,/usr/lib/swift");
 	gbString source = gb_string_make(permanent_allocator(), "");
 	String identity = pkg->framework ? pkg->module : pkg->library;
-	source = gb_string_append_fmt(source, "package swift_%.*s_%llx\n\nimport \"base:intrinsics\"\nimport \"base:runtime\"\nimport swift \"core:sys/darwin/Swift\"\n\n",
+	bool has_values = false, has_scalar_async = false, has_value_async = false;
+	for (auto type : types) has_values |= type->supported;
+	for (auto const &fn : functions) {
+		bool values = fn.owner || fn.result.nominal || fn.is_throwing;
+		for (auto const &param : fn.parameters) values |= param.type.nominal != nullptr;
+		has_values |= values;
+		has_scalar_async |= fn.is_async && !values;
+		has_value_async |= fn.is_async && values;
+	}
+	source = gb_string_append_fmt(source, "package swift_%.*s_%llx\n\n",
 		LIT(pkg->module), cast(unsigned long long)fnv64a(identity.text, identity.len));
+	if (has_scalar_async) source = gb_string_appendc(source, "import \"base:intrinsics\"\n");
+	if (has_value_async) source = gb_string_appendc(source, "import \"base:runtime\"\n");
+	if (has_values || has_scalar_async || has_value_async) source = gb_string_appendc(source, "import swift \"core:sys/darwin/Swift\"\n");
+	source = gb_string_appendc(source, "\n");
 	String quoted_flags = quote_to_ascii(permanent_allocator(), make_string_c(flags));
 	String quoted_library = quote_to_ascii(permanent_allocator(), pkg->framework ? pkg->library : swift_import_relative(pkg->directory, pkg->library));
 	source = gb_string_append_fmt(source,
@@ -1256,6 +1365,8 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		for (auto const &other : functions) {
 			if (other.base_name == fn.base_name || other.odin_name == fn.base_name) count++;
 		}
+		for (auto name : names) if (name == fn.base_name) count++;
+		for (auto name : pkg->unsupported) if (name == fn.base_name) count++;
 		if (count == 1) {
 			source = gb_string_append_fmt(source, "%.*s :: %.*s\n", LIT(fn.base_name), LIT(fn.odin_name));
 		} else {

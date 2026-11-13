@@ -71,6 +71,21 @@ symbols, ownership, lowering, and runtime search paths. Temporary Swift inspecti
 source, SIL and LLVM IR are build inputs only; none is linked into the application.
 They are removed unless `-keep-temp-files` is enabled.
 
+## Names
+
+Swift type identity comes from compiler identifiers, not display names. A user
+type named `UInt64`, `Void`, or `GenericTypeParam` remains a user type. Generated
+Swift probes qualify standard types and escape nominal type references.
+
+Procedures and parameters that would shadow Odin builtins gain a trailing
+underscore, for example Swift `len` becomes `len_`. Types that conflict with
+names used by generated Odin code are currently rejected. Flattened nested types,
+projected container names, ownership helpers and enum cases must also be unique.
+An ambiguous name produces an import diagnostic instead of selecting a different
+declaration. A labeled procedure keeps its full name when its optional short alias
+would conflict with a helper, for example `Item_copy_amount` alongside `Item_copy`.
+Explicit import-name overrides are outside this subset.
+
 ## Supported subset
 
 The importer supports `Int64`, `UInt64`, `Double`, synchronous String results,
@@ -253,3 +268,14 @@ The script leaves device creation, boot and cleanup to its caller. Each fixture
 has a 60-second process deadline; an assertion, crash or timeout fails the run.
 Compiler rejection tests continue to run in the macOS invocation. The separate
 `../strings/run.sh` also honors `SWIFT_TEST_SIMULATOR` for its UTF-8 round trips.
+
+Swift inspection retains Xcode's module cache under
+`$TMPDIR/odin-swift-module-cache` (using the system temporary directory if
+`TMPDIR` is unset). Swift validates cached modules against their dependencies
+and toolchain. Odin still extracts and checks the current API, native lowering,
+ownership, and exported symbols on every invocation; generated Odin declarations
+are not reused across builds. `-show-more-timings` reports each inspection tool's
+elapsed time. The module cache can be removed when no builds are using it; Swift
+recreates it on demand.
+
+For the reverse direction, see [Swift-facing Odin exports](../export/README.md).

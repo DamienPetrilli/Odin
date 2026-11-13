@@ -24,7 +24,7 @@ trap 'rm -rf -- "$build"' EXIT
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do \
 	"${odin_target[@]}" "${odin_opt[@]}" -out:"$build/strings.o"
 xcrun --sdk "$sdk" swiftc -target "$triple" -swift-version 6 -warnings-as-errors \
-	-module-cache-path "$build/cache" "${swift_opt[@]}" \
+	-module-cache-path "${TMPDIR:-/tmp}/odin-swift-module-cache" "${swift_opt[@]}" \
 	"$here/main.swift" "$build/strings.o" -o "$build/strings"
 xcrun otool -L "$build/strings" > "$build/libraries.txt"
 xcrun nm -u "$build/strings" > "$build/symbols.txt"

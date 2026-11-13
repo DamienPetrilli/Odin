@@ -66,6 +66,7 @@ gb_global Timings global_timings = {0};
 
 #include "parser.cpp"
 #include "checker.cpp"
+#include "swift_export.cpp"
 #include "docs.cpp"
 #include "semantics_writer.cpp"
 
@@ -435,6 +436,8 @@ enum BuildFlagKind {
 	BuildFlag_Collection,
 	BuildFlag_Define,
 	BuildFlag_BuildMode,
+	BuildFlag_SwiftExport,
+	BuildFlag_SwiftModuleName,
 	BuildFlag_KeepExecutable,
 	BuildFlag_Target,
 	BuildFlag_Subtarget,
@@ -715,6 +718,8 @@ gb_internal bool parse_build_flags(Array<String> args) {
 	add_flag(&build_flags, BuildFlag_Collection,              str_lit("collection"),                BuildFlagParam_String,  Command__does_check);
 	add_flag(&build_flags, BuildFlag_Define,                  str_lit("define"),                    BuildFlagParam_String,  Command__does_check, true);
 	add_flag(&build_flags, BuildFlag_BuildMode,               str_lit("build-mode"),                BuildFlagParam_String,  Command__does_build); // Commands_build is not used to allow for a better error message
+	add_flag(&build_flags, BuildFlag_SwiftExport,             str_lit("swift-export"),              BuildFlagParam_None,    Command_build);
+	add_flag(&build_flags, BuildFlag_SwiftModuleName,         str_lit("swift-module-name"),         BuildFlagParam_String,  Command_build);
 	add_flag(&build_flags, BuildFlag_KeepExecutable,          str_lit("keep-executable"),           BuildFlagParam_None,    Command__does_build | Command_test);
 	add_flag(&build_flags, BuildFlag_Target,                  str_lit("target"),                    BuildFlagParam_String,  Command__does_check);
 	add_flag(&build_flags, BuildFlag_Subtarget,               str_lit("subtarget"),                 BuildFlagParam_String,  Command__does_check);
@@ -1427,6 +1432,13 @@ gb_internal bool parse_build_flags(Array<String> args) {
 							}
 							break;
 
+						case BuildFlag_SwiftExport:
+							build_context.swift_export = true;
+							build_context.no_entry_point = true;
+							break;
+						case BuildFlag_SwiftModuleName:
+							build_context.swift_module_name = value.value_string;
+							break;
 						case BuildFlag_BuildMode: {
 							GB_ASSERT(value.kind == ExactValue_String);
 							String str = value.value_string;
@@ -3071,6 +3083,13 @@ gb_internal int print_show_help(String const arg0, String command, String option
 	}
 
 	if (build) {
+		if (print_flag("-swift-export")) {
+			print_usage_line(2, "Emit a Swift module for exported procedures in a Darwin arm64 static library.");
+		}
+		if (print_flag("-swift-module-name:<name>")) {
+			print_usage_line(2, "Override the Swift export module name (default: Odin + UpperCamelCase package name).");
+		}
+
 		if (print_flag("-build-mode:<mode>")) {
 			print_usage_line(2, "Sets the build mode.");
 			print_usage_line(2, "Available options:");
@@ -4890,6 +4909,11 @@ int main(int arg_count, char const **arg_ptr) {
 		}
 
 		return 0;
+	}
+
+	if (!swift_export_prepare(checker)) {
+		print_all_errors();
+		return 1;
 	}
 
 	if (build_context.cached) {

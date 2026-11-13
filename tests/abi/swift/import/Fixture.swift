@@ -347,3 +347,26 @@ public func arrayBridgedTexts() -> [String] {
 	text.append("日本語 🦉 café embedded\0zero and a longer string")
 	return [text as String]
 }
+
+// These are nominal types, not the digester's generic-parameter marker or Void.
+public struct GenericTypeParam {
+	private let storage: (UInt64, UInt64, UInt64, UInt64, UInt64) = (11, 22, 33, 44, 55)
+	public init() {}
+	public var first: UInt64 { storage.0 }
+	public var last: UInt64 { storage.4 }
+}
+
+@frozen public enum NamedPayload<T> {
+	case normal(T)
+	case named(GenericTypeParam)
+}
+
+public func namedPayload() -> NamedPayload<Value> { .named(GenericTypeParam()) }
+
+public struct Void {
+	public let value: UInt64
+	public init(_ value: UInt64) { self.value = value }
+}
+
+public func namedVoid() -> Void { Void(73) }
+public func actualVoid() -> Swift.Void {}

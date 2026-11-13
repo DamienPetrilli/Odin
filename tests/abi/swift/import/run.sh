@@ -23,7 +23,7 @@ build=$(mktemp -d "${TMPDIR:-/tmp}/odin swift import.XXXXXXXX")
 trap 'rm -rf -- "$build"' EXIT
 mkdir "$build/fixture"
 swiftc=(xcrun --sdk "$sdk" swiftc -target "$triple" -swift-version 6 -warnings-as-errors
-	-module-cache-path "$build/cache" "${swift_opt[@]}")
+	-module-cache-path "${TMPDIR:-/tmp}/odin-swift-module-cache" "${swift_opt[@]}")
 # The library author builds an ordinary Swift module, with no interop code.
 "${swiftc[@]}" -parse-as-library -enable-library-evolution -module-name SwiftImportFixture \
 	-emit-object -o "$build/fixture/SwiftImportFixture.o" \
@@ -47,6 +47,15 @@ grep -q 'SwiftImportFixture.*addLater.*YaF$' "$build/symbols.txt"
 grep -q 'SwiftImportFixture.*addLater.*Tu' "$build/symbols.txt"
 grep -q 'SwiftImportFixture.*3add' "$build/symbols.txt"
 
+# A separate Swift module deliberately shadows standard scalar type names.
+mkdir -p "$build/names/fixture"
+"${swiftc[@]}" -parse-as-library -enable-library-evolution -module-name SwiftNamesFixture \
+	-emit-object -o "$build/names/fixture/SwiftNamesFixture.o" \
+	-emit-module-path "$build/names/fixture/SwiftNamesFixture.swiftmodule" "$here/Names.swift"
+cp "$here/names.odin" "$build/names/main.odin"
+"$ODIN" build "$build/names" "${odin_target[@]}" "${odin_opt[@]}" \
+	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/names-test"
+
 # Simulator execution is opt-in and uses a caller-owned, booted device.
 # Do not change the user's simulator state from this test script.
 if [[ "$sdk" == iphoneos || ( "$sdk" == iphonesimulator && -z "${SWIFT_TEST_SIMULATOR:-}" ) ]]; then
@@ -61,6 +70,7 @@ run_fixture() {
 	fi
 }
 run_fixture "$build/import"
+run_fixture "$build/names-test"
 
 # A static archive and repeated imports use the same normal build path.
 # Keep the original module as the SDK and replace only the binary with a newer
@@ -88,6 +98,35 @@ if [[ "$sdk" == iphonesimulator ]]; then
 	echo "Swift import tests passed on iOS simulator ($mode)"
 	exit 0
 fi
+
+# Reject names that could change the generated ABI or select a helper instead
+# of the original declaration. These are separate module variants.
+mkdir -p "$build/clashes/fixture"
+cat > "$build/clashes/main.odin" <<'ODIN'
+package clashes
+foreign import fixture "swift:fixture/SwiftClashesFixture"
+main :: proc() {}
+ODIN
+for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE STRING_TYPE; do
+	"${swiftc[@]}" -D "$selection" -parse-as-library -enable-library-evolution -module-name SwiftClashesFixture \
+		-emit-object -o "$build/clashes/fixture/SwiftClashesFixture.o" \
+		-emit-module-path "$build/clashes/fixture/SwiftClashesFixture.swiftmodule" "$here/Clashes.swift"
+	if "$ODIN" check "$build/clashes" "${odin_target[@]}" > "$build/invalid.log" 2>&1; then
+		echo "Expected Swift name collision rejection: $selection" >&2
+		exit 1
+	fi
+	case "$selection" in
+		BUILTIN) diagnostic="type 'f64' conflicts" ;;
+		FLATTENED | STRING_TYPE) diagnostic="map to the same Odin name" ;;
+		HELPER | ENUM_CASE) diagnostic="is ambiguous" ;;
+		UNSUPPORTED_HELPER) diagnostic="conflicts with a generated Odin helper" ;;
+	esac
+	if ! grep -F 'Swift import:' "$build/invalid.log" | grep -Fq "$diagnostic"; then
+		cat "$build/invalid.log" >&2
+		echo "Missing name collision diagnostic: $selection" >&2
+		exit 1
+	fi
+done
 
 # Check all rejected declarations in one import. Each compiler invocation
 # inspects the Swift module; repeating that for each diagnostic is expensive.
