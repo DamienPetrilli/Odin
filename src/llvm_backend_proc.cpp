@@ -242,15 +242,16 @@ gb_internal lbProcedure *lb_create_procedure(lbModule *m, Entity *entity, bool i
 	p->is_entry_point = false;
 
 	gbAllocator a = heap_allocator();
-	p->children.allocator          = a;
-	p->defer_stmts.allocator       = a;
-	p->blocks.allocator            = a;
-	p->branch_blocks.allocator     = a;
-	p->context_stack.allocator     = a;
-	p->scope_stack.allocator       = a;
-	p->asan_stack_locals.allocator = a;
-	p->lifetime_locals.allocator   = a;
-	p->lifetime_scopes.allocator   = a;
+	p->children.allocator                = a;
+	p->defer_stmts.allocator             = a;
+	p->blocks.allocator                  = a;
+	p->branch_blocks.allocator           = a;
+	p->context_stack.allocator           = a;
+	p->scope_stack.allocator             = a;
+	p->asan_stack_locals.allocator       = a;
+	p->lifetime_locals.allocator         = a;
+	p->multi_assign_copy_slots.allocator = a;
+	p->lifetime_scopes.allocator         = a;
 	// map_init(&p->selector_values,  0);
 	// map_init(&p->selector_addr,    0);
 	// map_init(&p->tuple_fix_map,    0);
@@ -570,14 +571,15 @@ gb_internal lbProcedure *lb_create_dummy_procedure(lbModule *m, String link_name
 	p->is_entry_point = false;
 
 	gbAllocator a = permanent_allocator();
-	p->children.allocator          = a;
-	p->defer_stmts.allocator       = a;
-	p->blocks.allocator            = a;
-	p->branch_blocks.allocator     = a;
-	p->context_stack.allocator     = a;
-	p->asan_stack_locals.allocator = a;
-	p->lifetime_locals.allocator   = a;
-	p->lifetime_scopes.allocator   = a;
+	p->children.allocator                = a;
+	p->defer_stmts.allocator             = a;
+	p->blocks.allocator                  = a;
+	p->branch_blocks.allocator           = a;
+	p->context_stack.allocator           = a;
+	p->asan_stack_locals.allocator       = a;
+	p->lifetime_locals.allocator         = a;
+	p->multi_assign_copy_slots.allocator = a;
+	p->lifetime_scopes.allocator         = a;
 	map_init(&p->tuple_fix_map, 0);
 
 
@@ -4480,39 +4482,16 @@ gb_internal lbValue lb_build_builtin_proc(lbProcedure *p, Ast *expr, TypeAndValu
 			lbValue y     = lb_emit_conv(p, lb_build_expr(p, ce->args[1]), platform_type);
 			lbValue scale = lb_emit_conv(p, lb_build_expr(p, ce->args[2]), t_i32);
 
-			char const *name = nullptr;
-			if (is_type_unsigned(tv.type)) {
-				switch (id) {
-				case BuiltinProc_fixed_point_mul:     name = "llvm.umul.fix";     break;
-				case BuiltinProc_fixed_point_div:     name = "llvm.udiv.fix";     break;
-				case BuiltinProc_fixed_point_mul_sat: name = "llvm.umul.fix.sat"; break;
-				case BuiltinProc_fixed_point_div_sat: name = "llvm.udiv.fix.sat"; break;
-				}
-			} else {
-				switch (id) {
-				case BuiltinProc_fixed_point_mul:     name = "llvm.smul.fix";     break;
-				case BuiltinProc_fixed_point_div:     name = "llvm.sdiv.fix";     break;
-				case BuiltinProc_fixed_point_mul_sat: name = "llvm.smul.fix.sat"; break;
-				case BuiltinProc_fixed_point_div_sat: name = "llvm.sdiv.fix.sat"; break;
-				}
-			}
-			GB_ASSERT(name != nullptr);
+			bool is_sat = id == BuiltinProc_fixed_point_mul_sat || id == BuiltinProc_fixed_point_div_sat;
 
 			lbValue res = {};
 			res.type = platform_type;
 
 			if (id == BuiltinProc_fixed_point_div ||
 			    id == BuiltinProc_fixed_point_div_sat) {
-				res.value = lb_integer_division_fixed_point_intrinsics(p, x.value, y.value, scale.value, platform_type, name);
+				res.value = lb_integer_division_fixed_point_intrinsics(p, x.value, y.value, scale.value, platform_type, is_sat);
 			} else {
-				LLVMTypeRef types[1] = {lb_type(p->module, platform_type)};
-
-				LLVMValueRef args[3] = {
-					x.value,
-					y.value,
-					scale.value };
-
-				res.value = lb_call_intrinsic(p, name, args, gb_count_of(args), types, gb_count_of(types));
+				res.value = lb_fixed_point_wide(p, x.value, y.value, scale.value, !is_type_unsigned(platform_type), is_sat, false);
 			}
 			return lb_emit_conv(p, res, tv.type);
 		}
