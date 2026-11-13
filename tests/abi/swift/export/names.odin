@@ -3,98 +3,98 @@ package swift_names
 AnyObject :: struct { first, second: u64 }
 
 @(export)
-named_0 :: proc(value: AnyObject) -> AnyObject {
+named_0 :: proc "swift" (value: AnyObject) -> AnyObject {
 	return {value.first + 1, value.second + 2}
 }
 
 Self :: struct { first, second: u64 }
 
 @(export)
-named_1 :: proc(value: Self) -> Self {
+named_1 :: proc "swift" (value: Self) -> Self {
 	return {value.first + 1, value.second + 2}
 }
 
 Type :: struct { first, second: u64 }
 
 @(export)
-named_2 :: proc(value: Type) -> Type {
+named_2 :: proc "swift" (value: Type) -> Type {
 	return {value.first + 1, value.second + 2}
 }
 
 Protocol :: struct { first, second: u64 }
 
 @(export)
-named_3 :: proc(value: Protocol) -> Protocol {
+named_3 :: proc "swift" (value: Protocol) -> Protocol {
 	return {value.first + 1, value.second + 2}
 }
 
 String :: struct { first, second: u64 }
 
 @(export)
-named_4 :: proc(value: String) -> String {
+named_4 :: proc "swift" (value: String) -> String {
 	return {value.first + 1, value.second + 2}
 }
 
 Bool :: struct { first, second: u64 }
 
 @(export)
-named_5 :: proc(value: Bool) -> Bool {
+named_5 :: proc "swift" (value: Bool) -> Bool {
 	return {value.first + 1, value.second + 2}
 }
 
 Int64 :: struct { first, second: u64 }
 
 @(export)
-named_6 :: proc(value: Int64) -> Int64 {
+named_6 :: proc "swift" (value: Int64) -> Int64 {
 	return {value.first + 1, value.second + 2}
 }
 
 UInt64 :: struct { first, second: u64 }
 
 @(export)
-named_7 :: proc(value: UInt64) -> UInt64 {
+named_7 :: proc "swift" (value: UInt64) -> UInt64 {
 	return {value.first + 1, value.second + 2}
 }
 
 Double :: struct { first, second: u64 }
 
 @(export)
-named_8 :: proc(value: Double) -> Double {
+named_8 :: proc "swift" (value: Double) -> Double {
 	return {value.first + 1, value.second + 2}
 }
 
 Never :: struct { first, second: u64 }
 
 @(export)
-named_9 :: proc(value: Never) -> Never {
+named_9 :: proc "swift" (value: Never) -> Never {
 	return {value.first + 1, value.second + 2}
 }
 
 Optional :: struct { first, second: u64 }
 
 @(export)
-named_10 :: proc(value: Optional) -> Optional {
+named_10 :: proc "swift" (value: Optional) -> Optional {
 	return {value.first + 1, value.second + 2}
 }
 
 UnsafeMutableBufferPointer :: struct { first, second: u64 }
 
 @(export)
-named_11 :: proc(value: UnsafeMutableBufferPointer) -> UnsafeMutableBufferPointer {
+named_11 :: proc "swift" (value: UnsafeMutableBufferPointer) -> UnsafeMutableBufferPointer {
 	return {value.first + 1, value.second + 2}
 }
 
 Sendable :: struct { first, second: u64 }
 
 @(export)
-named_12 :: proc(value: Sendable) -> Sendable {
+named_12 :: proc "swift" (value: Sendable) -> Sendable {
 	return {value.first + 1, value.second + 2}
 }
 
 Copyable :: struct { first, second: u64 }
 
 @(export)
-named_13 :: proc(value: Copyable) -> Copyable {
+named_13 :: proc "swift" (value: Copyable) -> Copyable {
 	return {value.first + 1, value.second + 2}
 }
 
@@ -103,15 +103,15 @@ Fields :: struct {
 }
 
 @(export)
-fields :: proc(value: Fields) -> Fields {
+fields :: proc "swift" (value: Fields) -> Fields {
 	return {value.self+1, value.p0+2, value.init+3, value.class+4}
 }
 
 @(export)
-initialize :: proc() -> u64 { return 11 }
+initialize :: proc "swift" () -> u64 { return 11 }
 
 @(export)
-finalize :: proc() -> u64 { return 22 }
+finalize :: proc "swift" () -> u64 { return 22 }
 
 @(export)
-_leading_name :: proc() -> u64 { return 33 }
+_leading_name :: proc "swift" () -> u64 { return 33 }

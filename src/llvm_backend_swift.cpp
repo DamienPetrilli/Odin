@@ -157,8 +157,8 @@ gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool ha
 	return lb_emit_runtime_call(p, "swift_async_start", args);
 }
 
-// An exported Odin procedure keeps its normal calling convention. Swift calls
-// a separate native entry point, which supplies an ordinary Odin context.
+// Module entries preserve their generated link names and call the exported
+// Swift procedures with their native convention, without an Odin context.
 gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 	if (!build_context.swift_export) return;
 	lbModule *m = &gen->default_module;

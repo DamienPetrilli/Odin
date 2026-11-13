@@ -80,10 +80,26 @@ gb_internal GB_COMPARE_PROC(swift_export_type_compare) {
 	return string_compare(swift_export_type_name(*cast(Type *const *)a), swift_export_type_name(*cast(Type *const *)b));
 }
 
+gb_internal bool is_swift_export_procedure(Checker *checker, Entity *e) {
+	if (e->pkg != checker->info.init_package || e->kind != Entity_Procedure || !e->Procedure.is_export) return false;
+	ProcCallingConvention cc = base_type(e->type)->Proc.calling_convention;
+	return cc == ProcCC_Swift || cc == ProcCC_SwiftAsync;
+}
+
 gb_internal bool swift_export_prepare(Checker *checker) {
+	// Only static library builds produce a Swift module. Object/executable
+	// builds keep their existing low-level foreign-entry behavior.
+	if (build_context.build_mode == BuildMode_StaticLibrary) {
+		for (Entity *e : checker->info.entities) {
+			if (is_swift_export_procedure(checker, e)) {
+				build_context.swift_export = true;
+				break;
+			}
+		}
+	}
 	if (!build_context.swift_export) {
 		if (build_context.swift_module_name.len) {
-			gb_printf_err("-swift-module-name requires -swift-export\n");
+			gb_printf_err("-swift-module-name requires exported Swift procedures in a static library\n");
 			return false;
 		}
 		return true;
@@ -128,15 +144,18 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 	array_init(&swift_export_procedures, permanent_allocator());
 	array_init(&swift_export_types, permanent_allocator());
 	for (Entity *e : checker->info.entities) {
-		if (e->pkg != checker->info.init_package || e->kind != Entity_Procedure || !e->Procedure.is_export) continue;
+		if (!is_swift_export_procedure(checker, e)) continue;
 		Type *type = base_type(e->type);
 		bool valid = !type->Proc.is_polymorphic && !type->Proc.variadic && !type->Proc.c_vararg &&
 		             !type->Proc.diverging && !type->Proc.return_by_pointer && type->Proc.result_count <= 1 &&
-		             (type->Proc.calling_convention == ProcCC_Odin || type->Proc.calling_convention == ProcCC_Contextless);
-		for (isize i = 0; i < type->Proc.param_count; i++) valid &= swift_export_check_type(type->Proc.params->Tuple.variables[i]->type, true);
+		             type->Proc.calling_convention == ProcCC_Swift;
+		for (isize i = 0; i < type->Proc.param_count; i++) {
+			Entity *param = type->Proc.params->Tuple.variables[i];
+			valid &= !(param->flags & EntityFlags_SwiftABI) && swift_export_check_type(param->type, true);
+		}
 		if (type->Proc.result_count) valid &= swift_export_check_type(type->Proc.results->Tuple.variables[0]->type, false);
 		if (!valid) {
-			error(e->token, "Swift export: expected an Odin procedure with i64, u64, f64, bool, flat scalar structs, or borrowed scalar slice parameters, and at most one scalar/struct result");
+			error(e->token, "Swift export: expected a synchronous Swift procedure without ABI parameter attributes, with i64, u64, f64, bool, flat scalar structs, or borrowed scalar slice parameters, and at most one scalar/struct result");
 			continue;
 		}
 		SwiftExportProcedure proc = {};

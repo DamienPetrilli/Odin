@@ -104,6 +104,9 @@ check_invalid darwin_arm64 \
 	'Byte_Only ::' \
 	'Indirect_Tag ::' \
 	'Indirect_Tag_Result ::' \
+	'String_Slice ::' \
+	'Nested_Slice ::' \
+	'Slice_Result ::' \
 	'Odin_Callback ::' \
 	'C_Callback ::' \
 	'C_Callback_Result ::' \

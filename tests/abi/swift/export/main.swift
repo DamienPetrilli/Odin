@@ -18,6 +18,19 @@ values.withUnsafeMutableBufferPointer {
 }
 precondition(values == [17, 27, 37])
 precondition(modifyValues(UnsafeMutableBufferPointer(start: nil, count: 0), 1) == 0)
+var guarded: [UInt64] = [0x12345678, 10, 20, 30, 0x87654321]
+guarded.withUnsafeMutableBufferPointer { buffer in
+	let middle = UnsafeMutableBufferPointer(start: buffer.baseAddress!.advanced(by: 1), count: 3)
+	precondition(modifyValues(middle, 7) == 3)
+}
+precondition(guarded == [0x12345678, 17, 27, 37, 0x87654321])
+var signed: [Int64] = [-1, 0, 20]
+signed.withUnsafeMutableBufferPointer { modifySigned($0) }
+precondition(signed == [-3, -2, 18])
+var floats: [Double] = [0.5, -2, 4]
+floats.withUnsafeMutableBufferPointer { modifyFloats($0) }
+precondition(floats == [0.75, -3, 6])
+precondition(callPrivate(41) == 42)
 for index in 0..<1000 {
 	precondition(roundTrip(UInt64(index)) == UInt64(index + 1))
 	precondition(addNumbers(UInt64(index), 1) == UInt64(index + 1))

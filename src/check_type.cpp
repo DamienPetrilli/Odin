@@ -4128,6 +4128,13 @@ gb_internal bool is_swift_abi_scalar(Type *type) {
 	return type == t_i64 || type == t_u64 || type == t_f64 || is_type_pointer(type) || is_type_multi_pointer(type);
 }
 
+gb_internal bool is_swift_abi_slice_parameter(Type *type) {
+	type = base_type(type);
+	if (!type || type->kind != Type_Slice) return false;
+	Type *elem = type->Slice.elem;
+	return elem == t_i64 || elem == t_u64 || elem == t_f64;
+}
+
 gb_internal bool is_type_supported_by_swift_abi(Type *type) {
 	type = base_type(type);
 	if (type == t_bool || is_swift_abi_scalar(type)) {
@@ -4292,7 +4299,7 @@ gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc
 				if (param->flags & EntityFlag_ByPtr) {
 					error(param->token, "'#by_ptr' cannot be used with the \"swift\" calling convention");
 					success = false;
-				} else if (!is_type_supported_by_swift_abi(param->type)) {
+				} else if (!is_type_supported_by_swift_abi(param->type) && !is_swift_abi_slice_parameter(param->type)) {
 					error(param->token, "Unsupported parameter type for the \"swift\" calling convention");
 					success = false;
 				}

@@ -2744,6 +2744,12 @@ gb_internal lbArgType lb_swift_abi_value(LLVMContextRef c, LLVMTypeRef type, boo
 	for (unsigned i = 0; i < count; i++) {
 		fields[i] = LLVMStructGetTypeAtIndex(type, i);
 	}
+	if (is_type_slice(odin_type)) {
+		// UnsafeMutableBufferPointer lowers its optional address and count
+		// to two integer components. The pointee storage remains borrowed.
+		GB_ASSERT(!is_result && count == 2);
+		fields[0] = LLVMInt64TypeInContext(c);
+	}
 	if (count == 1) {
 		return lb_arg_type_direct(type, fields[0], nullptr, nullptr);
 	}

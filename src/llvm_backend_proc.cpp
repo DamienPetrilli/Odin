@@ -845,6 +845,9 @@ gb_internal void lb_begin_procedure_body(lbProcedure *p) {
 							unsigned count = lb_abi_arg_count(*arg_type);
 							for (unsigned j = 0; j < count; j++) {
 								LLVMValueRef field = LLVMGetParam(p->value, param_offset+llvm_param_index+j);
+								if (is_type_slice(e->type) && j == 0) {
+									field = OdinLLVMBuildTransmute(p, field, LLVMStructGetTypeAtIndex(param_type, j));
+								}
 								value = LLVMBuildInsertValue(p->builder, value, field, j, "");
 							}
 						} else {
@@ -1406,7 +1409,9 @@ gb_internal lbValue lb_emit_call(lbProcedure *p, lbValue value, Array<lbValue> c
 			if (arg->kind == lbArg_Expand) {
 				unsigned count = lb_abi_arg_count(*arg);
 				for (unsigned j = 0; j < count; j++) {
-					array_add(&processed_args, lb_emit_struct_ev(p, x, cast(i32)j));
+					lbValue field = lb_emit_struct_ev(p, x, cast(i32)j);
+					if (is_type_slice(original_type) && j == 0) field = lb_emit_conv(p, field, t_uintptr);
+					array_add(&processed_args, field);
 				}
 			} else if (arg->kind == lbArg_Direct) {
 				LLVMTypeRef abi_type = arg->cast_type;

@@ -135,7 +135,7 @@ gb_internal void linker_data_init(LinkerData *ld, CheckerInfo *info, String cons
 gb_internal i32 linker_stage(LinkerData *gen) {
 	if (build_context.swift_export) {
 		if (swift_export_link(gen->output_object_paths)) return 0;
-		print_all_errors();
+		if (any_errors() || any_warnings()) print_all_errors();
 		return 1;
 	}
 

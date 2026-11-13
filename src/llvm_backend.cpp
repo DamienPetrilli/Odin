@@ -2737,6 +2737,11 @@ gb_internal void lb_create_global_procedures_and_types(lbGenerator *gen, Checker
 		GB_ASSERT(m != nullptr);
 
 		if (e->kind == Entity_Procedure) {
+			// Swift exports are discovered after checking runtime declarations.
+			// The Swift host owns main; module constructors initialize Odin.
+			if (build_context.swift_export && e->pkg->kind == Package_Runtime && e->Procedure.link_name == "main") {
+				continue;
+			}
 			if (e->Procedure.is_foreign && e->Procedure.is_objc_impl_or_import) {
 				// Track usage of Objective-C frameworks when an imported Objective-C method is used.
 				lb_add_foreign_library_path(m, e->Procedure.foreign_library);

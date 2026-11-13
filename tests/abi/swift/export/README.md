@@ -1,9 +1,10 @@
 # Swift-facing Odin exports
 
-Build a static library and its Swift module together:
+A static library containing `@(export)` procedures with the `"swift"` calling
+convention automatically produces its Swift module. Build it normally:
 
 ```sh
-odin build math -build-mode:static -swift-export -out:build/libOdinMath.a
+odin build math -build-mode:static -out:build/libOdinMath.a
 swiftc -I build main.swift build/libOdinMath.a -o build/example
 ```
 
@@ -13,7 +14,7 @@ For an Odin package named `math`:
 package math
 
 @(export)
-add_numbers :: proc(a, b: u64) -> u64 {
+add_numbers :: proc "swift" (a, b: u64) -> u64 {
 	return a + b
 }
 ```
@@ -33,8 +34,10 @@ Names that collide after conversion are rejected. Swift keyword type names are
 escaped in both declarations and signatures. A type named `Swift`, or matching
 the selected module name, is rejected because it would shadow a module. User link
 names must not overlap generated entry points or Swift metadata symbols. Only
-explicitly exported procedures in the initial package appear in the interface. Build exports for
-Darwin arm64 on a macOS host with Xcode and LLVM 18 or newer.
+explicitly exported `proc "swift"` procedures in the initial package appear in
+the interface. C/ordinary Odin exports and unexported Swift callbacks retain their
+existing behavior and do not enter that interface. Other build modes
+do not generate a Swift module. Build exports for Darwin arm64 on a macOS host with Xcode and LLVM 18 or newer.
 
 The compiler emits a static archive, `.swiftmodule`, and `.swiftinterface` beside
 the requested output. The latter allows Swift to rebuild the module interface
@@ -46,10 +49,9 @@ reflection. Application procedures execute in Odin.
 
 ## Values and memory
 
-This first subset supports ordinary Odin procedures and `proc "contextless"`,
-with `i64`, `u64`, `f64`, `bool`, and flat named structs containing `i64`, `u64`,
-and `f64`. A procedure returns at most one such value. Struct fields preserve
-their order; their offsets, size, stride, and Swift register/indirect lowering
+This subset supports `proc "swift"` with `i64`, `u64`, `f64`, `bool`, and flat
+named structs containing `i64`, `u64`, and `f64`. A procedure returns at most one
+such value. Struct fields preserve their order; their offsets, size, stride, and Swift register/indirect lowering
 are compatible with this subset. Packed, aligned, nested, or nontrivial structs
 are rejected. Scalar parameters use their corresponding Swift scalar types;
 structs become frozen Swift value types. Values are passed using the native ABI.
@@ -62,7 +64,7 @@ Swift's usual exclusive-access and buffer-lifetime rules apply:
 
 ```odin
 @(export)
-modify_values :: proc(values: []u64, delta: u64) {
+modify_values :: proc "swift" (values: []u64, delta: u64) {
 	for &value in values {
 		value += delta
 	}
@@ -82,8 +84,21 @@ and throwing exports are outside this subset and receive diagnostics. Swift
 calling Odin is a separate direction from the richer existing Swift importer.
 Default argument values are not exported; Swift callers supply every argument.
 
-Ordinary exported procedures receive a freshly initialized default Odin context.
-They can use Odin allocators normally. The compiler initializes Odin globals and
+`proc "swift"` keeps its existing foreign calling convention: no implicit Odin
+context is passed. Procedures needing allocators or context-dependent diagnostics
+establish their context explicitly:
+
+```odin
+import "base:runtime"
+
+@(export)
+check_value :: proc "swift" (value: u64) {
+	context = runtime.default_context()
+	assert(value > 0)
+}
+```
+
+The compiler initializes Odin globals and
 `@(init)` procedures before the Swift host's main and runs `@(fini)` at shutdown.
 The application's own thread-safety rules still apply. One exported Odin root
 owns runtime state per executable: combine required Odin packages in that build.
