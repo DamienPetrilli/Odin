@@ -96,14 +96,41 @@ destruction. Multi-value case extraction and arbitrary generic specialization
 are not implemented. Optional values are inspected with the same case/payload
 operations; they are not confused with allocation failure.
 
-Swift arrays are owned typed values with `_count`, bounds-checked `_get`,
-`_copy` and `_destroy`. Element access creates an owned copy. A `[String]` input
-accepts `[]string` and copies every element. One supported generic specialization
-accepts a single `Collection<String>` argument using Swift `Array<String>`
-metadata and its standard Collection conformance. This does not implement Odin
-protocol conformances or general Swift generics. An explicit empty `Set` default
-on a single-parameter function may be omitted; nonempty Set construction is
-not supported.
+Swift `[UInt64]`, `[Int64]`, `[Double]` and `[String]` parameters and results map
+to ordinary Odin `[]u64`, `[]i64`, `[]f64` and `[]string`. Inputs are copied into
+Swift-owned storage before the call (or async start) returns. Results are
+independent copies allocated using `context.allocator`. Delete a returned scalar
+slice; for `[]string`, delete each string and then the slice with that allocator.
+An empty result is a successful empty slice. Nested arrays are not yet supported.
+
+Swift array allocation capacity is obtained through Swift's buffer-size ABI,
+including usable spare storage, so imported arrays follow native Swift growth.
+The growth fixture compares both capacity and buffer relocations with native
+construction under the same runtime/allocator. No platform malloc-size API is
+called directly by the bridge.
+
+For example, a Swift `func increment(_ values: [UInt64]) -> [UInt64]` is called as:
+
+```odin
+values := example.increment([]u64{1, 2, 3}) or_return
+defer delete(values)
+```
+
+An async array result adds a final conversion `ok` to its callback:
+`proc(task: swift.Task, values: []u64, ok: bool)`. With Swift `throws`, the signature
+is `proc(task: swift.Task, values: []u64, error: swift.Error, ok: bool)`. Conversion
+failure gives an empty slice and `ok = false`; partial copies are cleaned up.
+A Swift error also gives `ok = false`, with the owned error set. A successful
+start and successful result conversion are separate events. Allocators captured
+by the start must remain valid through completion and result deallocation.
+
+Arrays of supported imported value types retain the owned typed-value API:
+`_count`, bounds-checked `_get`, `_copy` and `_destroy`. Element access creates an
+owned copy. One supported generic specialization accepts a single
+`Collection<String>` argument using Swift `Array<String>` metadata and its
+standard Collection conformance. This does not implement Odin protocol
+conformances or general Swift generics. An explicit empty `Set` default on a
+single-parameter function may be omitted; nonempty Set construction is not supported.
 
 Asynchronous untyped `throws` adds an owned `swift.Error` to the completion.
 A nil error means success; on failure the result is zero-initialized. Release
@@ -188,23 +215,41 @@ function. Conversion or Odin allocation failure returns `ok = false`.
 Conversion uses Swift standard-library ABI entry points to validate and construct
 an owned String, count its UTF-8 bytes and copy them into Odin storage. Swift
 validates input directly; there is no separate Odin validation pass. Destruction
-uses Swift's native string release operation without a type-metadata lookup. It does not use
-Foundation, NSString or an autorelease pool. The native string representation is
-passed through without decoding its small-string flags or object storage. Swift
-allocation failures are governed by Swift's runtime; the boolean result does not
-make all foreign allocations recoverable. This does not extend the current
-Darwin arm64 target support to other platforms.
+uses Swift's native string release operation without a type-metadata lookup. It
+does not use Foundation, NSString or an autorelease pool. Small strings copy their
+inline UTF-8 using the frozen Darwin arm64 layout. Large contiguous strings use
+Swift's borrowed-buffer getter; foreign strings retain the native transcoding
+path. No borrowed pointer escapes the conversion. Swift allocation failures are
+governed by Swift's runtime; the boolean result does not make all foreign
+allocations recoverable. This does not extend the current Darwin arm64 target
+support to other platforms.
 
 Text retains its UTF-8 contents. Odin `len(string)` counts bytes and Odin string
 equality compares bytes; Swift's character count and canonically equivalent
 Unicode equality are different operations. A plain Odin string does not gain
 Swift's character semantics.
 
-See `run.sh`, `main.odin`, `values.odin` `strings.odin` and `tasks.odin` for executable round
-trips, overlapping tasks, native handle identity, preserved context, guarded
-allocations, ownership, failure paths and rejection diagnostics.
+See `run.sh`, `main.odin`, `values.odin`, `strings.odin`, `arrays.odin` and
+`tasks.odin` for executable round trips, overlapping tasks, native handle identity,
+preserved context, guarded allocations, ownership, failure paths and rejection
+diagnostics.
 
 The separate `../strings/run.sh` fixture checks Foundation-free linkage,
 standard-library strings in both directions, independent storage after owner
 release, invalid UTF-8 and failed allocation. It also checks the trailing-byte
 aggregate ABI used by Swift's UTF-8 copy result.
+
+## iOS simulator execution
+
+`run.sh iphonesimulator debug` (or `release`) links the fixtures without running
+them. To also execute the normal library and evolved static-library tests, supply
+a booted simulator's identifier:
+
+```sh
+SWIFT_TEST_SIMULATOR="<device-identifier>" bash tests/abi/swift/import/run.sh iphonesimulator release
+```
+
+The script leaves device creation, boot and cleanup to its caller. Each fixture
+has a 60-second process deadline; an assertion, crash or timeout fails the run.
+Compiler rejection tests continue to run in the macOS invocation. The separate
+`../strings/run.sh` also honors `SWIFT_TEST_SIMULATOR` for its UTF-8 round trips.

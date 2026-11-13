@@ -7,6 +7,7 @@ import cf "core:sys/darwin/CoreFoundation"
 
 foreign {
 	pthread_main_np :: proc "c" () -> i32 ---
+	alarm :: proc "c" (seconds: u32) -> u32 ---
 }
 
 GUARD :: u64(0xfedc_ba98_7654_3210)
@@ -80,10 +81,15 @@ failed_start :: proc() -> bool {
 }
 
 main :: proc() {
+	// Bound the entire process, including worker joins and runtime callbacks.
+	_ = alarm(60)
+	defer alarm(0)
 	expected_values = make(map[swift.Task]u64)
 	defer delete(expected_values)
+	check_array_concurrency()
 	check_values()
 	check_strings()
+	check_arrays()
 	check_tasks()
 	assert(fixture.add(17, 9) == 26)
 	assert(fixture.add(0xffff_ffff_ffff_ffff, 9) == 8)

@@ -100,13 +100,12 @@ texts_received :: proc(task: swift.Task, values: fixture.Array_TextValue, error:
 	collection_calls += 1
 }
 
-echo_received :: proc(task: swift.Task, values: fixture.Array_String) {
+echo_received :: proc(task: swift.Task, values: []string, ok: bool) {
 	_ = take_expected(task)
-	assert(task != nil && fixture.Array_String_count(values) == 1)
-	text := fixture.Array_String_get(values, 0) or_else panic("String array element")
-	fixture.Array_String_destroy(values)
-	assert(text == COLLECTION_TEXT)
-	delete(text)
+	assert(task != nil && ok && len(values) == 1)
+	assert(values[0] == COLLECTION_TEXT)
+	for text in values { delete(text) }
+	delete(values)
 	collection_calls += 1
 }
 
@@ -137,17 +136,12 @@ check_collections :: proc() {
 	context.allocator = mem.Allocator{procedure = value_allocator, data = &state}
 	inputs := []string{"", "hello", COLLECTION_TEXT}
 	values := fixture.echo_texts(inputs) or_else panic("Array input")
-	assert(fixture.Array_String_count(values) == len(inputs))
-	for expected, i in inputs {
-		text := fixture.Array_String_get(values, i) or_else panic("Array element")
-		assert(text == expected)
+	assert(len(values) == len(inputs))
+	for text, i in values {
+		assert(text == inputs[i])
 		delete(text)
 	}
-	for index in ([2]int{-1, len(inputs)}) {
-		text, found := fixture.Array_String_get(values, index)
-		assert(!found && len(text) == 0)
-	}
-	fixture.Array_String_destroy(values)
+	delete(values)
 	for remaining in 0..<3 {
 		state.remaining = remaining
 		failed, ok := fixture.echo_texts(inputs)

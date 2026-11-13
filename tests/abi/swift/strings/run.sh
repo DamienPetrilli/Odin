@@ -36,6 +36,8 @@ if grep -E 'Foundation' "$build/libraries.txt" || \
 fi
 if [[ "$sdk" == macosx ]]; then
 	"$build/strings"
+elif [[ "$sdk" == iphonesimulator && -n "${SWIFT_TEST_SIMULATOR:-}" ]]; then
+	xcrun simctl spawn "$SWIFT_TEST_SIMULATOR" "$build/strings"
 else
 	echo "Swift-only string fixture linked for $sdk ($mode)"
 fi

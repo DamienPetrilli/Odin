@@ -32,6 +32,7 @@ cp "$here/main.odin" "$build/main.odin"
 cp "$here/values.odin" "$build/values.odin"
 cp "$here/strings.odin" "$build/strings.odin"
 cp "$here/tasks.odin" "$build/tasks.odin"
+cp "$here/arrays.odin" "$build/arrays.odin"
 
 # Odin imports, checks and links the Swift module in a single invocation.
 "$ODIN" build "$build" \
@@ -46,11 +47,20 @@ grep -q 'SwiftImportFixture.*addLater.*YaF$' "$build/symbols.txt"
 grep -q 'SwiftImportFixture.*addLater.*Tu' "$build/symbols.txt"
 grep -q 'SwiftImportFixture.*3add' "$build/symbols.txt"
 
-if [[ "$sdk" != macosx ]]; then
+# Simulator execution is opt-in and uses a caller-owned, booted device.
+# Do not change the user's simulator state from this test script.
+if [[ "$sdk" == iphoneos || ( "$sdk" == iphonesimulator && -z "${SWIFT_TEST_SIMULATOR:-}" ) ]]; then
 	echo "Swift import fixture linked for $sdk ($mode)"
 	exit 0
 fi
-"$build/import"
+run_fixture() {
+	if [[ "$sdk" == iphonesimulator ]]; then
+		xcrun simctl spawn "$SWIFT_TEST_SIMULATOR" "$1"
+	else
+		"$1"
+	fi
+}
+run_fixture "$build/import"
 
 # A static archive and repeated imports use the same normal build path.
 # Keep the original module as the SDK and replace only the binary with a newer
@@ -72,7 +82,12 @@ check_second_import :: proc "contextless" () {
 	assert(second.add(10, 20) == 30)
 }
 ODIN
-"$ODIN" run "$build" "${odin_target[@]}" "${odin_opt[@]}" -define:EVOLVED_VALUE_ENUM=true -out:"$build/repeated"
+"$ODIN" build "$build" "${odin_target[@]}" "${odin_opt[@]}" -define:EVOLVED_VALUE_ENUM=true -out:"$build/repeated"
+run_fixture "$build/repeated"
+if [[ "$sdk" == iphonesimulator ]]; then
+	echo "Swift import tests passed on iOS simulator ($mode)"
+	exit 0
+fi
 
 # Check all rejected declarations in one import. Each compiler invocation
 # inspects the Swift module; repeating that for each diagnostic is expensive.
@@ -81,7 +96,7 @@ package rejected
 foreign import fixture "swift:fixture/SwiftImportFixture"
 main :: proc() {
 ODIN
-for selection in narrow generic throwing isolated_sync overloaded future optional inout_value direct_value typed_throwing text_later; do
+for selection in narrow generic throwing isolated_sync overloaded future optional inout_value direct_value typed_throwing text_later unsupported_nested_array; do
 	printf '\t_ = fixture.%s\n' "$selection" >> "$build/rejected.odin"
 done
 printf '}\n' >> "$build/rejected.odin"
@@ -89,7 +104,7 @@ if "$ODIN" check "$build/rejected.odin" -file "${odin_target[@]}" > "$build/inva
 	echo "Expected importer to reject unsupported declarations" >&2
 	exit 1
 fi
-for selection in narrow generic throwing isolated_sync overloaded future optional inout_value direct_value typed_throwing text_later; do
+for selection in narrow generic throwing isolated_sync overloaded future optional inout_value direct_value typed_throwing text_later unsupported_nested_array; do
 	if ! grep -F "Swift import:" "$build/invalid.log" | grep -Fq "'$selection'"; then
 		cat "$build/invalid.log" >&2
 		echo "Missing rejection for $selection" >&2

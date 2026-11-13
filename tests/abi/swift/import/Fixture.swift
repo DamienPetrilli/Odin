@@ -285,3 +285,65 @@ public func cancellationError(_ value: Value) async throws -> Value {
 	try Task.checkCancellation()
 	return value
 }
+
+public func arrayWords(_ values: [UInt64], _ delta: UInt64) -> [UInt64] {
+	var result = values
+	for i in result.indices { result[i] &+= delta }
+	return result
+}
+public func arraySigned(_ values: [Int64]) -> [Int64] { values }
+public func arrayDoubles(_ values: [Double]) -> [Double] { values }
+public func arrayWordsLater(_ values: [UInt64], _ delta: UInt64) async -> [UInt64] {
+	await Task.yield()
+	return arrayWords(values, delta)
+}
+public func arrayWordsThrowing(_ values: [UInt64], _ delta: UInt64) async throws -> [UInt64] {
+	await Task.yield()
+	if delta == 0 { throw ValueFailure() }
+	return arrayWords(values, delta)
+}
+
+public struct ArrayHolder {
+	private var storage: [String]
+	public var values: [String] { storage }
+	public mutating func append(_ value: String) { storage.append(value) }
+	public init(_ values: [String]) { self.storage = values }
+	public func changed() -> [String] {
+		var copy = values
+		if !copy.isEmpty { copy[0] = "changed" }
+		return copy
+	}
+}
+public func unsupportedNestedArray(_ values: [[String]]) -> [[String]] { values }
+
+public func arrayLiteral() -> [UInt64] { [7, 11, 19, 23] }
+
+public struct GrowingArray {
+	private var storage: [UInt64]
+	public init(_ values: [UInt64]) { storage = values }
+	public var capacity: UInt64 { UInt64(storage.capacity) }
+	public var values: [UInt64] { storage }
+	public mutating func append(_ count: UInt64) -> UInt64 {
+		var address = storage.withUnsafeBufferPointer { UInt(bitPattern: $0.baseAddress) }
+		var moves: UInt64 = 0
+		for i in 0..<count {
+			storage.append(i)
+			let next = storage.withUnsafeBufferPointer { UInt(bitPattern: $0.baseAddress) }
+			if next != address { moves += 1 }
+			address = next
+		}
+		return moves
+	}
+}
+public func arrayNativeCapacity(_ count: UInt64) -> UInt64 {
+	GrowingArray(Array(repeating: 0, count: Int(count))).capacity
+}
+public func arrayNativeGrowth(_ count: UInt64, _ extra: UInt64) -> UInt64 {
+	var array = GrowingArray(Array(repeating: 0, count: Int(count)))
+	return array.append(extra)
+}
+public func arrayBridgedTexts() -> [String] {
+	let text = NSMutableString(capacity: 64)
+	text.append("日本語 🦉 café embedded\0zero and a longer string")
+	return [text as String]
+}

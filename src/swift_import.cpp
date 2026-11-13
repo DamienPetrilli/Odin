@@ -44,7 +44,7 @@ struct SwiftImportNominal {
 	SwiftImportNominal *argument;
 	Array<SwiftImportCase> cases;
 	SwiftImportValueKind kind;
-	bool supported, is_enum, is_frozen, is_template, is_optional;
+	bool supported, is_enum, is_frozen, is_template, is_optional, is_scalar;
 };
 
 struct SwiftImportParameter {
@@ -201,8 +201,19 @@ gb_internal JsonValue *swift_import_json(Ast *node, String text) {
 	return result;
 }
 
+gb_internal bool swift_import_slice(SwiftImportNominal *type) {
+	return type && type->kind == SwiftImportValue_Array &&
+	       (type->argument->is_scalar || type->argument->kind == SwiftImportValue_String);
+}
+
+gb_internal char const *swift_import_slice_element(SwiftImportNominal *type) {
+	String name = type->argument->name;
+	return name == "UInt64" ? "u64" : name == "Int64" ? "i64" : name == "Double" ? "f64" : "string";
+}
+
 gb_internal SwiftImportType swift_import_nominal_type(SwiftImportNominal *type) {
 	char const *odin = type->kind == SwiftImportValue_String ? "string" : alloc_cstring(permanent_allocator(), type->name);
+	if (swift_import_slice(type)) odin = gb_string_appendc(gb_string_make(permanent_allocator(), "[]"), swift_import_slice_element(type));
 	char const *llvm = type->kind == SwiftImportValue_String ? "{ i64, ptr }" : type->kind == SwiftImportValue_Opaque ? "ptr noalias" : "ptr";
 	return {alloc_cstring(permanent_allocator(), type->swift_name), odin, llvm, type};
 }
@@ -237,6 +248,8 @@ gb_internal SwiftImportNominal *swift_import_string_type(Array<SwiftImportNomina
 }
 
 gb_internal bool swift_import_container_type(String usr, SwiftImportType parameter, SwiftImportType *type, Array<SwiftImportNominal *> *types) {
+	// Nested projected arrays need recursive ownership and failure handling.
+	if (swift_import_slice(parameter.nominal)) return false;
 	bool optional = usr == "s:Sq";
 	bool array = usr == "s:Sa";
 	bool set = usr == "s:Sh";
@@ -290,7 +303,21 @@ gb_internal bool swift_import_api_type(JsonValue *api, SwiftImportType *type, Ar
 	if (children.count == 0) return swift_import_named_type(usr, type, *types);
 	if (children.count != 1) return false;
 	SwiftImportType parameter = {};
-	if (!swift_import_api_type(children[0], &parameter, types, argument) || !parameter.nominal) return false;
+	if (!swift_import_api_type(children[0], &parameter, types, argument)) return false;
+	if (!parameter.nominal) {
+		if (usr != "s:Sa" || !parameter.swift) return false;
+		String name = make_string_c(parameter.swift);
+		for (auto candidate : *types) if (candidate->is_scalar && candidate->name == name) parameter.nominal = candidate;
+		if (!parameter.nominal) {
+			auto scalar = gb_alloc_item(permanent_allocator(), SwiftImportNominal);
+			*scalar = {};
+			scalar->name = name;
+			scalar->swift_name = concatenate_strings(permanent_allocator(), str_lit("Swift."), name);
+			scalar->is_scalar = true;
+			array_add(types, scalar);
+			parameter.nominal = scalar;
+		}
+	}
 	return swift_import_container_type(usr, parameter, type, types);
 }
 
@@ -571,13 +598,10 @@ gb_internal bool swift_import_string_array(SwiftImportType const &type) {
 	return swift_import_kind(type, SwiftImportValue_Array) && type.nominal->argument->kind == SwiftImportValue_String;
 }
 
-gb_internal char const *swift_import_parameter_type(SwiftImportParameter const &param) {
-	return swift_import_string_array(param.type) ? "[]string" : param.type.odin;
-}
-
 gb_internal gbString swift_import_emit_type(gbString source, SwiftImportNominal *type) {
+	if (type->is_scalar) return source;
 	String name = type->name;
-	if (type->kind != SwiftImportValue_String) source = gb_string_append_fmt(source,
+	if (type->kind != SwiftImportValue_String && !swift_import_slice(type)) source = gb_string_append_fmt(source,
 		"// Typed address of a Swift value. Assignment aliases; copy creates an owned value.\n"
 		"%.*s :: distinct rawptr\n", LIT(name));
 	if (type->mangled.len) {
@@ -587,7 +611,7 @@ gb_internal gbString swift_import_emit_type(gbString source, SwiftImportNominal 
 			"@(private)\nforeign swift_library {\n\t@(link_name=\"%.*sMa\")\n"
 			"\t_swift_%.*s_metadata :: proc \"swift\" (request: u64) -> swift.Metadata_Response ---\n}\n", LIT(type->symbol), LIT(name));
 	}
-	if (type->kind == SwiftImportValue_String) return source;
+	if (type->kind == SwiftImportValue_String || swift_import_slice(type)) return source;
 	source = gb_string_append_fmt(source,
 		"@(require_results)\n%.*s_copy :: proc(value: %.*s) -> (copy: %.*s, ok: bool) #optional_ok {\n"
 		"\tstorage := swift.value_copy(rawptr(value), _swift_%.*s_metadata(0).type) or_return\n"
@@ -661,7 +685,8 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	bool receiver = swift_import_has_receiver(fn);
 	bool indirect_result = swift_import_kind(fn.result, SwiftImportValue_Opaque);
 	bool string_result = swift_import_kind(fn.result, SwiftImportValue_String);
-	bool owned_result = fn.result.nominal && !string_result;
+	bool slice_result = swift_import_slice(fn.result.nominal);
+	bool owned_result = fn.result.nominal && !string_result && !slice_result;
 	bool fallible = fn.result.nominal != nullptr;
 	String name = fn.odin_name;
 	gbString params = gb_string_make(permanent_allocator(), "");
@@ -669,17 +694,19 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	if (receiver) params = gb_string_append_fmt(params, "receiver: %.*s", LIT(fn.owner->name));
 	for_array(i, fn.parameters) {
 		auto const &param = fn.parameters[i];
-		if (!param.empty_set) params = gb_string_append_fmt(params, "%s%.*s: %s", gb_string_length(params) ? ", " : "", LIT(param.name), swift_import_parameter_type(param));
-		fallible |= swift_import_kind(param.type, SwiftImportValue_String) || swift_import_string_array(param.type) || (param.consumed && !param.empty_set);
+		if (!param.empty_set) params = gb_string_append_fmt(params, "%s%.*s: %s", gb_string_length(params) ? ", " : "", LIT(param.name), param.type.odin);
+		fallible |= swift_import_kind(param.type, SwiftImportValue_String) || swift_import_slice(param.type.nominal) || (param.consumed && !param.empty_set);
 		if (i) arguments = gb_string_appendc(arguments, ", ");
 		if (param.empty_set) arguments = gb_string_appendc(arguments, "swift.empty_set()");
 		else if (swift_import_kind(param.type, SwiftImportValue_String)) {
 			arguments = gb_string_append_fmt(arguments, "%sarg%td.bits, %sarg%td.object", fn.is_async ? "capture." : "_swift_", i, fn.is_async ? "capture." : "_swift_", i);
+		} else if (swift_import_slice(param.type.nominal)) {
+			arguments = gb_string_append_fmt(arguments, "%s%sarg%td%s", fn.is_collection ? "&" : "", fn.is_async ? "capture." : "_swift_", i, fn.is_collection ? "" : ".storage");
 		} else if (param.type.nominal) {
 			bool load = param.type.nominal->kind != SwiftImportValue_Opaque && !fn.is_collection;
 			if (load) arguments = gb_string_appendc(arguments, "(cast(^rawptr)");
 			if (fn.is_async) arguments = gb_string_append_fmt(arguments, "capture.arg%td", i);
-			else if (swift_import_string_array(param.type) || param.consumed) arguments = gb_string_append_fmt(arguments, "_swift_arg%td", i);
+			else if (param.consumed) arguments = gb_string_append_fmt(arguments, "_swift_arg%td", i);
 			else arguments = gb_string_append_fmt(arguments, "rawptr(%.*s)", LIT(param.name));
 			if (load) arguments = gb_string_appendc(arguments, ")^");
 		} else {
@@ -728,22 +755,23 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 			if (param.empty_set) continue;
 			if (swift_import_kind(param.type, SwiftImportValue_String)) {
 				source = gb_string_append_fmt(source, "\t_swift_arg%td := swift.string_from_odin(%.*s) or_return\n\tdefer %sswift.string_destroy(&_swift_arg%td)%s\n", i, LIT(param.name), param.consumed ? "if !_swift_called { " : "", i, param.consumed ? " }" : "");
-			} else if (swift_import_string_array(param.type)) {
-				source = gb_string_append_fmt(source, "\t_swift_arg%td := swift.array_from_strings(%.*s, _swift_%.*s_metadata(0).type) or_return\n", i, LIT(param.name), LIT(param.type.nominal->name));
+			} else if (swift_import_slice(param.type.nominal)) {
+				source = gb_string_append_fmt(source, "\t_swift_arg%td := swift.array_from_odin(%.*s) or_return\n", i, LIT(param.name));
+				source = gb_string_append_fmt(source, "\tdefer %sswift.array_destroy(_swift_arg%td)%s\n", param.consumed ? "if !_swift_called { " : "", i, param.consumed ? " }" : "");
 			} else if (param.type.nominal) {
 				source = gb_string_append_fmt(source, "\tassert(%.*s != nil, \"Cannot borrow a nil Swift value\")\n", LIT(param.name));
 				if (param.consumed) source = gb_string_append_fmt(source, "\t_swift_arg%td := swift.value_copy(rawptr(%.*s), _swift_%.*s_metadata(0).type) or_return\n", i, LIT(param.name), LIT(param.type.nominal->name));
 			}
-			if (param.type.nominal && param.type.nominal->kind != SwiftImportValue_String && (param.consumed || swift_import_string_array(param.type))) {
-				if (param.consumed) source = gb_string_append_fmt(source, "\tdefer if _swift_called { swift.value_free_uninitialized(_swift_arg%td) } else { swift.value_destroy(_swift_arg%td, _swift_%.*s_metadata(0).type) }\n", i, i, LIT(param.type.nominal->name));
-				else source = gb_string_append_fmt(source, "\tdefer swift.value_destroy(_swift_arg%td, _swift_%.*s_metadata(0).type)\n", i, LIT(param.type.nominal->name));
+			if (param.type.nominal && param.type.nominal->kind != SwiftImportValue_String && !swift_import_slice(param.type.nominal) && param.consumed) {
+				source = gb_string_append_fmt(source, "\tdefer if _swift_called { swift.value_free_uninitialized(_swift_arg%td) } else { swift.value_destroy(_swift_arg%td, _swift_%.*s_metadata(0).type) }\n", i, i, LIT(param.type.nominal->name));
 			}
 		}
 		if (owned_result) source = gb_string_append_fmt(source, "\t_swift_storage := swift.value_allocate(_swift_%.*s_metadata(0).type) or_return\n", LIT(fn.result.nominal->name));
 		char const *assignment = !fn.result.odin || indirect_result ? "" : owned_result ? "(cast(^rawptr)_swift_storage)^ = " : "_swift_value := ";
 		source = gb_string_append_fmt(source, "\t%s_swift_%.*s_native(%s%s%s)\n", assignment, LIT(name), indirect_result ? "_swift_storage" : "", indirect_result && gb_string_length(arguments) ? ", " : "", arguments);
 		if (consumes) source = gb_string_appendc(source, "\t_swift_called = true\n");
-		if (string_result) source = gb_string_appendc(source, "\tdefer swift.string_destroy(&_swift_value)\n\treturn swift.string_to_odin(_swift_value)\n");
+		if (slice_result) source = gb_string_append_fmt(source, "\tdefer swift.array_destroy(swift.Native_Array{_swift_value})\n\treturn swift.array_to_odin(swift.Native_Array{_swift_value}, %s)\n", swift_import_slice_element(fn.result.nominal));
+		else if (string_result) source = gb_string_appendc(source, "\tdefer swift.string_destroy(&_swift_value)\n\treturn swift.string_to_odin(_swift_value)\n");
 		else if (owned_result) source = gb_string_append_fmt(source, "\treturn %s(_swift_storage), true\n", fn.result.odin);
 		else if (fn.result.odin) source = gb_string_append_fmt(source, "\treturn _swift_value%s\n", fallible ? ", true" : "");
 		else if (fallible) source = gb_string_appendc(source, "\treturn true\n");
@@ -753,14 +781,15 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	source = gb_string_append_fmt(source, "@(require_results)\n%.*s :: proc(%s%scompletion: proc(swift.Task", LIT(name), params, gb_string_length(params) ? ", " : "");
 	if (fn.result.odin) source = gb_string_append_fmt(source, ", %s", fn.result.odin);
 	if (fn.is_throwing) source = gb_string_appendc(source, ", swift.Error");
+	if (slice_result) source = gb_string_appendc(source, ", bool");
 	source = gb_string_appendc(source, ")) -> (task: swift.Task, ok: bool) #optional_ok {\n\tif completion == nil");
 	if (receiver) source = gb_string_appendc(source, " || receiver == nil");
-	for (auto const &param : fn.parameters) if (param.type.nominal && !param.empty_set && !swift_import_kind(param.type, SwiftImportValue_String) && !swift_import_string_array(param.type)) source = gb_string_append_fmt(source, " || %.*s == nil", LIT(param.name));
+	for (auto const &param : fn.parameters) if (param.type.nominal && !param.empty_set && !swift_import_kind(param.type, SwiftImportValue_String) && !swift_import_slice(param.type.nominal)) source = gb_string_append_fmt(source, " || %.*s == nil", LIT(param.name));
 	source = gb_string_appendc(source, " { return }\n\tCapture :: struct {\n\t\tcompletion: type_of(completion),\n");
 	if (receiver) source = gb_string_appendc(source, "\t\treceiver: rawptr,\n");
-	for_array(i, fn.parameters) if (!fn.parameters[i].empty_set) source = gb_string_append_fmt(source, "\t\targ%td: %s,\n", i, swift_import_native_type(fn.parameters[i].type));
+	for_array(i, fn.parameters) if (!fn.parameters[i].empty_set) source = gb_string_append_fmt(source, "\t\targ%td: %s,\n", i, swift_import_slice(fn.parameters[i].type.nominal) ? "swift.Native_Array" : swift_import_native_type(fn.parameters[i].type));
 	if (fn.is_collection) source = gb_string_appendc(source, "\t\tcollection_metadata, collection_witness: rawptr,\n");
-	if (fn.result.odin) source = gb_string_append_fmt(source, "\t\tresult: %s,\n", owned_result ? "rawptr" : fn.result.odin);
+	if (fn.result.odin) source = gb_string_append_fmt(source, "\t\tresult: %s,\n", (owned_result || slice_result) ? "rawptr" : fn.result.odin);
 	if (fn.is_throwing) source = gb_string_appendc(source, "\t\terror: swift.Error,\n");
 	source = gb_string_appendc(source, "\t}\n\t_swift_capture := Capture{completion = completion}\n");
 	if (receiver) {
@@ -773,10 +802,11 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		if (swift_import_kind(param.type, SwiftImportValue_String)) {
 			source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = swift.string_from_odin(%.*s) or_return\n\tdefer if !ok { swift.string_destroy(&_swift_capture.arg%td) }\n", i, LIT(param.name), i);
 		} else if (param.type.nominal) {
-			if (swift_import_string_array(param.type)) source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = swift.array_from_strings(%.*s, _swift_%.*s_metadata(0).type) or_return\n", i, LIT(param.name), LIT(param.type.nominal->name));
+			if (swift_import_slice(param.type.nominal)) source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = swift.array_from_odin(%.*s) or_return\n", i, LIT(param.name));
 			else source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = swift.value_copy(rawptr(%.*s), _swift_%.*s_metadata(0).type) or_return\n", i, LIT(param.name), LIT(param.type.nominal->name));
-			source = gb_string_append_fmt(source, "\tdefer if !ok { swift.value_destroy(_swift_capture.arg%td, _swift_%.*s_metadata(0).type) }\n", i, LIT(param.type.nominal->name));
-			if (fn.is_collection && swift_import_string_array(param.type)) source = gb_string_append_fmt(source, "\t_swift_capture.collection_metadata = _swift_%.*s_metadata(0).type\n\t_swift_capture.collection_witness = swift.array_collection_witness(_swift_capture.collection_metadata)\n", LIT(param.type.nominal->name));
+			if (swift_import_slice(param.type.nominal)) source = gb_string_append_fmt(source, "\tdefer if !ok { swift.array_destroy(_swift_capture.arg%td) }\n", i);
+			else source = gb_string_append_fmt(source, "\tdefer if !ok { swift.value_destroy(_swift_capture.arg%td, _swift_%.*s_metadata(0).type) }\n", i, LIT(param.type.nominal->name));
+			if (fn.is_collection && swift_import_slice(param.type.nominal)) source = gb_string_append_fmt(source, "\t_swift_capture.collection_metadata = _swift_%.*s_metadata(0).type\n\t_swift_capture.collection_witness = swift.array_collection_witness(_swift_capture.collection_metadata)\n", LIT(param.type.nominal->name));
 		} else source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = %.*s\n", i, LIT(param.name));
 	}
 	if (owned_result) source = gb_string_append_fmt(source, "\t_swift_capture.result = swift.value_allocate(_swift_%.*s_metadata(0).type) or_return\n\tdefer if !ok { swift.value_free_uninitialized(_swift_capture.result) }\n", LIT(fn.result.nominal->name));
@@ -797,14 +827,23 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		auto const &param = fn.parameters[i];
 		if (param.empty_set) continue;
 		if (param.consumed) {
-			if (param.type.nominal && param.type.nominal->kind != SwiftImportValue_String) source = gb_string_append_fmt(source, "\t\tswift.value_free_uninitialized(capture.arg%td)\n", i);
+			if (param.type.nominal && param.type.nominal->kind != SwiftImportValue_String && !swift_import_slice(param.type.nominal)) source = gb_string_append_fmt(source, "\t\tswift.value_free_uninitialized(capture.arg%td)\n", i);
 		} else if (swift_import_kind(param.type, SwiftImportValue_String)) source = gb_string_append_fmt(source, "\t\tswift.string_destroy(&capture.arg%td)\n", i);
+		else if (swift_import_slice(param.type.nominal)) source = gb_string_append_fmt(source, "\t\tswift.array_destroy(capture.arg%td)\n", i);
 		else if (param.type.nominal) source = gb_string_append_fmt(source, "\t\tswift.value_destroy(capture.arg%td, _swift_%.*s_metadata(0).type)\n", i, LIT(param.type.nominal->name));
 	}
 	if (fn.is_throwing && owned_result) source = gb_string_appendc(source, "\t\tif capture.error != nil {\n\t\t\tswift.value_free_uninitialized(capture.result)\n\t\t\tcapture.result = nil\n\t\t}\n");
+	if (slice_result) {
+		source = gb_string_append_fmt(source, "\t\tresult: %s\n\t\tconverted := false\n", fn.result.odin);
+		if (fn.is_throwing) source = gb_string_appendc(source, "\t\tif capture.error == nil {\n");
+		source = gb_string_append_fmt(source, "\t\tresult, converted = swift.array_to_odin(swift.Native_Array{capture.result}, %s)\n\t\tswift.array_destroy(swift.Native_Array{capture.result})\n", swift_import_slice_element(fn.result.nominal));
+		if (fn.is_throwing) source = gb_string_appendc(source, "\t\t}\n");
+	}
 	source = gb_string_appendc(source, "\t\tcapture.completion(swift.Task(runtime.swift_async_current())");
-	if (fn.result.odin) source = gb_string_append_fmt(source, ", %s(capture.result)", fn.result.odin);
+	if (slice_result) source = gb_string_appendc(source, ", result");
+	else if (fn.result.odin) source = gb_string_append_fmt(source, ", %s(capture.result)", fn.result.odin);
 	if (fn.is_throwing) source = gb_string_appendc(source, ", capture.error");
+	if (slice_result) source = gb_string_appendc(source, ", converted");
 	source = gb_string_append_fmt(source, ")\n\t}\n\ttask = swift.Task(runtime.swift_async_start(rawptr(entry), &_swift_%.*s_descriptor, &_swift_capture, size_of(Capture), invoke, rawptr(completion)))\n\tok = task != nil\n\treturn\n}\n\n", LIT(name));
 	return source;
 }
@@ -1090,7 +1129,9 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	for_array(i, types) {
 		auto type = types[i];
 		if (type->is_template) continue;
-		if (type->kind == SwiftImportValue_String) {
+		if (type->is_scalar) {
+			type->supported = true;
+		} else if (type->kind == SwiftImportValue_String) {
 			type->supported = swift_import_has_line(ir, str_lit("@\"$sSSN\" = external global %swift.type"), true);
 		} else if (type->argument) {
 			type->mangled = swift_import_concrete_metadata(ir, i);

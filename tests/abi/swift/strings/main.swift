@@ -52,8 +52,9 @@ precondition(vectorResult.first == vector.first && vectorResult.second == vector
 precondition(vectorResult.third == vector.third && vectorResult.tag == vector.tag)
 
 checkStrings()
-let samples = [
+let samples = (0...32).map { String(repeating: "x", count: $0) } + [
 	"", "hello", "a\0b", "é", "e\u{301}", "日本語 🦉",
+	"1234567890123é", "123456789012é", "1234567890123\0é",
 	String(repeating: "x", count: 15), String(repeating: "x", count: 16),
 	String(repeating: "日本語 🦉\0", count: 8192),
 	String("prefix: café 🦉 :suffix".dropFirst(8).dropLast(8)),
