@@ -94,22 +94,98 @@ become ordinary Odin `string` parameters. An asynchronous String result is not
 yet exposed: a failed UTF-8 allocation after completion needs a separate error
 contract from Swift `throws`.
 
-Copyable, escapable resilient structs and enums use typed addresses backed by
-Swift metadata. Constructors, methods, getters, nested types and concrete
-single-parameter enum specializations are supported when inspection confirms
-their native calling convention. `Type_copy` creates an independent owned value;
+Copyable, escapable resilient structs use typed addresses backed by Swift
+metadata. Struct constructors, methods, getters and nested types are supported when
+inspection confirms their native calling convention. `Type_copy` creates an independent owned value;
 `Type_destroy` destroys and frees it. Assignment aliases the same address.
 Factory procedures return `(value, ok) #optional_ok`. Nonmutating asynchronous
 receivers and arguments are copied before start returns. A mutating receiver is
 borrowed through completion, so its changes reach the original value. Do not
 access or destroy that receiver while the call is outstanding.
 
-`Type_case` identifies an enum case, including `Unknown_Default` for newer
-resilient cases. `Type_get_case` copies a supported single payload without
-consuming the enum. A payload returned as an owned Swift value needs its own
-destruction. Multi-value case extraction and arbitrary generic specialization
-are not implemented. Optional values are inspected with the same case/payload
-operations; they are not confused with allocation failure.
+Swift optionals map to native `Maybe(T)`, including nested optionals, strings,
+supported slices and projected enums. Supported associated-value enums map to
+native `union #no_nil` types with a named struct per case. Multiple payloads
+become fields; labels are preserved in snake case, with `value` for a single
+unlabeled payload or `value_0`, `value_1`, etc. for multiple unlabeled payloads.
+Cases with identical payload types still have distinct case structs. Concrete
+single-parameter enum specializations and their nested error enums are supported
+when all payloads and their lowering are supported. Enum instance members,
+recursive/indirect enums, noncopyable values and existential payloads are outside
+this subset. Deeper optional nesting whose lowering needs an unsupported integer
+width is also diagnosed; `Maybe(Maybe(u64))` is covered by the fixture. Empty namespace enums are not projected as values.
+
+For example, this ordinary Swift declaration:
+
+```swift
+@frozen public enum Lookup {
+	case found(UInt64)
+	case missing
+	case rejected(code: UInt64, message: String)
+}
+public func echoLookup(_ value: Lookup) -> Lookup { value }
+public func nextPage(_ page: UInt64?) -> UInt64? { page.map { $0 &+ 1 } }
+```
+
+is used directly from Odin:
+
+```odin
+page: Maybe(u64) = u64(41)
+next := example.next_page(page)
+if value, present := next.?; present {
+	assert(value == 42)
+}
+
+// Input text is borrowed; the returned result owns its converted payload.
+input: example.Lookup = example.Lookup_Rejected{7, "Café 📚"}
+result := example.echo_lookup(input) or_return
+defer example.Lookup_destroy(result)
+
+switch item in result {
+case example.Lookup_Found:
+	// item.value
+case example.Lookup_Missing:
+case example.Lookup_Rejected:
+	// item.code and item.message are borrowed from result here.
+}
+```
+
+These are value conversions, not casts between Swift and Odin union layouts.
+The importer verifies native size and register components. Scalar optionals use
+verified inline storage without allocating or resolving metadata on each call.
+Other enum layouts use Swift's metadata and destructive projection/injection
+witnesses. Multi-field offsets come from native tuple metadata. Concrete metadata
+lookups are cached safely across threads. No Swift adapter is linked.
+
+A nonfrozen enum additionally exposes `Type_Unknown`, containing a typed opaque
+owner of the unrecognized native value. `Type_copy`, `Type_destroy` and passing
+that value back to Swift preserve its payload, including cases added by a newer
+library. An unsupported known case is diagnosed rather than silently dropped.
+
+`Type_destroy` recursively cleans the active owned payload. Assignment, a type
+assertion or a switch binding performs an ordinary Odin copy, without implicit
+retaining or deep copying. Clean up the original owned result once. Use
+`Type_copy(result)` for an independent owner; if keeping only a nested imported
+value, use that value's own copy procedure before destroying the parent.
+Hand-constructed inputs containing borrowed strings/slices are not owned results:
+do not destroy a borrowed literal or buffer. The optional allocator on projected
+copy/destroy helpers defaults to `context.allocator`; use the allocator which
+owns the Odin string/slice storage. Opaque native owners remember their allocator.
+
+A scalar optional returns `Maybe(T)` directly. A conversion that can allocate
+returns `(Maybe(T), bool) #optional_ok`: absent with `ok = true` is a valid Swift
+nil; `ok = false` is a conversion failure. Present empty strings and zero values
+remain present. A nested optional preserves each level of absence.
+
+Async allocating enum/optional results add a conversion boolean to completion,
+just like arrays: `proc(task: swift.Task, result: example.Lookup, ok: bool)`.
+With untyped Swift throws, the owned `swift.Error` precedes that boolean.
+Only a successful conversion transfers an owned result to the callback. Failed
+conversions clean all partially constructed fields; a thrown error leaves no
+result to destroy. Trivial async scalar optionals need no conversion boolean.
+Inputs are copied before async start returns, and callback results are independent
+of the completed Swift call frame. These rules do not change native task lifetime
+or cancellation.
 
 Swift `[UInt64]`, `[Int64]`, `[Double]` and `[String]` parameters and results map
 to ordinary Odin `[]u64`, `[]i64`, `[]f64` and `[]string`. Inputs are copied into
@@ -244,8 +320,8 @@ equality compares bytes; Swift's character count and canonically equivalent
 Unicode equality are different operations. A plain Odin string does not gain
 Swift's character semantics.
 
-See `run.sh`, `main.odin`, `values.odin`, `strings.odin`, `arrays.odin` and
-`tasks.odin` for executable round trips, overlapping tasks, native handle identity,
+See `run.sh`, `main.odin`, `values.odin`, `enums.odin`, `strings.odin`,
+`arrays.odin` and `tasks.odin` for executable round trips, overlapping tasks, native handle identity,
 preserved context, guarded allocations, ownership, failure paths and rejection
 diagnostics.
 

@@ -45,10 +45,9 @@ check_strings :: proc() {
 		assert(result == sample)
 		delete(result)
 		outcome := fixture.text_outcome(sample) or_else panic("String enum")
-		result = fixture.TextOutcome_get_text(outcome) or_else panic("String payload")
+		item := outcome.(fixture.TextOutcome_Text)
+		assert(item.value == sample)
 		fixture.TextOutcome_destroy(outcome)
-		assert(result == sample)
-		delete(result)
 
 		// The caller may overwrite and free its UTF-8 immediately after start.
 		// The Swift task must own independent text through suspension.
@@ -109,18 +108,17 @@ echo_received :: proc(task: swift.Task, values: []string, ok: bool) {
 	collection_calls += 1
 }
 
-accepted_text :: proc(task: swift.Task, outcome: fixture.ValueOutcome, error: swift.Error) {
+accepted_text :: proc(task: swift.Task, outcome: fixture.ValueOutcome, error: swift.Error, ok: bool) {
 	assert(pthread_main_np() == 1)
 	expected := take_expected(task)
 	defer swift.error_release(error)
 	if expected == 0 {
-		assert(outcome == nil && error != nil)
+		assert(!ok && error != nil)
 	} else {
-		assert(error == nil)
-		value := fixture.ValueOutcome_get_accepted(outcome) or_else panic("Main actor result")
+		assert(ok && error == nil)
+		item := outcome.(fixture.ValueOutcome_Accepted)
+		assert(fixture.Value_value(item.value) == expected)
 		fixture.ValueOutcome_destroy(outcome)
-		assert(fixture.Value_value(value) == expected)
-		fixture.Value_destroy(value)
 	}
 	actor_calls += 1
 }

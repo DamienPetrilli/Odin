@@ -61,34 +61,30 @@ iterator_calls: int
 test_iterator: fixture.ValueSequence_Iterator
 mutating_value: fixture.Value
 
-iterator_received :: proc(task: swift.Task, result: fixture.Optional_Validation_Value) {
+iterator_received :: proc(task: swift.Task, result: Maybe(fixture.Validation_Value), ok: bool) {
 	_ = take_expected(task)
+	assert(ok)
 	iterator := test_iterator
 	defer fixture.Optional_Validation_Value_destroy(result)
 	iterator_calls += 1
 	if iterator_calls == 1 {
-		assert(fixture.Optional_Validation_Value_case(result) == .Some)
-		validation := fixture.Optional_Validation_Value_get_some(result) or_else panic("Missing element")
-		assert(fixture.Validation_Value_case(validation) == .Valid)
-		value := fixture.Validation_Value_get_valid(validation) or_else panic("Invalid element")
-		fixture.Validation_Value_destroy(validation)
-		assert(fixture.Value_value(value) == 73)
-		fixture.Value_destroy(value)
-		next, ok := fixture.ValueSequence_Iterator_next(iterator, iterator_received)
-		assert(ok)
+		validation, present := result.?
+		assert(present)
+		item := validation.(fixture.Validation_Value_Valid)
+		assert(fixture.Value_value(item.value) == 73)
+		next, started := fixture.ValueSequence_Iterator_next(iterator, iterator_received)
+		assert(started)
 		track_task(next)
 	} else {
-		assert(iterator_calls == 2 && fixture.Optional_Validation_Value_case(result) == .None)
-		value, found := fixture.Optional_Validation_Value_get_some(result)
-		assert(!found && value == nil)
+		assert(iterator_calls == 2 && result == nil)
 		fixture.ValueSequence_Iterator_destroy(iterator)
 	}
 }
 
 check_enums :: proc() {
 	named := fixture.named_payload() or_else panic("Named generic payload")
-	assert(fixture.NamedPayload_Value_case(named) == .Named)
-	payload := fixture.NamedPayload_Value_get_named(named) or_else panic("Named payload")
+	item := named.(fixture.NamedPayload_Value_Named)
+	payload := fixture.GenericTypeParam_copy(item.value) or_else panic("Independent payload")
 	fixture.NamedPayload_Value_destroy(named)
 	assert(fixture.GenericTypeParam_first(payload) == 11 && fixture.GenericTypeParam_last(payload) == 55)
 	fixture.GenericTypeParam_destroy(payload)
@@ -99,26 +95,35 @@ check_enums :: proc() {
 
 	for selection in 0..<3 {
 		result := fixture.value_outcome(u64(selection)) or_else panic("Enum result")
-		if selection == 1 {
-			assert(fixture.ValueOutcome_case(result) == .Accepted)
-			value := fixture.ValueOutcome_get_accepted(result) or_else panic("Enum payload")
+		switch item in result {
+		case fixture.ValueOutcome_Accepted:
+			assert(selection == 1)
+			value := fixture.Value_copy(item.value) or_else panic("Independent payload")
 			fixture.ValueOutcome_destroy(result)
 			assert(fixture.Value_value(value) == 73)
 			fixture.Value_destroy(value)
-		} else {
-			expected: fixture.ValueOutcome_Case = .Pending
-			if selection == 2 { expected = .Cancelled }
-			assert(fixture.ValueOutcome_case(result) == expected)
-			value, found := fixture.ValueOutcome_get_accepted(result)
-			assert(!found && value == nil)
+		case fixture.ValueOutcome_Pending:
+			assert(selection == 0)
 			fixture.ValueOutcome_destroy(result)
+		case fixture.ValueOutcome_Cancelled:
+			assert(selection == 2)
+			fixture.ValueOutcome_destroy(result)
+		case fixture.ValueOutcome_Unknown:
+			panic("Unexpected new case")
 		}
 	}
 	result := fixture.value_outcome(99) or_else panic("Evolved enum result")
 	when #config(EVOLVED_VALUE_ENUM, false) {
-		assert(fixture.ValueOutcome_case(result) == .Unknown_Default)
+		_, unknown := result.(fixture.ValueOutcome_Unknown)
+		assert(unknown && fixture.read_outcome(result) == 33)
+		kept := fixture.ValueOutcome_copy(result) or_else panic("Unknown copy")
+		fixture.ValueOutcome_destroy(result)
+		result = fixture.echo_outcome(kept) or_else panic("Unknown round trip")
+		fixture.ValueOutcome_destroy(kept)
+		assert(fixture.read_outcome(result) == 33)
 	} else {
-		assert(fixture.ValueOutcome_case(result) == .Pending)
+		_, pending := result.(fixture.ValueOutcome_Pending)
+		assert(pending)
 	}
 	fixture.ValueOutcome_destroy(result)
 	assert(fixture.live_value_count() == 0)

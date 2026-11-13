@@ -4137,7 +4137,7 @@ gb_internal bool is_swift_abi_slice_parameter(Type *type) {
 
 gb_internal bool is_type_supported_by_swift_abi(Type *type) {
 	type = base_type(type);
-	if (type == t_bool || is_swift_abi_scalar(type)) {
+	if (type == t_bool || type == t_u8 || type == t_u16 || is_swift_abi_scalar(type)) {
 		return true;
 	}
 	if (type == nullptr) {
@@ -4159,13 +4159,14 @@ gb_internal bool is_type_supported_by_swift_abi(Type *type) {
 	}
 
 	// Full-width scalars have the same offsets in Swift and Odin. An isolated
-	// trailing byte also has its own component (for example, Optional<Int>).
+	// trailing narrow integer has its own component (for example, Optional<Int>).
 	// Indirect values must have equal size and stride in both languages.
 	// Other narrow fields require merging; nested records can reuse tail padding.
 	for_array(i, s.fields) {
 		Type *field_type = s.fields[i]->type;
-		bool trailing_byte = i > 0 && i+1 == s.fields.count && s.fields.count <= 4 && base_type(field_type) == t_u8;
-		if (!is_swift_abi_scalar(field_type) && !trailing_byte) {
+		bool trailing_integer = i > 0 && i+1 == s.fields.count && s.fields.count <= 4 &&
+		                        (base_type(field_type) == t_u8 || base_type(field_type) == t_u16);
+		if (!is_swift_abi_scalar(field_type) && !trailing_integer) {
 			return false;
 		}
 	}
@@ -4282,7 +4283,7 @@ gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc
 	if (swift_async) {
 		for (isize i = 0; i < param_count; i++) {
 			Entity *param = params->Tuple.variables[i];
-			if (param->flags & EntityFlag_ByPtr || !is_swift_abi_scalar(param->type)) {
+			if (param->flags & EntityFlag_ByPtr || !is_type_supported_by_swift_abi(param->type)) {
 				error(param->token, "Unsupported parameter type for the \"swift/async\" calling convention");
 				success = false;
 			}

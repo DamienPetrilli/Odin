@@ -2727,7 +2727,7 @@ gb_internal lbArgType lb_swift_abi_value(LLVMContextRef c, LLVMTypeRef type, boo
 		return lb_arg_type_direct(type);
 	}
 
-	// The checker accepts full-width fields and an optional trailing byte.
+	// The checker accepts full-width fields and an optional trailing narrow integer.
 	// On Apple arm64, Swift passes at most four such components directly.
 	LLVMTypeRef fields[4];
 	unsigned count = LLVMCountStructElementTypes(type);
@@ -2772,7 +2772,7 @@ gb_internal LB_ABI_INFO(lb_get_abi_info_internal) {
 	case ProcCC_None:
 	case ProcCC_InlineAsm:
 		{
-			bool is_swift = calling_convention == ProcCC_Swift;
+			bool is_swift = calling_convention == ProcCC_Swift || calling_convention == ProcCC_SwiftAsync;
 			lbFunctionType *ft = permanent_alloc_item<lbFunctionType>();
 			ft->ctx = c;
 			ft->args = array_make<lbArgType>(lb_function_type_args_allocator(), arg_count);

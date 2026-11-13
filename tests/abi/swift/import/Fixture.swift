@@ -370,3 +370,74 @@ public struct Void {
 
 public func namedVoid() -> Void { Void(73) }
 public func actualVoid() -> Swift.Void {}
+
+public func echoOutcome(_ value: ValueOutcome) -> ValueOutcome { value }
+public func readOutcome(_ value: ValueOutcome) -> UInt64 {
+	switch value {
+	case .accepted(let item): return item.value
+	case .pending, .cancelled: return 0
+#if EVOLVED_VALUE_ENUM
+	case .future(let first, let second): return first.value + second.value
+#endif
+	}
+}
+
+public func nextPage(_ page: UInt64?) -> UInt64? { page.map { $0 &+ 1 } }
+public func nestedOptional(_ value: UInt64??) -> UInt64?? { value }
+public func deepOptional(_ value: UInt64????) -> UInt64???? { value }
+public func optionalDouble(_ value: Double?) -> Double? { value.map { $0 + 0.5 } }
+public func optionalText(_ value: String?) -> String? { value }
+public func optionalWords(_ value: [UInt64]?) -> [UInt64]? { value }
+
+@frozen public enum Lookup {
+	case found(UInt64)
+	case other(UInt64)
+	case missing
+	case rejected(code: UInt64, message: String)
+}
+public func echoLookup(_ value: Lookup) -> Lookup { value }
+public func lookupLater(_ value: Lookup) async -> Lookup {
+	await Task.yield()
+	return value
+}
+public func pageLater(_ value: UInt64?) async -> UInt64? {
+	await Task.yield()
+	return nextPage(value)
+}
+
+public enum Payloads {
+	case pair(Value, Value)
+	case texts([String])
+	case empty
+}
+public func echoPayloads(_ value: Payloads) -> Payloads { value }
+public func payloadsLater(_ value: Payloads) async -> Payloads {
+	await Task.yield()
+	return value
+}
+
+@frozen public enum Verification<T> {
+	case verified(T)
+	case unverified(T, Failure)
+	public enum Failure: Error {
+		case invalidSignature
+		case blocked(code: UInt64, message: String)
+	}
+}
+public func verification(_ value: Value) -> Verification<Value> {
+	.unverified(value, .blocked(code: 7, message: "Verification failed"))
+}
+
+// An uninhabited namespace must not break unrelated imported declarations.
+public enum Namespace {
+	public static func answer() -> UInt64 { 42 }
+}
+
+public indirect enum IndirectPayload { case value(UInt64) }
+public func indirectPayload() -> IndirectPayload { .value(7) }
+public enum RecursivePayload { case end; indirect case next(RecursivePayload) }
+public func recursivePayload() -> RecursivePayload { .end }
+public enum ExistentialPayload { case value(any Error) }
+public func existentialPayload(_ value: ExistentialPayload) -> ExistentialPayload { value }
+public enum CollidingFields { case value(bookID: UInt64, bookId: UInt64) }
+public func collidingFields() -> CollidingFields { .value(bookID: 1, bookId: 2) }

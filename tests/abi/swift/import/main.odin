@@ -88,6 +88,7 @@ main :: proc() {
 	defer delete(expected_values)
 	check_array_concurrency()
 	check_values()
+	check_projected_enums()
 	check_strings()
 	check_arrays()
 	check_tasks()

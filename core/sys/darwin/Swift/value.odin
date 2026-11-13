@@ -93,3 +93,32 @@ value_destroy :: proc(value, metadata: rawptr) {
 	value_witnesses(metadata).destroy(value, metadata)
 	value_free_uninitialized(value)
 }
+
+// Operations on initialized inline storage. Unlike value_destroy, these do
+// not free storage; the importer owns the surrounding native temporary.
+value_deinitialize :: proc(value, metadata: rawptr) {
+	value_witnesses(metadata).destroy(value, metadata)
+}
+
+value_initialize_copy :: proc(destination, source, metadata: rawptr) {
+	value_witnesses(metadata).copy(destination, source, metadata)
+}
+
+// Consume the source even if allocating the independent owner fails. This
+// lets a projected enum clean up each field exactly once during a partial take.
+@(require_results)
+value_take :: proc(source, metadata: rawptr, allocator := context.allocator) -> (value: rawptr, ok: bool) #optional_ok {
+	value, ok = value_allocate(metadata, allocator)
+	if !ok {
+		value_deinitialize(source, metadata)
+		return
+	}
+	take := cast(proc "c" (destination, source, metadata: rawptr) -> rawptr)value_witnesses(metadata).take
+	take(value, source, metadata)
+	return
+}
+
+// Fixed standard-library metadata shared by scalar and tuple projections.
+value_metadata :: proc($T: typeid) -> rawptr where T == u64 || T == i64 || T == f64 || T == string {
+	return array_element_metadata(T)
+}
