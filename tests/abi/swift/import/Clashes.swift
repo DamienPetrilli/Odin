@@ -14,6 +14,8 @@ public struct Value {
 	public let value: Swift.UInt64
 	public func destroy<T>(_ value: T) {}
 }
+#elseif FROZEN_ENUM_CASE
+@frozen public enum Value { case value, Value }
 #elseif ENUM_CASE
 public enum Value { case value, Value, unknown_Default }
 #elseif STRING_TYPE

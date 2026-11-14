@@ -1,5 +1,5 @@
 // Swift declarations describe native Swift-ABI entry points emitted by Odin.
-// Only nominal type metadata and value initializers require a Swift object.
+// Nominal type metadata, value initializers and enum conformances use a Swift object.
 
 struct SwiftExportProcedure {
 	Entity *entity;
@@ -42,6 +42,30 @@ gb_internal char const *swift_export_scalar(Type *type) {
 	return nullptr;
 }
 
+gb_internal char const *swift_export_enum_raw_type(Type *type) {
+	Type *raw = base_type(base_type(type)->Enum.base_type);
+	if (raw == t_i8)   return "Swift.Int8";
+	if (raw == t_u8)   return "Swift.UInt8";
+	if (raw == t_i16)  return "Swift.Int16";
+	if (raw == t_u16)  return "Swift.UInt16";
+	if (raw == t_i32)  return "Swift.Int32";
+	if (raw == t_u32)  return "Swift.UInt32";
+	if (raw == t_i64)  return "Swift.Int64";
+	if (raw == t_u64)  return "Swift.UInt64";
+	if (raw == t_int)  return "Swift.Int";
+	if (raw == t_uint) return "Swift.UInt";
+	return nullptr;
+}
+
+// Verified against the target Swift compiler before emitting entry points.
+// A single-case enum has no native argument or result component.
+gb_internal Type *swift_export_enum_tag_type(Type *type) {
+	isize count = base_type(type)->Enum.fields.count;
+	if (count == 1) return nullptr;
+	if (count <= 256) return t_u8;
+	return t_u16;
+}
+
 gb_internal String swift_export_type_name(Type *type, bool escaped = false) {
 	if (char const *name = swift_export_scalar(type)) return make_string_c(name);
 	if (is_type_slice(type)) {
@@ -53,19 +77,40 @@ gb_internal String swift_export_type_name(Type *type, bool escaped = false) {
 	return escaped ? concatenate3_strings(permanent_allocator(), str_lit("`"), name, str_lit("`")) : name;
 }
 
+gb_internal GB_COMPARE_PROC(swift_export_enum_value_compare) {
+	Entity *x = *cast(Entity *const *)a;
+	Entity *y = *cast(Entity *const *)b;
+	return big_int_cmp(&x->Constant.value.value_integer, &y->Constant.value.value_integer);
+}
+
 gb_internal bool swift_export_check_type(Type *type, bool parameter) {
 	if (swift_export_scalar(type)) return true;
 	Type *bt = base_type(type);
 	if (parameter && type == bt && bt->kind == Type_Slice) {
 		return swift_export_scalar(bt->Slice.elem) != nullptr && bt->Slice.elem != t_bool;
 	}
-	if (type->kind != Type_Named || bt->kind != Type_Struct || !is_type_supported_by_swift_abi(type)) return false;
-	// Full-width trivial fields have identical offsets, size and stride.
-	for (Entity *field : bt->Struct.fields) {
-		if (!swift_export_scalar(field->type) || field->type == t_bool || is_blank_ident(field->token)) return false;
-
-	}
+	if (type->kind != Type_Named || !is_type_supported_by_swift_abi(type)) return false;
 	for (Type *existing : swift_export_types) if (existing == type) return true;
+	if (bt->kind == Type_Enum) {
+		if (bt->Enum.fields.count == 0 || bt->Enum.fields.count > 65536) {
+			error(type->Named.type_name->token, "Swift export: enums require between 1 and 65536 cases");
+			return false;
+		}
+		auto fields = array_make<Entity *>(temporary_allocator());
+		for (Entity *field : bt->Enum.fields) array_add(&fields, field);
+		array_sort(fields, swift_export_enum_value_compare);
+		for (isize i = 1; i < fields.count; i++) {
+			if (compare_exact_values(Token_CmpEq, fields[i]->Constant.value, fields[i-1]->Constant.value)) {
+				error(fields[i]->token, "Swift export: enum raw values must be unique");
+				return false;
+			}
+		}
+	} else if (bt->kind == Type_Struct) {
+		// Full-width trivial fields have identical offsets, size and stride.
+		for (Entity *field : bt->Struct.fields) {
+			if (!swift_export_scalar(field->type) || field->type == t_bool || is_blank_ident(field->token)) return false;
+		}
+	} else return false;
 	array_add(&swift_export_types, type);
 	return true;
 }
@@ -85,6 +130,8 @@ gb_internal bool is_swift_export_procedure(Checker *checker, Entity *e) {
 	ProcCallingConvention cc = base_type(e->type)->Proc.calling_convention;
 	return cc == ProcCC_Swift || cc == ProcCC_SwiftAsync;
 }
+
+gb_internal bool swift_export_check_enums();
 
 gb_internal bool swift_export_prepare(Checker *checker) {
 	// Only static library builds produce a Swift module. Object/executable
@@ -155,7 +202,7 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 		}
 		if (type->Proc.result_count) valid &= swift_export_check_type(type->Proc.results->Tuple.variables[0]->type, false);
 		if (!valid) {
-			error(e->token, "Swift export: expected a synchronous Swift procedure without ABI parameter attributes, with i64, u64, f64, bool, flat scalar structs, or borrowed scalar slice parameters, and at most one scalar/struct result");
+			error(e->token, "Swift export: expected a synchronous Swift procedure without ABI parameter attributes, with i64, u64, f64, bool, integer enums, flat scalar structs, or borrowed scalar slice parameters, and at most one scalar/enum/struct result");
 			continue;
 		}
 		SwiftExportProcedure proc = {};
@@ -177,13 +224,18 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 		} else if (name == build_context.swift_module_name) {
 			error(type->Named.type_name->token, "Swift export: type '%.*s' shadows a module name; rename the type or select another -swift-module-name", LIT(name));
 		}
-		for (Entity *field : base_type(type)->Struct.fields) {
-			for (Entity *other : base_type(type)->Struct.fields) {
-				if (field != other && swift_export_name(field->token.string, false) == swift_export_name(other->token.string, false)) {
-					error(field->token, "Swift export: field '%.*s' collides after case conversion", LIT(field->token.string));
-				}
-			}
-			if (!swift_import_identifier(swift_export_name(field->token.string, false))) error(field->token, "Swift export: invalid field name after case conversion");
+		Slice<Entity *> fields = {};
+		if (is_type_enum(type)) fields = {base_type(type)->Enum.fields.data, base_type(type)->Enum.fields.count};
+		else fields = base_type(type)->Struct.fields;
+		StringMap<Entity *> members = {};
+		string_map_init(&members);
+		defer (string_map_destroy(&members));
+		for (Entity *field : fields) {
+			String member = swift_export_name(field->token.string, false);
+			if (string_map_get(&members, member)) {
+				error(field->token, "Swift export: field '%.*s' collides after case conversion", LIT(field->token.string));
+			} else string_map_set(&members, member, field);
+			if (!swift_import_identifier(member)) error(field->token, "Swift export: invalid field name after case conversion");
 		}
 		for (Type *other : swift_export_types) {
 			if (other != type && swift_export_type_name(other) == name) error(type->Named.type_name->token, "Swift export: duplicate type name '%.*s'", LIT(name));
@@ -208,7 +260,99 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 	swift_export_directory = make_string_c(directory);
 	if (!swift_import_directories.allocator.proc) array_init(&swift_import_directories, permanent_allocator());
 	array_add(&swift_import_directories, swift_export_directory);
-	return true;
+	return swift_export_check_enums();
+#endif
+}
+
+gb_internal gbString swift_export_emit_enum(gbString source, Type *type) {
+	String name = swift_export_type_name(type);
+	source = gb_string_append_fmt(source, "@frozen public enum `%.*s`: %s {\n", LIT(name), swift_export_enum_raw_type(type));
+	for (Entity *field : base_type(type)->Enum.fields) {
+		String member = swift_export_name(field->token.string, false);
+		gbString value = exact_value_to_string(field->Constant.value);
+		source = gb_string_append_fmt(source, "\tcase `%.*s` = %s\n", LIT(member), value);
+		gb_string_free(value);
+	}
+	return gb_string_appendc(source, "}\n");
+}
+
+gb_internal bool swift_export_check_enums() {
+#if !defined(GB_SYSTEM_OSX)
+	return false;
+#else
+	gbString source = gb_string_make(permanent_allocator(), "");
+	for_array(i, swift_export_types) {
+		Type *type = swift_export_types[i];
+		if (!is_type_enum(type)) continue;
+		source = swift_export_emit_enum(source, type);
+		String name = swift_export_type_name(type, true);
+		source = gb_string_append_fmt(source,
+			"@_silgen_name(\"odin_enum_echo_%td\") public func echo%td(_ value: %.*s) -> %.*s { value }\n",
+			i, i, LIT(name), LIT(name));
+		// Check both ends of the declaration-order tag sequence, independently
+		// of the enum's raw values. The single-case functions return void.
+		auto fields = base_type(type)->Enum.fields;
+		for (isize j = 0; j < 2; j++) {
+			isize index = j ? fields.count-1 : 0;
+			String member = swift_export_name(fields[index]->token.string, false);
+			source = gb_string_append_fmt(source,
+				"@_silgen_name(\"odin_enum_case_%td_%td\") public func case%td_%td() -> %.*s { .`%.*s` }\n",
+				i, j, i, j, LIT(name), LIT(member));
+		}
+	}
+	if (!gb_string_length(source)) return true;
+	String dir = swift_export_directory;
+	if (!swift_import_write(swift_export_node, swift_import_path(dir, "Enums.swift"), source, true)) return false;
+	auto args = array_make<String>(permanent_allocator());
+	array_add(&args, str_lit("--sdk"));
+	array_add(&args, selected_subtarget == Subtarget_iPhone ? str_lit("iphoneos") : selected_subtarget == Subtarget_iPhoneSimulator ? str_lit("iphonesimulator") : str_lit("macosx"));
+	char const *flags[] = {"swiftc", "-parse-as-library", "-enable-library-evolution", "-Onone", "-emit-ir", "-target"};
+	for (char const *flag : flags) array_add(&args, make_string_c(flag));
+	array_add(&args, build_context.metrics.target_triplet);
+	array_add(&args, str_lit("-module-name"));
+	array_add(&args, build_context.swift_module_name);
+	array_add(&args, str_lit("-module-cache-path"));
+	array_add(&args, swift_import_path(temporary_directory(permanent_allocator()), "odin-swift-module-cache"));
+	array_add(&args, swift_import_path(dir, "Enums.swift"));
+	array_add(&args, str_lit("-o"));
+	array_add(&args, swift_import_path(dir, "Enums.ll"));
+	if (!swift_import_exec(swift_export_node, dir, args, nullptr, true)) return false;
+	String ir = swift_import_read(swift_import_path(dir, "Enums.ll"));
+	LLVMContextRef context = LLVMContextCreate();
+	defer (LLVMContextDispose(context));
+	LLVMMemoryBufferRef buffer = LLVMCreateMemoryBufferWithMemoryRangeCopy(cast(char const *)ir.text, ir.len, "Swift enum export");
+	LLVMModuleRef module = nullptr;
+	char *diagnostic = nullptr;
+	if (LLVMParseIRInContext(context, buffer, &module, &diagnostic)) {
+		error(swift_export_node, "Swift export: cannot inspect enum lowering: %s", diagnostic ? diagnostic : "invalid IR");
+		LLVMDisposeMessage(diagnostic);
+		return false;
+	}
+	defer (LLVMDisposeModule(module));
+	for_array(i, swift_export_types) {
+		Type *type = swift_export_types[i];
+		if (!is_type_enum(type)) continue;
+		isize count = base_type(type)->Enum.fields.count;
+		unsigned bits = count == 1 ? 0 : count <= 256 ? 8 : 16;
+		LLVMTypeRef component = bits ? LLVMIntTypeInContext(context, bits) : LLVMVoidTypeInContext(context);
+		gbString name = gb_string_append_fmt(gb_string_make(temporary_allocator(), ""), "odin_enum_echo_%td", i);
+		LLVMValueRef echo = LLVMGetNamedFunction(module, name);
+		bool valid = echo && LLVMGetFunctionCallConv(echo) == LLVMSwiftCallConv &&
+		             LLVMGetReturnType(LLVMGlobalGetValueType(echo)) == component && LLVMCountParams(echo) == (bits ? 1 : 0);
+		if (valid && bits) valid = LLVMTypeOf(LLVMGetParam(echo, 0)) == component;
+		for (isize j = 0; j < 2; j++) {
+			name = gb_string_append_fmt(gb_string_make(temporary_allocator(), ""), "odin_enum_case_%td_%td", i, j);
+			LLVMValueRef function = LLVMGetNamedFunction(module, name);
+			valid &= function && LLVMGetFunctionCallConv(function) == LLVMSwiftCallConv &&
+			         LLVMCountParams(function) == 0 && LLVMGetReturnType(LLVMGlobalGetValueType(function)) == component;
+			if (function && bits) {
+				LLVMValueRef value = swift_import_return(function);
+				valid &= value && LLVMIsAConstantInt(value) && LLVMConstIntGetZExtValue(value) == cast(u64)(j ? count-1 : 0);
+			}
+		}
+		if (!valid) error(type->Named.type_name->token, "Swift export: unsupported native enum lowering for '%.*s'", LIT(type->Named.name));
+	}
+	return !any_errors();
 #endif
 }
 
@@ -218,6 +362,10 @@ gb_internal bool swift_export_link(Array<String> const &objects) {
 #else
 	gbString source = gb_string_make(permanent_allocator(), "// Generated by Odin.\n");
 	for (Type *type : swift_export_types) {
+		if (is_type_enum(type)) {
+			source = swift_export_emit_enum(source, type);
+			continue;
+		}
 		String name = swift_export_type_name(type);
 		source = gb_string_append_fmt(source, "@frozen public struct `%.*s` {\n", LIT(name));
 		for (Entity *field : base_type(type)->Struct.fields) {

@@ -103,6 +103,37 @@ receivers and arguments are copied before start returns. A mutating receiver is
 borrowed through completion, so its changes reach the original value. Do not
 access or destroy that receiver while the call is outstanding.
 
+Frozen Swift enums with no associated values map to ordinary Odin `enum u32`
+types. Cases use an initial capital, so Swift `case running` becomes `.Running`.
+They have ordinary value-copy semantics and need no copy/destroy helpers. The
+compiler converts their case tags to the inspected native width, including a
+zero-sized single case; it does not pass the Odin enum's storage as Swift storage.
+Nonfrozen enums still use unions with an owned `Unknown` alternative, even when
+today's cases have no payload.
+
+```swift
+@frozen public enum Mode { case idle, running }
+public func echoMode(_ value: Mode) -> Mode { value }
+
+@frozen public enum Code: UInt64 { case first = 10, second = 20 }
+```
+
+```odin
+mode := example.echo_mode(.Running)
+assert(mode == .Running)
+code, present := example.Code_init_raw_value(20).?
+assert(present && code == .Second)
+assert(example.Code_init_raw_value(11) == nil)
+```
+
+Raw values are distinct from ABI case tags: `u32(code)` above is the case tag,
+not the Swift raw value 20. Supported failable initializers preserve `Maybe(T)`;
+a valid absent result is not a failed conversion. Initializers with owned inputs
+or results additionally report conversion success using the existing boolean.
+Enum instance getters/methods, including `rawValue`, remain outside this subset.
+Known native tag widths are checked from the Swift compiler; unfamiliar lowering
+is rejected. Names that collide after case conversion are diagnosed.
+
 Swift optionals map to native `Maybe(T)`, including nested optionals, strings,
 supported slices and projected enums. Supported associated-value enums map to
 native `union #no_nil` types with a named struct per case. Multiple payloads

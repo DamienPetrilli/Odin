@@ -157,6 +157,40 @@ gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool ha
 	return lb_emit_runtime_call(p, "swift_async_start", args);
 }
 
+// Convert only at the generated module entry. Ordinary Odin enum variables
+// and calls retain their declared raw values. Invalid results trap even when
+// assertions are disabled; never manufacture an invalid Swift enum value.
+gb_internal lbValue lb_swift_export_enum(lbProcedure *p, Type *type, lbValue value, bool to_swift) {
+	lbModule *m = p->module;
+	auto fields = base_type(type)->Enum.fields;
+	Type *tag_type = swift_export_enum_tag_type(type);
+	if (!to_swift && !tag_type) return lb_const_value(m, type, fields[0]->Constant.value);
+	if (!tag_type) tag_type = t_u8;
+	Type *result_type = to_swift ? tag_type : type;
+	lbBlock *invalid = lb_create_block(p, "swift.enum.invalid");
+	lbBlock *done = lb_create_block(p, "swift.enum.done");
+	LLVMValueRef branch = LLVMBuildSwitch(p->builder, value.value, invalid->block, cast(unsigned)fields.count);
+	auto values = array_make<LLVMValueRef>(temporary_allocator());
+	auto blocks = array_make<LLVMBasicBlockRef>(temporary_allocator());
+	for_array(i, fields) {
+		lbValue raw = lb_const_value(m, type, fields[i]->Constant.value);
+		lbValue tag = lb_const_int(m, tag_type, i);
+		lbBlock *block = lb_create_block(p, "swift.enum.case");
+		LLVMAddCase(branch, to_swift ? raw.value : tag.value, block->block);
+		lb_start_block(p, block);
+		array_add(&values, to_swift ? tag.value : raw.value);
+		array_add(&blocks, block->block);
+		lb_emit_jump(p, done);
+	}
+	lb_start_block(p, invalid);
+	lb_call_intrinsic(p, "llvm.trap", nullptr, 0, nullptr, 0);
+	LLVMBuildUnreachable(p->builder);
+	lb_start_block(p, done);
+	LLVMValueRef result = LLVMBuildPhi(p->builder, lb_type(m, result_type), "swift.enum");
+	LLVMAddIncoming(result, values.data, blocks.data, cast(unsigned)values.count);
+	return lbValue{result, result_type};
+}
+
 // Module entries preserve their generated link names and call the exported
 // Swift procedures with their native convention, without an Odin context.
 gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
@@ -172,7 +206,9 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 		auto params = array_make<Type *>(temporary_allocator());
 		for (isize i = 0; i < original->Proc.param_count; i++) {
 			Type *type = original->Proc.params->Tuple.variables[i]->type;
-			if (is_type_slice(type)) {
+			if (is_type_enum(type)) {
+				if (Type *tag = swift_export_enum_tag_type(type)) array_add(&params, tag);
+			} else if (is_type_slice(type)) {
 				// UnsafeMutableBufferPointer's optional address and count are
 				// two integer components in the Darwin arm64 Swift ABI.
 				array_add(&params, t_uintptr);
@@ -185,7 +221,10 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 		if (tuple) {
 			for (Entity *param : tuple->Tuple.variables) param->token = make_token_ident(str_lit("arg"));
 		}
-		Type *type = alloc_type_proc(nullptr, tuple, params.count, original->Proc.results, original->Proc.result_count, false, ProcCC_Swift);
+		Type *result_type = original->Proc.result_count ? original->Proc.results->Tuple.variables[0]->type : nullptr;
+		Type *native_result = is_type_enum(result_type) ? swift_export_enum_tag_type(result_type) : result_type;
+		Type *results = native_result ? alloc_type_tuple_from_field_types(&native_result, 1, false, true) : nullptr;
+		Type *type = alloc_type_proc(nullptr, tuple, params.count, results, native_result ? 1 : 0, false, ProcCC_Swift);
 		lbProcedure *p = lb_create_dummy_procedure(m, exported.symbol, type);
 		p->is_export = true;
 		LLVMSetLinkage(p->value, LLVMExternalLinkage);
@@ -195,8 +234,13 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 		isize index = 0;
 		for (isize i = 0; i < original->Proc.param_count; i++) {
 			Type *param_type = original->Proc.params->Tuple.variables[i]->type;
-			lbValue value = lb_emit_load(p, lb_find_value_from_entity(m, tuple->Tuple.variables[index++]));
-			if (is_type_slice(param_type)) {
+			lbValue value = {};
+			if (!is_type_enum(param_type) || swift_export_enum_tag_type(param_type)) {
+				value = lb_emit_load(p, lb_find_value_from_entity(m, tuple->Tuple.variables[index++]));
+			}
+			if (is_type_enum(param_type)) {
+				value = lb_swift_export_enum(p, param_type, value, false);
+			} else if (is_type_slice(param_type)) {
 				lbValue count = lb_emit_load(p, lb_find_value_from_entity(m, tuple->Tuple.variables[index++]));
 				lbAddr slice = lb_add_local_generated(p, param_type, false);
 				lbValue data = lb_emit_conv(p, value, alloc_type_multi_pointer(base_type(param_type)->Slice.elem));
@@ -206,7 +250,8 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 			array_add(&args, value);
 		}
 		lbValue result = lb_emit_call(p, lb_find_procedure_value_from_entity(m, exported.entity), args);
-		if (original->Proc.result_count) {
+		if (is_type_enum(result_type)) result = lb_swift_export_enum(p, result_type, result, true);
+		if (native_result) {
 			lb_build_return_stmt_internal(p, result, exported.entity->token.pos);
 		} else {
 			LLVMBuildRetVoid(p->builder);

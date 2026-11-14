@@ -5,8 +5,20 @@ gb_internal bool swift_import_projected(SwiftImportType const &type) {
 	return type.nominal && type.nominal->projected;
 }
 
+gb_internal bool swift_import_plain_enum(SwiftImportNominal *type) {
+	if (!type || !type->is_enum || !type->is_frozen || type->is_optional || type->cases.count == 0) return false;
+	for (auto const &c : type->cases) if (c.has_payload) return false;
+	return true;
+}
+
+// A single no-payload case has no native storage or register component. Keep
+// its Odin value in the public signature, but omit it from the native call.
+gb_internal bool swift_import_empty(SwiftImportType const &type) {
+	return type.nominal && type.nominal->projected && type.nominal->alignment && type.nominal->size == 0;
+}
+
 gb_internal bool swift_import_indirect(SwiftImportType const &type) {
-	return swift_import_kind(type, SwiftImportValue_Opaque) &&
+	return swift_import_kind(type, SwiftImportValue_Opaque) && !swift_import_empty(type) &&
 	       !type.nominal->is_scalar && (!type.nominal->projected || type.nominal->components.count == 0);
 }
 
@@ -21,10 +33,14 @@ gb_internal String swift_import_metadata(SwiftImportType const &type) {
 	return make_string_c(gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "swift.value_metadata(%s)", type.odin));
 }
 
-gb_internal String swift_import_case_name(SwiftImportNominal *type, SwiftImportCase const &c) {
+gb_internal String swift_import_case_member(SwiftImportCase const &c) {
 	String name = copy_string(permanent_allocator(), c.name);
 	name.text[0] = gb_char_to_upper(name[0]);
-	return concatenate3_strings(permanent_allocator(), type->name, str_lit("_"), name);
+	return name;
+}
+
+gb_internal String swift_import_case_name(SwiftImportNominal *type, SwiftImportCase const &c) {
+	return concatenate3_strings(permanent_allocator(), type->name, str_lit("_"), swift_import_case_member(c));
 }
 
 // Only accept direct components whose storage offsets are demonstrated by a
@@ -138,12 +154,14 @@ gb_internal bool swift_import_enum_layout(LLVMModuleRef module, LLVMTargetDataRe
 	    LLVMIsAConstantInt(LLVMGetOperand(result, 0)) && LLVMIsAConstantInt(LLVMGetOperand(result, 1))) {
 		type->size = LLVMConstIntGetZExtValue(LLVMGetOperand(result, 0));
 		type->alignment = LLVMConstIntGetZExtValue(LLVMGetOperand(result, 1));
-		if (type->size == 0 || type->alignment > 8 || type->alignment == 0) type->alignment = 0;
+		if ((type->size == 0 && (!swift_import_plain_enum(type) || type->cases.count != 1 || type->alignment != 1)) ||
+		    type->alignment > 8 || type->alignment == 0) type->alignment = 0;
 	}
 	name = gb_string_append_fmt(gb_string_make(temporary_allocator(), ""), "odin_swift_import_load_%td", index);
 	LLVMValueRef load = LLVMGetNamedFunction(module, name);
 	if (!load) return false;
 	LLVMTypeRef ret = LLVMGetReturnType(LLVMGlobalGetValueType(load));
+	if (type->alignment && type->size == 0) return LLVMGetTypeKind(ret) == LLVMVoidTypeKind && LLVMCountParams(load) == 1;
 	if (LLVMGetTypeKind(ret) == LLVMVoidTypeKind) return true;
 	if (!type->alignment || LLVMCountParams(load) != 1) return false;
 	result = swift_import_return(load);
@@ -199,6 +217,10 @@ gb_internal bool swift_import_resolve_enum(SwiftImportNominal *type) {
 			if (field.type.nominal) supported &= swift_import_resolve_enum(field.type.nominal);
 			type->owns |= swift_import_owns(field.type);
 		}
+	}
+	if (swift_import_plain_enum(type)) {
+		String component = type->components.count == 1 ? make_string_c(type->components[0].llvm) : String{};
+		supported &= type->alignment != 0 && (type->size == 0 || component == "i1" || component == "i8" || component == "i16");
 	}
 	type->resolving = false;
 	type->resolved = true;
@@ -308,7 +330,27 @@ gb_internal bool swift_import_plain_optional(SwiftImportNominal *type) {
 	return swift_import_plain_optional(argument) && type->size == argument->size+1 && type->alignment == argument->alignment;
 }
 
+// Frozen no-payload enums are ordinary Odin values. Their backing type is
+// independent of Swift's tag width, including i1 and a zero-sized single case.
+// RawRepresentable raw values are initializer/getter data, not these ABI tags.
+gb_internal gbString swift_import_emit_plain_enum(gbString source, SwiftImportNominal *type) {
+	String name = type->name;
+	source = gb_string_append_fmt(source, "%.*s :: enum u32 {\n", LIT(name));
+	for (auto const &c : type->cases) source = gb_string_append_fmt(source, "\t%.*s = %u,\n", LIT(swift_import_case_member(c)), c.tag);
+	source = gb_string_appendc(source, "}\n");
+	if (type->size == 0) source = gb_string_append_fmt(source, "@(private)\n_swift_native_%.*s :: struct {bytes: [0]u8}\n", LIT(name));
+	else source = gb_string_append_fmt(source, "@(private)\n_swift_native_%.*s :: %s\n", LIT(name), type->components[0].odin);
+	source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_take :: proc(storage: rawptr) -> (result: %.*s, ok: bool) #optional_ok {\n", LIT(name), LIT(name));
+	if (type->size == 0) source = gb_string_append_fmt(source, "return .%.*s, true\n", LIT(swift_import_case_member(type->cases[0])));
+	else source = gb_string_append_fmt(source, "tag := u32((cast(^_swift_native_%.*s)storage)^)\nassert(tag < %td, \"Invalid frozen Swift enum tag\")\nreturn %.*s(tag), true\n", LIT(name), type->cases.count, LIT(name));
+	source = gb_string_append_fmt(source, "}\n@(private)\n_swift_%.*s_initialize :: proc(storage: rawptr, value: %.*s) -> bool {\n", LIT(name), LIT(name));
+	if (type->size == 0) source = gb_string_append_fmt(source, "return value == .%.*s\n", LIT(swift_import_case_member(type->cases[0])));
+	else source = gb_string_append_fmt(source, "if u32(value) >= %td { return false }\n(cast(^_swift_native_%.*s)storage)^ = _swift_native_%.*s(value)\nreturn true\n", type->cases.count, LIT(name), LIT(name));
+	return gb_string_appendc(source, "}\n\n");
+}
+
 gb_internal gbString swift_import_emit_enum(gbString source, SwiftImportNominal *type) {
+	if (swift_import_plain_enum(type)) return swift_import_emit_plain_enum(source, type);
 	String name = type->name;
 	if (type->is_optional) {
 		source = gb_string_append_fmt(source, "%.*s :: Maybe(%s)\n", LIT(name), swift_import_nominal_type(type->argument).odin);

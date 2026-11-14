@@ -4135,9 +4135,20 @@ gb_internal bool is_swift_abi_slice_parameter(Type *type) {
 	return elem == t_i64 || elem == t_u64 || elem == t_f64;
 }
 
+// Odin enum procedures use their integer backing type internally. The Swift
+// module exporter supplies the separate native case-tag entry point.
+gb_internal bool is_swift_abi_enum(Type *type) {
+	type = base_type(type);
+	if (!type || type->kind != Type_Enum) return false;
+	Type *raw = base_type(type->Enum.base_type);
+	return raw == t_i8 || raw == t_u8 || raw == t_i16 || raw == t_u16 ||
+	       raw == t_i32 || raw == t_u32 || raw == t_i64 || raw == t_u64 ||
+	       raw == t_int || raw == t_uint;
+}
+
 gb_internal bool is_type_supported_by_swift_abi(Type *type) {
 	type = base_type(type);
-	if (type == t_bool || type == t_u8 || type == t_u16 || is_swift_abi_scalar(type)) {
+	if (type == t_bool || type == t_u8 || type == t_u16 || is_swift_abi_scalar(type) || is_swift_abi_enum(type)) {
 		return true;
 	}
 	if (type == nullptr) {

@@ -31,6 +31,7 @@ swiftc=(xcrun --sdk "$sdk" swiftc -target "$triple" -swift-version 6 -warnings-a
 cp "$here/main.odin" "$build/main.odin"
 cp "$here/values.odin" "$build/values.odin"
 cp "$here/enums.odin" "$build/enums.odin"
+cp "$here/plain_enums.odin" "$build/plain_enums.odin"
 cp "$here/strings.odin" "$build/strings.odin"
 cp "$here/tasks.odin" "$build/tasks.odin"
 cp "$here/arrays.odin" "$build/arrays.odin"
@@ -108,7 +109,7 @@ package clashes
 foreign import fixture "swift:fixture/SwiftClashesFixture"
 main :: proc() {}
 ODIN
-for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE STRING_TYPE; do
+for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE FROZEN_ENUM_CASE STRING_TYPE; do
 	"${swiftc[@]}" -D "$selection" -parse-as-library -enable-library-evolution -module-name SwiftClashesFixture \
 		-emit-object -o "$build/clashes/fixture/SwiftClashesFixture.o" \
 		-emit-module-path "$build/clashes/fixture/SwiftClashesFixture.swiftmodule" "$here/Clashes.swift"
@@ -119,7 +120,7 @@ for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE STRING_TY
 	case "$selection" in
 		BUILTIN) diagnostic="type 'f64' conflicts" ;;
 		FLATTENED | STRING_TYPE) diagnostic="map to the same Odin name" ;;
-		HELPER | ENUM_CASE) diagnostic="is ambiguous" ;;
+		HELPER | ENUM_CASE | FROZEN_ENUM_CASE) diagnostic="is ambiguous" ;;
 		UNSUPPORTED_HELPER) diagnostic="conflicts with a generated Odin helper" ;;
 	esac
 	if ! grep -F 'Swift import:' "$build/invalid.log" | grep -Fq "$diagnostic"; then
