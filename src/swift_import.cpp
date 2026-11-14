@@ -557,9 +557,6 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		fn->rejection = swift_import_type_rejection(api_types.count ? api_types[0] : nullptr);
 		return false;
 	}
-	// A UTF-8 result needs an Odin allocation after completion. Keep that
-	// failure separate from Swift throws before exposing asynchronous strings.
-	if (fn->is_async && fn->result.nominal && fn->result.nominal->kind == SwiftImportValue_String) return false;
 	if (!string_starts_with(fn->title, fn->name) || fn->title.len < fn->name.len+2 ||
 	    fn->title[fn->name.len] != '(' || fn->title[fn->title.len-1] != ')') {
 		return false;
@@ -777,7 +774,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	bool fixed_result = projected_result && fn.result.nominal->alignment;
 	bool owned_result = fn.result.nominal && !string_result && !slice_result && !projected_result;
 	bool allocated_result = owned_result || (projected_result && !fixed_result);
-	bool converted_result = slice_result || (projected_result && fn.result.nominal->owns);
+	bool converted_result = string_result || slice_result || (projected_result && fn.result.nominal->owns);
 	bool fallible = projected_result ? fn.result.nominal->owns || !fixed_result : fn.result.nominal != nullptr;
 	String name = fn.odin_name;
 	gbString params = gb_string_make(permanent_allocator(), "");
@@ -897,7 +894,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	if (receiver) source = gb_string_appendc(source, "\t\treceiver: rawptr,\n");
 	for_array(i, fn.parameters) if (!fn.parameters[i].empty_set) source = gb_string_append_fmt(source, "\t\targ%td: %s,\n", i, swift_import_slice(fn.parameters[i].type.nominal) ? "swift.Native_Array" : swift_import_native_type(fn.parameters[i].type));
 	if (fn.is_collection) source = gb_string_appendc(source, "\t\tcollection_metadata, collection_witness: rawptr,\n");
-	if (fn.result.odin) source = gb_string_append_fmt(source, "\t\tresult: %s,\n", projected_result ? swift_import_enum_native(fn.result.nominal) : (owned_result || slice_result) ? "rawptr" : fn.result.odin);
+	if (fn.result.odin) source = gb_string_append_fmt(source, "\t\tresult: %s,\n", swift_import_native_type(fn.result));
 	if (fn.is_throwing) source = gb_string_appendc(source, "\t\terror: swift.Error,\n");
 	source = gb_string_appendc(source, "\t}\n\t_swift_capture := Capture{completion = completion}\n");
 	if (receiver) {
@@ -960,14 +957,17 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		if (!fixed_result) source = gb_string_appendc(source, "\t\tswift.value_free_uninitialized(capture.result)\n");
 		if (!converted_result) source = gb_string_append_fmt(source, "\t\tassert(%sconverted)\n", fn.is_throwing ? "capture.error != nil || " : "");
 	}
-	if (slice_result) {
+	if (string_result || slice_result) {
 		source = gb_string_append_fmt(source, "\t\tresult: %s\n\t\tconverted := false\n", fn.result.odin);
 		if (fn.is_throwing) source = gb_string_appendc(source, "\t\tif capture.error == nil {\n");
-		source = gb_string_append_fmt(source, "\t\tresult, converted = %.*s\n\t\tswift.array_destroy(swift.Native_Array{capture.result})\n", LIT(swift_import_array_to(fn.result.nominal, str_lit("swift.Native_Array{capture.result}"))));
+		// The native result owns its storage independently of the child frame
+		// and inputs. Release it after conversion, including allocation failure.
+		if (string_result) source = gb_string_appendc(source, "\t\tresult, converted = swift.string_to_odin(capture.result)\n\t\tswift.string_destroy(&capture.result)\n");
+		else source = gb_string_append_fmt(source, "\t\tresult, converted = %.*s\n\t\tswift.array_destroy(swift.Native_Array{capture.result})\n", LIT(swift_import_array_to(fn.result.nominal, str_lit("swift.Native_Array{capture.result}"))));
 		if (fn.is_throwing) source = gb_string_appendc(source, "\t\t}\n");
 	}
 	source = gb_string_appendc(source, "\t\tcapture.completion(swift.Task(runtime.swift_async_current())");
-	if (slice_result || projected_result) source = gb_string_appendc(source, ", result");
+	if (string_result || slice_result || projected_result) source = gb_string_appendc(source, ", result");
 	else if (fn.result.odin) source = gb_string_append_fmt(source, ", %s(capture.result)", fn.result.odin);
 	if (fn.is_throwing) source = gb_string_appendc(source, ", capture.error");
 	if (converted_result) source = gb_string_appendc(source, ", converted");

@@ -79,7 +79,26 @@ public func throwing(_ value: UInt64) throws -> UInt64 { value }
 	return 1
 }
 @MainActor public func isolatedSync() -> UInt64 { 1 }
-public func textLater() async -> String { "unsupported result conversion" }
+public func textLater() async -> String {
+	await Task.yield()
+	return "native async string"
+}
+public func echoTextLater(_ text: String) async -> String {
+	await Task.yield()
+	return text
+}
+public func checkedTextLater(_ text: String, _ fail: Bool) async throws -> String {
+	await Task.yield()
+	try Task.checkCancellation()
+	if fail { throw ValueFailure() }
+	return text
+}
+extension TextValue {
+	public func textLater() async -> String {
+		await Task.yield()
+		return text
+	}
+}
 public func overloaded(_ value: UInt64) -> UInt64 { value }
 public func overloaded(_ value: Double) -> Double { value }
 public func optional(_ value: UInt64?) -> UInt64 { value ?? 0 }

@@ -91,6 +91,7 @@ main :: proc() {
 	check_projected_enums()
 	check_plain_enums()
 	check_strings()
+	check_async_strings()
 	check_arrays()
 	check_value_arrays()
 	check_records()

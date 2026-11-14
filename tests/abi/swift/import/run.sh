@@ -33,6 +33,7 @@ cp "$here/values.odin" "$build/values.odin"
 cp "$here/enums.odin" "$build/enums.odin"
 cp "$here/plain_enums.odin" "$build/plain_enums.odin"
 cp "$here/strings.odin" "$build/strings.odin"
+cp "$here/async_strings.odin" "$build/async_strings.odin"
 cp "$here/tasks.odin" "$build/tasks.odin"
 cp "$here/arrays.odin" "$build/arrays.odin"
 cp "$here/value_arrays.odin" "$build/value_arrays.odin"
@@ -140,7 +141,7 @@ package rejected
 foreign import fixture "swift:fixture/SwiftImportFixture"
 main :: proc() {
 ODIN
-for selection in narrow generic throwing isolated_sync overloaded future inout_value typed_throwing text_later unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields deep_optional unsupported_scalar_argument unsupported_scalar_result unsupported_bool_array; do
+for selection in narrow generic throwing isolated_sync overloaded future inout_value typed_throwing unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields deep_optional unsupported_scalar_argument unsupported_scalar_result unsupported_bool_array; do
 	printf '\t_ = fixture.%s\n' "$selection" >> "$build/rejected.odin"
 done
 printf '}\n' >> "$build/rejected.odin"
@@ -148,7 +149,7 @@ if "$ODIN" check "$build/rejected.odin" -file "${odin_target[@]}" > "$build/inva
 	echo "Expected importer to reject unsupported declarations" >&2
 	exit 1
 fi
-for selection in narrow generic throwing isolated_sync overloaded future inout_value typed_throwing text_later unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields deep_optional unsupported_scalar_argument unsupported_scalar_result unsupported_bool_array; do
+for selection in narrow generic throwing isolated_sync overloaded future inout_value typed_throwing unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields deep_optional unsupported_scalar_argument unsupported_scalar_result unsupported_bool_array; do
 	if ! grep -F "Swift import:" "$build/invalid.log" | grep -Fq "'$selection'"; then
 		cat "$build/invalid.log" >&2
 		echo "Missing rejection for $selection" >&2

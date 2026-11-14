@@ -88,11 +88,10 @@ Explicit import-name overrides are outside this subset.
 
 ## Supported subset
 
-The importer supports `Bool`, `Int`, `UInt`, `Int64`, `UInt64`, `Double`, synchronous String results,
-and synchronous or asynchronous procedures with those arguments. String inputs
-become ordinary Odin `string` parameters. An asynchronous String result is not
-yet exposed: a failed UTF-8 allocation after completion needs a separate error
-contract from Swift `throws`.
+The importer supports `Bool`, `Int`, `UInt`, `Int64`, `UInt64`, `Double` and
+`String` arguments and results in synchronous or asynchronous procedures. Strings
+become ordinary Odin `string` values. Async String completions report output
+conversion separately from Swift `throws` and from acceptance of the start.
 
 `Bool`, `Int` and `UInt` use native Odin `bool`, `int` and `uint`, including
 scalar async completions, getters and optionals. Int and UInt are 64-bit on the
@@ -429,7 +428,46 @@ Swift string as an Odin-owned UTF-8 copy using `context.allocator`; free that
 copy with the same allocator. An async call copies its input before returning,
 so the original Odin bytes may then be modified or freed. Conversion preserves
 embedded zero bytes and rejects invalid UTF-8 before calling the imported
-function. Conversion or Odin allocation failure returns `ok = false`.
+function. Input conversion failure rejects the call; synchronous output conversion
+or Odin allocation failure returns `ok = false`.
+
+Async results use the same callback convention as other converted results:
+
+```swift
+public func decorateLater(_ text: String) async -> String {
+	await Task.yield()
+	return "[" + text + "]"
+}
+```
+
+```odin
+start :: proc() -> bool {
+	task := example.decorate_later("café 🦉", received) or_return
+	defer swift.task_release(task)
+	return true
+}
+
+received :: proc(task: swift.Task, text: string, converted: bool) {
+	if !converted { return }
+	defer delete(text)
+	assert(text == "[café 🦉]")
+}
+```
+
+The callback runs with the captured Odin context. Successful output is independently
+owned and may outlive the callback and task; free it with the captured allocator.
+The native Swift result remains alive through conversion and is released before
+the callback, including when Odin allocation fails. An empty result succeeds with
+`converted = true` and needs no Odin allocation.
+
+For `async throws -> String`, the callback is
+`proc(task: swift.Task, text: string, error: swift.Error, converted: bool)`.
+A Swift error produces empty text and `converted = false`; release the owned error
+with `swift.error_release`. A successful Swift return followed by output conversion
+failure produces empty text, nil error and `converted = false`. Neither failure
+changes the already accepted start or suppresses its completion. Cancellation
+follows the existing cooperative task contract; it can produce either an error
+or a successful result, depending on the Swift function.
 
 Conversion uses Swift standard-library ABI entry points to validate and construct
 an owned String, count its UTF-8 bytes and copy them into Odin storage. Swift
@@ -449,7 +487,8 @@ Unicode equality are different operations. A plain Odin string does not gain
 Swift's character semantics.
 
 See `run.sh`, `main.odin`, `values.odin`, `enums.odin`, `strings.odin`,
-`arrays.odin`, `value_arrays.odin`, `records.odin`, `scalars.odin` and `tasks.odin` for executable round trips, overlapping tasks, native handle identity,
+`async_strings.odin`, `arrays.odin`, `value_arrays.odin`, `records.odin`,
+`scalars.odin` and `tasks.odin` for executable round trips, overlapping tasks, native handle identity,
 preserved context, guarded allocations, ownership, failure paths and rejection
 diagnostics.
 
