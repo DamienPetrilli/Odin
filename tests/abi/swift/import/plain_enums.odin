@@ -48,6 +48,14 @@ raw_code_received :: proc(task: swift.Task, result: Maybe(fixture.RawCode)) {
 	plain_enum_calls += 1
 }
 
+modes_received :: proc(task: swift.Task, result: []fixture.Mode, ok: bool) {
+	_ = take_expected(task)
+	assert(ok)
+	defer delete(result)
+	assert(len(result) == 3 && result[0] == .Running && result[1] == .Idle && result[2] == .Running)
+	plain_enum_calls += 1
+}
+
 check_plain_enums :: proc() {
 	state := Value_Allocator{backing = context.allocator, remaining = 0}
 	context.allocator = mem.Allocator{procedure = value_allocator, data = &state}
@@ -95,6 +103,8 @@ check_plain_enums :: proc() {
 	rejected, started = fixture.single_case_later(fixture.SingleCase(1), single_case_received)
 	assert(!started && rejected == nil)
 	state.remaining = -1
+	_, converted := fixture.echo_modes([]fixture.Mode{.Running, fixture.Mode(2)})
+	assert(!converted && state.allocations == state.frees)
 
 	for text, index in ([]string{"", "Café 📚", "other"}) {
 		optional := fixture.TextCode_init_raw_value(text) or_else panic("Raw String initializer")
@@ -112,6 +122,23 @@ check_plain_enums :: proc() {
 	_, second := choice.(fixture.ResilientChoice_Second)
 	assert(second)
 	fixture.ResilientChoice_destroy(choice)
+
+	// Different native and Odin element sizes must survive slice conversion.
+	for count in ([]int{0, 1, 17, 257}) {
+		modes := make([]fixture.Mode, count)
+		for &value, index in modes { value = fixture.Mode(u32(index % 2)) }
+		copy := fixture.echo_modes(modes) or_else panic("Enum array")
+		assert(len(copy) == count)
+		for value, index in copy { assert(value == modes[index]) }
+		delete(modes)
+		delete(copy)
+		singles := make([]fixture.SingleCase, count)
+		single_copy := fixture.echo_single_cases(singles) or_else panic("Zero-sized native array elements")
+		assert(len(single_copy) == count)
+		for value in single_copy { assert(value == .Only) }
+		delete(singles)
+		delete(single_copy)
+	}
 
 	for input in ([]fixture.ModePayload{
 		fixture.ModePayload_Named{.Running, "owned text alongside a native enum: Café 📚"},
@@ -172,8 +199,12 @@ check_plain_enums :: proc() {
 		task = fixture.raw_code_later(raw, raw_code_received) or_else panic("Async optional enum")
 		track_task(task, raw)
 	}
+	modes := []fixture.Mode{.Running, .Idle, .Running}
+	task = fixture.modes_later(modes, modes_received) or_else panic("Async enum array")
+	track_task(task)
+	for &value in modes { value = .Idle }
 	begin := time.tick_now()
-	for plain_enum_calls != 8 {
+	for plain_enum_calls != 9 {
 		cf.RunLoopRunInMode(cf.kRunLoopDefaultMode, 0.01, false)
 		assert(time.tick_since(begin) < 10*time.Second)
 	}

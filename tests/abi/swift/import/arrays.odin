@@ -28,6 +28,11 @@ array_worker :: proc "c" (_: rawptr) -> rawptr {
 		swift.array_destroy(native_texts)
 		for text, j in copied { assert(text == texts[j]); delete(text) }
 		delete(copied)
+		records := fixture.make_records(3) or_else panic("Concurrent imported records")
+		echo := fixture.echo_records(records) or_else panic("Concurrent imported input")
+		fixture.Array_ArrayRecord_destroy(records)
+		assert(fixture.sum_records(echo) == 12)
+		fixture.Array_ArrayRecord_destroy(echo)
 	}
 	return nil
 }

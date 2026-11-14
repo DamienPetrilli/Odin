@@ -1,3 +1,6 @@
+gb_internal String swift_import_array_from(SwiftImportNominal *type, String value);
+gb_internal String swift_import_array_to(SwiftImportNominal *type, String value);
+
 // Native enums are projected into Odin values, not reinterpreted as Odin unions.
 // All layout probes are inspection-only; no Swift adapter is linked.
 
@@ -154,7 +157,7 @@ gb_internal bool swift_import_enum_layout(LLVMModuleRef module, LLVMTargetDataRe
 	    LLVMIsAConstantInt(LLVMGetOperand(result, 0)) && LLVMIsAConstantInt(LLVMGetOperand(result, 1))) {
 		type->size = LLVMConstIntGetZExtValue(LLVMGetOperand(result, 0));
 		type->alignment = LLVMConstIntGetZExtValue(LLVMGetOperand(result, 1));
-		if ((type->size == 0 && (!swift_import_plain_enum(type) || type->cases.count != 1 || type->alignment != 1)) ||
+		if ((type->size == 0 && ((!type->is_record && (!swift_import_plain_enum(type) || type->cases.count != 1)) || type->alignment != 1)) ||
 		    type->alignment > 8 || type->alignment == 0) type->alignment = 0;
 	}
 	name = gb_string_append_fmt(gb_string_make(temporary_allocator(), ""), "odin_swift_import_load_%td", index);
@@ -205,9 +208,15 @@ gb_internal bool swift_import_enum_layout(LLVMModuleRef module, LLVMTargetDataRe
 // cases. Dependent concrete types are resolved before their parent.
 gb_internal bool swift_import_resolve_enum(SwiftImportNominal *type) {
 	if (type->resolved) return type->supported;
-	if (!type->is_enum) return type->supported;
+	if (!type->is_enum && !swift_import_slice(type)) return type->supported;
 	if (type->resolving) return false;
 	type->resolving = true;
+	if (swift_import_slice(type)) {
+		type->supported &= swift_import_resolve_enum(type->argument);
+		type->resolving = false;
+		type->resolved = true;
+		return type->supported;
+	}
 	bool supported = type->supported && type->cases.count != 0;
 	type->owns = !type->is_frozen;
 	for (auto const &c : type->cases) {
@@ -249,6 +258,7 @@ gb_internal gbString swift_import_emit_destroy(gbString source, SwiftImportType 
 	if (!swift_import_owns(type)) return source;
 	if (swift_import_kind(type, SwiftImportValue_String)) return gb_string_append_fmt(source, "delete(%.*s, allocator)\n", LIT(value));
 	if (swift_import_slice(type.nominal)) {
+		if (swift_import_value_slice(type.nominal)) return gb_string_append_fmt(source, "%.*s_destroy(%.*s, allocator)\n", LIT(type.nominal->name), LIT(value));
 		if (swift_import_string_array(type)) source = gb_string_append_fmt(source, "for text in %.*s { delete(text, allocator) }\n", LIT(value));
 		return gb_string_append_fmt(source, "delete(%.*s, allocator)\n", LIT(value));
 	}
@@ -264,7 +274,7 @@ gb_internal gbString swift_import_emit_take_field(gbString source, SwiftImportTy
 	if (swift_import_kind(type, SwiftImportValue_String)) {
 		source = gb_string_append_fmt(source, "_native_%.*s := (cast(^swift.Native_String)%.*s)^\n%.*s, _ok_%.*s := swift.string_to_odin(_native_%.*s)\nswift.string_destroy(&_native_%.*s)\n", LIT(value), LIT(address), LIT(value), LIT(value), LIT(value), LIT(value));
 	} else if (swift_import_slice(type.nominal)) {
-		source = gb_string_append_fmt(source, "_native_%.*s := (cast(^swift.Native_Array)%.*s)^\n%.*s, _ok_%.*s := swift.array_to_odin(_native_%.*s, %s)\nswift.array_destroy(_native_%.*s)\n", LIT(value), LIT(address), LIT(value), LIT(value), LIT(value), swift_import_slice_element(type.nominal), LIT(value));
+		source = gb_string_append_fmt(source, "_native_%.*s := (cast(^swift.Native_Array)%.*s)^\n%.*s, _ok_%.*s := %.*s\nswift.array_destroy(_native_%.*s)\n", LIT(value), LIT(address), LIT(value), LIT(value), LIT(swift_import_array_to(type.nominal, concatenate_strings(permanent_allocator(), str_lit("_native_"), value))), LIT(value));
 	} else if (type.nominal->projected) {
 		source = gb_string_append_fmt(source, "%.*s, _ok_%.*s := _swift_%.*s_take(%.*s)\n", LIT(value), LIT(value), LIT(type.nominal->name), LIT(address));
 	} else {
@@ -276,7 +286,7 @@ gb_internal gbString swift_import_emit_take_field(gbString source, SwiftImportTy
 gb_internal gbString swift_import_emit_initialize_field(gbString source, SwiftImportType const &type, String value, String address) {
 	if (!type.nominal || type.nominal->is_scalar) return gb_string_append_fmt(source, "(cast(^%s)%.*s)^ = %.*s\n", type.odin, LIT(address), LIT(value));
 	if (swift_import_kind(type, SwiftImportValue_String)) return gb_string_append_fmt(source, "(cast(^swift.Native_String)%.*s)^ = swift.string_from_odin(%.*s) or_return\n", LIT(address), LIT(value));
-	if (swift_import_slice(type.nominal)) return gb_string_append_fmt(source, "(cast(^swift.Native_Array)%.*s)^ = swift.array_from_odin(%.*s) or_return\n", LIT(address), LIT(value));
+	if (swift_import_slice(type.nominal)) return gb_string_append_fmt(source, "(cast(^swift.Native_Array)%.*s)^ = %.*s or_return\n", LIT(address), LIT(swift_import_array_from(type.nominal, value)));
 	if (type.nominal->projected) return gb_string_append_fmt(source, "if !_swift_%.*s_initialize(%.*s, %.*s) { return false }\n", LIT(type.nominal->name), LIT(address), LIT(value));
 	return gb_string_append_fmt(source, "if %.*s == nil { return false }\nswift.value_initialize_copy(%.*s, rawptr(%.*s), %.*s)\n", LIT(value), LIT(address), LIT(value), LIT(swift_import_metadata(type)));
 }
@@ -286,6 +296,7 @@ gb_internal gbString swift_import_emit_copy_field(gbString source, SwiftImportTy
 	if (swift_import_kind(type, SwiftImportValue_String)) {
 		return gb_string_append_fmt(source, "%.*s, _error_%.*s := strings.clone(%.*s, allocator)\nif _error_%.*s != nil { return }\n", LIT(value), LIT(value), LIT(from), LIT(value));
 	}
+	if (swift_import_value_slice(type.nominal)) return gb_string_append_fmt(source, "%.*s := %.*s_copy(%.*s, allocator) or_return\n", LIT(value), LIT(type.nominal->name), LIT(from));
 	if (swift_import_slice(type.nominal)) {
 		source = gb_string_append_fmt(source, "%.*s, _error_%.*s := make(%s, len(%.*s), allocator)\nif _error_%.*s != nil { return }\n", LIT(value), LIT(value), type.odin, LIT(from), LIT(value));
 		if (swift_import_string_array(type)) {

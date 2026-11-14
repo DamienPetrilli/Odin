@@ -103,6 +103,45 @@ receivers and arguments are copied before start returns. A mutating receiver is
 borrowed through completion, so its changes reach the original value. Do not
 access or destroy that receiver while the call is outstanding.
 
+Plain frozen structs with public stored `UInt64`, `Int64` and `Double` fields
+map to ordinary Odin structs. Empty structs are also supported. The importer
+checks every field offset, total size, alignment and native call lowering using
+the target Swift compiler. Unsupported or hidden fields retain opaque storage;
+`@frozen` alone does not establish a direct mapping. Field names use snake case,
+and ambiguous field names are diagnosed.
+
+```swift
+@frozen public struct Point {
+	public var x: Double
+	public var y: Double
+}
+public func echoPoint(_ value: Point) -> Point { value }
+public func echoPoints(_ values: [Point]) -> [Point] { values }
+```
+
+```odin
+point := example.Point{x = 10, y = 20}
+assert(example.echo_point(point) == point)
+points := example.echo_points([]example.Point{point}) or_return
+defer delete(points)
+points[0].x = 30
+```
+
+These records copy by value and need no record destroy helper. Record arrays
+contain contiguous inline values and require only the slice's ordinary `delete`.
+The native array retains its own copy; changing the Odin result does not change
+Swift storage. Output uses `context.allocator` without redundant zeroing. Runtime
+metadata must also confirm POD, size, stride and alignment before bulk copying.
+Swift's zero-sized record stride is handled independently of Odin's zero size.
+
+Sync and async free functions, supported constructors, optional/enum payloads,
+and direct/indirect record arguments/results are checked. Async inputs are copied
+before start returns. Native record instance methods, nested records, smaller
+fields, custom alignment and records with owned fields are outside this direct
+subset. Odin field assignment edits a local value, including fields declared
+`let` in Swift; direct construction does not run a Swift initializer or enforce
+its application invariants.
+
 Frozen Swift enums with no associated values map to ordinary Odin `enum u32`
 types. Cases use an initial capital, so Swift `case running` becomes `.Running`.
 They have ordinary value-copy semantics and need no copy/destroy helpers. The
@@ -246,9 +285,59 @@ A Swift error also gives `ok = false`, with the owned error set. A successful
 start and successful result conversion are separate events. Allocators captured
 by the start must remain valid through completion and result deallocation.
 
-Arrays of supported imported value types retain the owned typed-value API:
-`_count`, bounds-checked `_get`, `_copy` and `_destroy`. Element access creates an
-owned copy. One supported generic specialization accepts a single
+Arrays of supported imported structs, enums and optional values also map to
+native slices: `[Value]` becomes `[]example.Value`, `[Lookup]` becomes
+`[]example.Lookup`, and `[Value?]` becomes `[]Maybe(example.Value)`. The importer
+emits an `Array_Value` slice alias and `Array_Value_copy`/`Array_Value_destroy`
+helpers, likewise for other imported element types. Ordinary indexing borrows
+an element; it does not make an independent owner. Ordinary assignment aliases
+both slices and their owned contents.
+
+```odin
+values := example.make_values(3) or_return
+defer example.Array_Value_destroy(values)
+for value in values {
+	use_value(value)
+}
+copy := example.Value_copy(values[0]) or_return
+defer example.Value_destroy(copy)
+```
+
+`Array_Value_destroy` destroys each owned element and frees the slice. Pass the
+slice's original allocator if the current allocator has changed. Element owners
+remember their allocator. `delete(values)` alone frees only the slice: use that
+when ownership of every element has been transferred elsewhere. To move one
+element, take it and clear its original slot before destroying the remaining
+array. Destroy a moved element once, or use the element's `_copy` helper when
+both places need independent ownership. A borrowed subslice must not be passed
+to the array destroy helper, since it does not own the slice allocation.
+
+Resilient structs keep their existing typed native-value address representation;
+this does not claim their Swift memory layout matches an Odin struct. Opaque
+output elements share one backing allocation, in addition to the slice allocation.
+A one-element result instead uses the ordinary standalone value allocation.
+Each slot owns a Swift value independently. Moving one slot out keeps the backing
+block alive until the last slot is destroyed, even after the slice is deleted.
+Enum/optional projections own their payloads under the same rules as standalone
+values; they may require additional allocations. Array copying is linear and
+creates independent owners, unlike Swift's copy-on-write array assignment. Swift's
+copy semantics still apply to references inside an element; copying an element
+does not recursively clone referenced objects.
+
+Inputs initialize Swift-owned storage using the element's native runtime stride
+and copy operation. An owned result may transfer opaque elements with Swift's
+initialize-with-take witness when the exact native allocation type is known and
+Swift confirms unique ownership. Shared and borrowed arrays copy their elements;
+the source remains intact. Both Odin output allocations complete before any
+transfer, so allocation failure leaves the native result available for normal
+cleanup. The native array is released after conversion. Projected results clean
+any initialized prefix on failure. Zero-sized values use the runtime stride, not
+zero. These choices preserve the same independent Odin ownership in either case.
+The async callback and conversion boolean follow the scalar array rules above.
+Arrays within supported enum/optional payloads work; direct nested arrays,
+recursive enums and unsupported element types remain rejected.
+
+One supported generic specialization accepts a single
 `Collection<String>` argument using Swift `Array<String>` metadata and its
 standard Collection conformance. This does not implement Odin protocol
 conformances or general Swift generics. An explicit empty `Set` default on a
@@ -352,7 +441,7 @@ Unicode equality are different operations. A plain Odin string does not gain
 Swift's character semantics.
 
 See `run.sh`, `main.odin`, `values.odin`, `enums.odin`, `strings.odin`,
-`arrays.odin` and `tasks.odin` for executable round trips, overlapping tasks, native handle identity,
+`arrays.odin`, `value_arrays.odin`, `records.odin` and `tasks.odin` for executable round trips, overlapping tasks, native handle identity,
 preserved context, guarded allocations, ownership, failure paths and rejection
 diagnostics.
 

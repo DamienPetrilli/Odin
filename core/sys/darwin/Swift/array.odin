@@ -20,6 +20,7 @@ foreign {
 	array_count_native :: proc "swift" (array, element: rawptr) -> i64 ---
 	@(link_name="$sSayxGSlsMc")
 	array_collection_descriptor: u8
+	swift_isUniquelyReferenced_nonNull_native :: proc "c" (object: rawptr) -> bool ---
 	swift_getWitnessTable :: proc "c" (descriptor, metadata, arguments: rawptr) -> rawptr ---
 	_swiftEmptySetSingleton: u8
 }
@@ -240,4 +241,206 @@ array_to_odin :: proc(value: Native_Array, $T: typeid) -> (result: []T, ok: bool
 
 array_destroy :: proc(value: Native_Array) {
 	if value.storage != &_swiftEmptyArrayStorage { array_release(value.storage) }
+}
+
+// Compiler-generated imported-value arrays use native runtime stride and
+// alignment, including resilient elements. A cache belongs to one element type.
+Array_Value_Cache :: struct {
+	storage, buffer: rawptr,
+}
+
+Array_Value_Buffer :: struct {
+	value: Native_Array,
+	elements: rawptr,
+	count, stride: int,
+}
+
+@(require_results)
+array_value_allocate :: proc(count: int, metadata: rawptr, cache: ^Array_Value_Cache) -> (result: Array_Value_Buffer, ok: bool) #optional_ok {
+	if count < 0 || metadata == nil { return }
+	witness := value_witnesses(metadata)
+	alignment := max(int(witness.flags & 0xff)+1, align_of(Array_Storage))
+	offset := mem.align_forward_int(size_of(Array_Storage), alignment)
+	if witness.stride == 0 || witness.stride < witness.size ||
+	   witness.stride > uint(max(int)-offset) || alignment & (alignment-1) != 0 { return }
+	stride := int(witness.stride)
+	if count > (max(int)-offset)/stride { return }
+	if count == 0 { return {{&_swiftEmptyArrayStorage}, nil, 0, stride}, true }
+	storage_type := intrinsics.atomic_load(&cache.storage)
+	body_metadata := intrinsics.atomic_load(&array_body_metadata)
+	allocation: Array_Allocation
+	if storage_type == nil || body_metadata == nil {
+		allocation = array_allocate_native(i64(count), metadata)
+		if uintptr(allocation.elements)-uintptr(allocation.storage) == uintptr(offset) {
+			header := cast(^Array_Storage)allocation.storage
+			if header.count == i64(count) && header.capacity_and_flags & 1 == 0 &&
+			   header.capacity_and_flags >> 1 >= u64(count) {
+				body := metadata_from_name("s6UInt64V_ABt")
+				if body != nil { intrinsics.atomic_store(&array_body_metadata, body) }
+				intrinsics.atomic_store(&cache.storage, header.metadata)
+				intrinsics.atomic_store(&cache.buffer, header.metadata)
+			}
+		}
+	} else {
+		storage := cast(^Array_Storage)swift_allocObject(storage_type, uint(offset+count*stride), uint(alignment-1))
+		capacity := count
+		allocated := array_allocated_bytes(storage, body_metadata, metadata)
+		if allocated >= i64(offset+count*stride) { capacity = (int(allocated)-offset)/stride }
+		storage.count = i64(count)
+		storage.capacity_and_flags = u64(capacity) << 1
+		allocation = {storage, rawptr(uintptr(storage)+uintptr(offset))}
+	}
+	return {{allocation.storage}, allocation.elements, count, stride}, true
+}
+
+// Borrow only while the caller retains the native array. No native element is
+// consumed or mutated by projection, since Swift may share the same storage.
+@(require_results)
+array_value_buffer :: proc(value: Native_Array, metadata: rawptr, cache: ^Array_Value_Cache) -> (result: Array_Value_Buffer, ok: bool) #optional_ok {
+	if value.storage == nil || metadata == nil { return }
+	witness := value_witnesses(metadata)
+	if witness.stride == 0 || witness.stride < witness.size || witness.stride > uint(max(int)) { return }
+	stride := int(witness.stride)
+	if value.storage == &_swiftEmptyArrayStorage { return {value, nil, 0, stride}, true }
+	alignment := int(witness.flags & 0xff)+1
+	if alignment & (alignment-1) != 0 { return }
+	offset := mem.align_forward_int(size_of(Array_Storage), max(alignment, align_of(Array_Storage)))
+	header := cast(^Array_Storage)value.storage
+	count: i64
+	elements: rawptr
+	if cached := intrinsics.atomic_load(&cache.buffer); cached != nil && header.metadata == cached {
+		count = header.count
+		elements = rawptr(uintptr(value.storage)+uintptr(offset))
+	} else {
+		count = array_count_native(value.storage, metadata)
+		elements = rawptr(uintptr(array_base_address(value.storage, metadata)))
+		if uintptr(elements)-uintptr(value.storage) == uintptr(offset) && header.count == count {
+			intrinsics.atomic_store(&cache.buffer, header.metadata)
+		}
+	}
+	if count < 0 || count > i64((max(int)-offset)/stride) || (count != 0 && elements == nil) { return }
+	return {value, elements, int(count), stride}, true
+}
+
+array_value_element :: proc(buffer: Array_Value_Buffer, index: int) -> rawptr {
+	assert(index >= 0 && index < buffer.count)
+	return rawptr(uintptr(buffer.elements)+uintptr(index*buffer.stride))
+}
+
+// Abandon a partially initialized native allocation. The initialized prefix is
+// destroyed explicitly; the runtime rollback must not destroy it a second time.
+array_value_abort :: proc(buffer: Array_Value_Buffer, initialized: int, metadata: rawptr) {
+	assert(initialized >= 0 && initialized <= buffer.count)
+	for index in 0..<initialized {
+		value_deinitialize(array_value_element(buffer, index), metadata)
+	}
+	array_deallocate_uninitialized(buffer.value.storage, metadata)
+}
+
+// The importer proves plain frozen record layouts before using these helpers.
+// Verify the runtime witnesses too: POD permits copying bytes and no destruction.
+@(private)
+array_trivial_layout :: proc(metadata: rawptr, $T: typeid) -> bool {
+	if metadata == nil { return false }
+	witness := value_witnesses(metadata)
+	return witness.flags & 0x10000 == 0 && witness.size == size_of(T) &&
+	       witness.stride == max(1, size_of(T)) && witness.flags & 0xff == align_of(T)-1
+}
+
+@(require_results)
+array_from_trivial :: proc(values: []$T, metadata: rawptr, cache: ^Array_Value_Cache) -> (result: Native_Array, ok: bool) #optional_ok {
+	if !array_trivial_layout(metadata, T) { return }
+	buffer := array_value_allocate(len(values), metadata, cache) or_return
+	when size_of(T) != 0 {
+		if len(values) != 0 { mem.copy_non_overlapping(buffer.elements, raw_data(values), len(values)*size_of(T)) }
+	}
+	return buffer.value, true
+}
+
+@(require_results)
+array_to_trivial :: proc(value: Native_Array, metadata: rawptr, cache: ^Array_Value_Cache, $T: typeid) -> (result: []T, ok: bool) #optional_ok {
+	if !array_trivial_layout(metadata, T) { return }
+	buffer := array_value_buffer(value, metadata, cache) or_return
+	if buffer.count == 0 { return nil, true }
+	when size_of(T) == 0 {
+		values, err := non_zero_make([]T, buffer.count)
+		return values, err == nil
+	} else {
+		// Keep small records inline, use bounded blocks for medium copies,
+		// and leave large transfers to the platform bulk-copy routine.
+		byte_count := buffer.count*size_of(T)
+		// Use stronger alignment for vector and large bulk copies, retaining
+		// the caller's allocator and ordinary slice deletion.
+		alignment := max(byte_count <= 32768 ? 16 : 64, align_of(T))
+		allocator := context.allocator
+		if allocator.procedure == nil { return }
+		bytes, err := allocator.procedure(allocator.data, .Alloc_Non_Zeroed, byte_count, alignment, nil, 0, #location())
+		if err != nil || raw_data(bytes) == nil { return }
+		values := (cast([^]T)raw_data(bytes))[:buffer.count]
+		if byte_count <= 512 {
+			source := cast([^]T)buffer.elements
+			for &value, index in values { value = source[index] }
+		} else if byte_count <= 32768 {
+			destination := raw_data(bytes)
+			source := cast([^]byte)buffer.elements
+			copied := 0
+			for byte_count-copied >= 64 {
+				mem.copy_non_overlapping(&destination[copied], &source[copied], 64)
+				copied += 64
+			}
+			mem.copy_non_overlapping(&destination[copied], &source[copied], byte_count-copied)
+		} else {
+			mem.copy_non_overlapping(raw_data(values), buffer.elements, byte_count)
+		}
+		return values, true
+	}
+}
+
+// A resilient element remains a typed native value address, with independently
+// owned Swift contents. Batch the Odin storage instead of allocating per slot.
+@(require_results)
+array_to_values :: proc(value: Native_Array, metadata: rawptr, cache: ^Array_Value_Cache, $T: typeid) -> (result: []T, ok: bool) where intrinsics.type_is_pointer(T) #optional_ok {
+	buffer := array_value_buffer(value, metadata, cache) or_return
+	return value_allocate_many(buffer.count, metadata, T, source = buffer.elements)
+}
+
+// Convert an owned native result which the caller releases immediately after
+// this call. Take elements only from the exact native allocation type when
+// Swift reports one strong owner; shared/foreign storage is copied. Do not use
+// this for a borrowed array: array_to_values preserves its initialized contents.
+@(require_results)
+array_take_values :: proc(value: Native_Array, metadata: rawptr, cache: ^Array_Value_Cache, $T: typeid) -> (result: []T, ok: bool) where intrinsics.type_is_pointer(T) #optional_ok {
+	buffer := array_value_buffer(value, metadata, cache) or_return
+	if buffer.count == 0 { return nil, true }
+	storage_type := intrinsics.atomic_load(&cache.storage)
+	if storage_type == nil {
+		// Discover dynamic native storage independently of the borrowed-buffer
+		// cache, which may describe static or foreign storage. No live elements.
+		probe := array_value_allocate(1, metadata, cache) or_return
+		array_value_abort(probe, 0, metadata)
+		storage_type = intrinsics.atomic_load(&cache.storage)
+	}
+	header := cast(^Array_Storage)value.storage
+	take_source := storage_type != nil && header.metadata == storage_type && swift_isUniquelyReferenced_nonNull_native(value.storage)
+	result = value_allocate_many(buffer.count, metadata, T, source = buffer.elements, take_source = take_source) or_return
+	if take_source {
+		// The take witness consumed every element. Releasing the array must
+		// free its storage without destroying those elements again.
+		header.count = 0
+	}
+	return result, true
+}
+
+@(require_results)
+array_from_values :: proc(values: []$T, metadata: rawptr, cache: ^Array_Value_Cache) -> (result: Native_Array, ok: bool) where intrinsics.type_is_pointer(T) #optional_ok {
+	buffer := array_value_allocate(len(values), metadata, cache) or_return
+	initialized := 0
+	defer if !ok { array_value_abort(buffer, initialized, metadata) }
+	copy_value := value_witnesses(metadata).copy
+	for value, index in values {
+		if value == nil { return }
+		copy_value(array_value_element(buffer, index), rawptr(value), metadata)
+		initialized += 1
+	}
+	return buffer.value, true
 }

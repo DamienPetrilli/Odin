@@ -35,6 +35,8 @@ cp "$here/plain_enums.odin" "$build/plain_enums.odin"
 cp "$here/strings.odin" "$build/strings.odin"
 cp "$here/tasks.odin" "$build/tasks.odin"
 cp "$here/arrays.odin" "$build/arrays.odin"
+cp "$here/value_arrays.odin" "$build/value_arrays.odin"
+cp "$here/records.odin" "$build/records.odin"
 
 # Odin imports, checks and links the Swift module in a single invocation.
 "$ODIN" build "$build" \
@@ -109,7 +111,7 @@ package clashes
 foreign import fixture "swift:fixture/SwiftClashesFixture"
 main :: proc() {}
 ODIN
-for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE FROZEN_ENUM_CASE STRING_TYPE; do
+for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE FROZEN_ENUM_CASE STRING_TYPE ARRAY_TYPE RECORD_FIELD; do
 	"${swiftc[@]}" -D "$selection" -parse-as-library -enable-library-evolution -module-name SwiftClashesFixture \
 		-emit-object -o "$build/clashes/fixture/SwiftClashesFixture.o" \
 		-emit-module-path "$build/clashes/fixture/SwiftClashesFixture.swiftmodule" "$here/Clashes.swift"
@@ -119,8 +121,8 @@ for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE FROZEN_EN
 	fi
 	case "$selection" in
 		BUILTIN) diagnostic="type 'f64' conflicts" ;;
-		FLATTENED | STRING_TYPE) diagnostic="map to the same Odin name" ;;
-		HELPER | ENUM_CASE | FROZEN_ENUM_CASE) diagnostic="is ambiguous" ;;
+		FLATTENED | STRING_TYPE | ARRAY_TYPE) diagnostic="map to the same Odin name" ;;
+		HELPER | ENUM_CASE | FROZEN_ENUM_CASE | RECORD_FIELD) diagnostic="is ambiguous" ;;
 		UNSUPPORTED_HELPER) diagnostic="conflicts with a generated Odin helper" ;;
 	esac
 	if ! grep -F 'Swift import:' "$build/invalid.log" | grep -Fq "$diagnostic"; then
@@ -137,7 +139,7 @@ package rejected
 foreign import fixture "swift:fixture/SwiftImportFixture"
 main :: proc() {
 ODIN
-for selection in narrow generic throwing isolated_sync overloaded future inout_value direct_value typed_throwing text_later unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields deep_optional; do
+for selection in narrow generic throwing isolated_sync overloaded future inout_value typed_throwing text_later unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields deep_optional; do
 	printf '\t_ = fixture.%s\n' "$selection" >> "$build/rejected.odin"
 done
 printf '}\n' >> "$build/rejected.odin"
@@ -145,7 +147,7 @@ if "$ODIN" check "$build/rejected.odin" -file "${odin_target[@]}" > "$build/inva
 	echo "Expected importer to reject unsupported declarations" >&2
 	exit 1
 fi
-for selection in narrow generic throwing isolated_sync overloaded future inout_value direct_value typed_throwing text_later unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields deep_optional; do
+for selection in narrow generic throwing isolated_sync overloaded future inout_value typed_throwing text_later unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields deep_optional; do
 	if ! grep -F "Swift import:" "$build/invalid.log" | grep -Fq "'$selection'"; then
 		cat "$build/invalid.log" >&2
 		echo "Missing rejection for $selection" >&2

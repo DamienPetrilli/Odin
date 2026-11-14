@@ -82,14 +82,14 @@ check_strings :: proc() {
 	check_collections()
 }
 
-texts_received :: proc(task: swift.Task, values: fixture.Array_TextValue, error: swift.Error) {
+texts_received :: proc(task: swift.Task, values: []fixture.TextValue, error: swift.Error, converted: bool) {
 	expected := take_expected(task)
 	defer swift.error_release(error)
 	if expected == 0 {
 		assert(values == nil && error != nil)
 	} else {
-		assert(error == nil && fixture.Array_TextValue_count(values) == 1)
-		value := fixture.Array_TextValue_get(values, 0) or_else panic("Array element")
+		assert(error == nil && converted && len(values) == 1)
+		value := fixture.TextValue_copy(values[0]) or_else panic("Array element")
 		fixture.Array_TextValue_destroy(values)
 		text := fixture.TextValue_text(value) or_else panic("Array element text")
 		fixture.TextValue_destroy(value)

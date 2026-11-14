@@ -18,6 +18,12 @@ public struct Value {
 @frozen public enum Value { case value, Value }
 #elseif ENUM_CASE
 public enum Value { case value, Value, unknown_Default }
+#elseif ARRAY_TYPE
+public struct Value { public let value: Swift.UInt64 }
+public struct Array_Value { public let value: Swift.UInt64 }
+public func values() -> [Value] { [] }
+#elseif RECORD_FIELD
+@frozen public struct Record { public let itemId: UInt64; public let item_id: UInt64 }
 #elseif STRING_TYPE
 public struct String { public let value: Swift.UInt64 }
 public func text() -> Swift.String { "text" }

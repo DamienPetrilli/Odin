@@ -442,6 +442,68 @@ public func existentialPayload(_ value: ExistentialPayload) -> ExistentialPayloa
 public enum CollidingFields { case value(bookID: UInt64, bookId: UInt64) }
 public func collidingFields() -> CollidingFields { .value(bookID: 1, bookId: 2) }
 
+public func makeValues(_ count: UInt64) -> [Value] {
+	(0..<count).map { Value($0 + 17) }
+}
+public func incrementValues(_ values: [Value], _ amount: UInt64) -> [Value] {
+	var result = values
+	for index in result.indices { result[index].increment(amount) }
+	return result
+}
+public func sumValues(_ values: [Value]) -> UInt64 {
+	values.reduce(0) { $0 &+ $1.value }
+}
+public func incrementValuesLater(_ values: [Value], _ amount: UInt64) async throws -> [Value] {
+	await Task.yield()
+	if amount == 0 { throw ValueFailure() }
+	return incrementValues(values, amount)
+}
+@frozen public struct ArrayRecord {
+	public let first: UInt64
+	public let fraction: Double
+	public let last: UInt64
+}
+public func makeRecords(_ count: UInt64) -> [ArrayRecord] {
+	(0..<count).map { ArrayRecord(first: $0, fraction: 0.5, last: $0 + 1) }
+}
+public func echoRecords(_ values: [ArrayRecord]) -> [ArrayRecord] { values }
+public func sumRecords(_ values: [ArrayRecord]) -> UInt64 {
+	values.reduce(0) { $0 &+ $1.first &+ $1.last &+ UInt64($1.fraction * 2) }
+}
+@frozen public struct ArrayEmpty {}
+public func emptyRecords(_ count: UInt64) -> [ArrayEmpty] {
+	Array(repeating: ArrayEmpty(), count: Int(count))
+}
+public func countEmptyRecords(_ values: [ArrayEmpty]) -> UInt64 { UInt64(values.count) }
+public func echoLookups(_ values: [Lookup]) -> [Lookup] { values }
+public func echoOptionalValues(_ values: [Value?]) -> [Value?] { values }
+public func futureOutcomes() -> [ValueOutcome] { [valueOutcome(99)] }
+public func echoOutcomes(_ values: [ValueOutcome]) -> [ValueOutcome] { values }
+public enum ValueBatch { case values([Value]), none }
+public func echoBatch(_ value: ValueBatch) -> ValueBatch { value }
+
+public func appendRecords(_ values: [ArrayRecord], _ count: UInt64) -> [ArrayRecord] {
+	var output = values
+	for index in 0..<count { output.append(ArrayRecord(first: index, fraction: 0.5, last: index+1)) }
+	return output
+}
+public func echoLookupsLater(_ values: [Lookup]) async -> [Lookup] {
+	await Task.yield()
+	return values
+}
+
+@frozen public struct ArrayAligned {
+	public let lanes: SIMD4<Float>
+	public let value: UInt64
+}
+public func makeAligned(_ count: UInt64) -> [ArrayAligned] {
+	precondition(MemoryLayout<ArrayAligned>.alignment == 16)
+	return (0..<count).map { ArrayAligned(lanes: SIMD4(repeating: Float($0)), value: $0+1) }
+}
+public func sumAligned(_ values: [ArrayAligned]) -> UInt64 {
+	values.reduce(0) { $0 &+ UInt64($1.lanes.x) &+ $1.value }
+}
+
 // Frozen no-payload enums use native Odin enums. Raw values are deliberately
 // unrelated to the ABI discriminants, including a String-backed enum.
 @frozen public enum Mode { case idle, running }
@@ -485,6 +547,13 @@ public func rawCodeLater(_ value: UInt64) async -> RawCode? {
 	await Task.yield()
 	return RawCode(rawValue: value)
 }
+public func echoModes(_ values: [Mode]) -> [Mode] { values }
+public func echoSingleCases(_ values: [SingleCase]) -> [SingleCase] { values }
+public func modesLater(_ values: [Mode]) async -> [Mode] {
+	await Task.yield()
+	return values
+}
+
 @frozen public enum ModePayload {
 	case named(Mode, String)
 	case single(SingleCase, String)
@@ -540,3 +609,70 @@ public struct FailableValue {
 }
 public func echoWideCode(_ value: WideCode) -> WideCode { value }
 public func wideCodeValue(_ value: WideCode) -> UInt64 { value.rawValue }
+
+// Plain frozen records use inline Odin fields, including indirect large values.
+@frozen public struct WideRecord {
+	public var first: UInt64
+	public var signed: Int64
+	public var fraction: Double
+	public var fourth: UInt64
+	public var fifth: UInt64
+}
+public func echoWide(_ value: WideRecord) -> WideRecord { value }
+public func echoWideLater(_ value: WideRecord) async -> WideRecord {
+	await Task.yield()
+	return value
+}
+public func echoRecord(_ value: ArrayRecord) -> ArrayRecord { value }
+public func incrementRecord(_ value: ArrayRecord, _ delta: UInt64) -> ArrayRecord {
+	ArrayRecord(first: value.first &+ delta, fraction: value.fraction + 0.25, last: value.last &+ delta)
+}
+public func incrementRecords(_ values: [ArrayRecord], _ delta: UInt64) -> [ArrayRecord] {
+	values.map { incrementRecord($0, delta) }
+}
+public func echoRecordLater(_ value: ArrayRecord) async -> ArrayRecord {
+	await Task.yield()
+	return value
+}
+public func echoRecordsLater(_ values: [ArrayRecord]) async -> [ArrayRecord] {
+	await Task.yield()
+	return values
+}
+public func echoEmpty(_ value: ArrayEmpty) -> ArrayEmpty { value }
+public func optionalRecord(_ value: ArrayRecord?) -> ArrayRecord? { value }
+@frozen public enum RecordResult { case record(ArrayRecord), none }
+public func echoRecordResult(_ value: RecordResult) -> RecordResult { value }
+
+// Frozen does not imply POD or public layout: these keep native owners.
+@frozen public struct OwnedRecord { public let text: String }
+public func makeOwnedRecord(_ text: String) -> [OwnedRecord] { [OwnedRecord(text: text)] }
+public func ownedRecordText(_ value: [OwnedRecord]) -> String { value[0].text }
+@frozen public struct HiddenRecord {
+	public let value: UInt64
+	@usableFromInline internal let hidden: UInt64
+}
+public func makeHiddenRecord(_ value: UInt64) -> [HiddenRecord] { [HiddenRecord(value: value, hidden: value+1)] }
+public func hiddenRecordSum(_ value: [HiddenRecord]) -> UInt64 { value[0].value+value[0].hidden }
+
+nonisolated(unsafe) private var sharedValues: [Value] = []
+public func prepareSharedValues(_ count: UInt64) { sharedValues = makeValues(count) }
+public func getSharedValues() -> [Value] { sharedValues }
+public func sharedValuesSum() -> UInt64 { sumValues(sharedValues) }
+public func clearSharedValues() { sharedValues = [] }
+
+// Weak storage exercises initializeWithTake rather than assuming a byte move.
+nonisolated(unsafe) private var weakLifetime: Lifetime?
+public struct WeakValue {
+	private weak var lifetime: Lifetime?
+	fileprivate init(_ lifetime: Lifetime) { self.lifetime = lifetime }
+	public var alive: UInt64 { lifetime == nil ? 0 : 1 }
+}
+public func makeWeakValues(_ count: UInt64) -> [WeakValue] {
+	let lifetime = Lifetime()
+	weakLifetime = lifetime
+	return (0..<count).map { _ in WeakValue(lifetime) }
+}
+public func clearWeakLifetime() { weakLifetime = nil }
+
+public func echoWideRecords(_ values: [WideRecord]) -> [WideRecord] { values }
+public func echoDirectValues(_ values: [DirectValue]) -> [DirectValue] { values }
