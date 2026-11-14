@@ -60,6 +60,30 @@ gb_internal void swift_import_struct_layout(LLVMModuleRef module, LLVMTargetData
 	type->projected = true;
 }
 
+// Capture spelling and attribute order differ between LLVM versions. Check
+// indirect record promises through LLVM, then omit only those checked attributes
+// from the inspection declaration. ABI attributes such as sret remain intact.
+gb_internal bool swift_import_struct_parameter(LLVMValueRef function, unsigned index, SwiftImportNominal *type, bool result) {
+	if (!function || index >= LLVMCountParams(function)) return false;
+	unsigned position = index+1;
+	unsigned capture = LLVMGetEnumAttributeKindForName("captures", 8);
+	if (!capture) capture = LLVMGetEnumAttributeKindForName("nocapture", 9);
+	LLVMAttributeRef attribute = LLVMGetEnumAttributeAtIndex(function, position, capture);
+	if (!attribute || LLVMGetEnumAttributeValue(attribute) != 0) return false;
+	unsigned alignment = LLVMGetEnumAttributeKindForName("align", 5);
+	attribute = LLVMGetEnumAttributeAtIndex(function, position, alignment);
+	if (attribute && LLVMGetEnumAttributeValue(attribute) > type->alignment) return false;
+	unsigned size = LLVMGetEnumAttributeKindForName("dereferenceable", 15);
+	attribute = LLVMGetEnumAttributeAtIndex(function, position, size);
+	if (result) {
+		if (attribute && LLVMGetEnumAttributeValue(attribute) > type->size) return false;
+	} else if (!attribute || LLVMGetEnumAttributeValue(attribute) != type->size) return false;
+	LLVMRemoveEnumAttributeAtIndex(function, position, capture);
+	LLVMRemoveEnumAttributeAtIndex(function, position, alignment);
+	LLVMRemoveEnumAttributeAtIndex(function, position, size);
+	return true;
+}
+
 gb_internal gbString swift_import_emit_struct(gbString source, SwiftImportNominal *type) {
 	String name = type->name;
 	source = gb_string_append_fmt(source, "%.*s :: struct {\n", LIT(name));

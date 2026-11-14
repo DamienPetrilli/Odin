@@ -623,6 +623,15 @@ public func echoWideLater(_ value: WideRecord) async -> WideRecord {
 	await Task.yield()
 	return value
 }
+// Mixed direct register components must not shift the indirect record check.
+public func mixedWide(_ prefix: ArrayRecord, _ text: String, _ value: WideRecord) -> WideRecord {
+	precondition(prefix.first == value.first && text == "wide")
+	return value
+}
+public func mixedWideLater(_ prefix: ArrayRecord, _ text: String, _ value: WideRecord) async -> WideRecord {
+	await Task.yield()
+	return mixedWide(prefix, text, value)
+}
 public func echoRecord(_ value: ArrayRecord) -> ArrayRecord { value }
 public func incrementRecord(_ value: ArrayRecord, _ delta: UInt64) -> ArrayRecord {
 	ArrayRecord(first: value.first &+ delta, fraction: value.fraction + 0.25, last: value.last &+ delta)

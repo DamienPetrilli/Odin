@@ -49,6 +49,7 @@ check_records :: proc() {
 	result := fixture.echo_record_result(fixture.RecordResult_Record{value})
 	assert(result.(fixture.RecordResult_Record).value == value)
 	assert(state.allocations == 0)
+	assert(fixture.mixed_wide(value, "wide", wide) == wide)
 
 	for count in ([]u64{0, 1, 2, 7, 8, 9, 16, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 1023, 1024, 1025, 1365, 1366, 16384}) {
 		before := state.allocations
@@ -117,6 +118,8 @@ check_records :: proc() {
 	track_task(task, 9)
 	task = fixture.echo_wide_later(wide, wide_received) or_else panic("Async indirect record")
 	track_task(task, 9)
+	task = fixture.mixed_wide_later(value, "wide", wide, wide_received) or_else panic("Async mixed record")
+	track_task(task, 9)
 	input := []fixture.ArrayRecord{value}
 	task = fixture.echo_records_later(input, records_received) or_else panic("Async inline slice")
 	track_task(task, 9)
@@ -124,7 +127,7 @@ check_records :: proc() {
 	value.first = 999
 	wide.first = 999
 	deadline := time.tick_now()
-	for record_calls != 3 {
+	for record_calls != 4 {
 		assert(time.tick_since(deadline) < 5*time.Second)
 		_ = cf.RunLoopRunInMode(cf.kRunLoopDefaultMode, 0.01, false)
 	}

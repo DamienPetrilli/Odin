@@ -1326,6 +1326,9 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		auto &fn = functions[index];
 		bool receiver = swift_import_has_receiver(fn);
 		bool indirect_result = swift_import_indirect(fn.result);
+		LLVMValueRef native = LLVMGetNamedFunction(inspection, alloc_cstring(permanent_allocator(), fn.symbol));
+		bool record_parameters = false;
+		unsigned native_index = 0;
 		bool supported = (!fn.owner || fn.is_static || (fn.owner->supported && (fn.is_initializer || !fn.owner->projected))) && swift_import_ownership(sil, &fn);
 		if (fn.result.nominal) supported &= fn.result.nominal->supported;
 		for (auto const &param : fn.parameters) if (param.type.nominal) supported &= param.type.nominal->supported;
@@ -1335,28 +1338,41 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		isize count = 0;
 		if (indirect_result) {
 			if (fn.result.nominal->is_record) {
-				if (fn.is_async) declaration = gb_string_appendc(declaration, "ptr noalias nocapture");
-				else declaration = gb_string_append_fmt(declaration, "ptr noalias nocapture sret(%%T%.*s)", LIT(substring(fn.result.nominal->symbol, 2, fn.result.nominal->symbol.len)));
+				record_parameters = true;
+				supported &= swift_import_struct_parameter(native, native_index, fn.result.nominal, true);
+				if (fn.is_async) declaration = gb_string_appendc(declaration, "ptr noalias");
+				else declaration = gb_string_append_fmt(declaration, "ptr noalias sret(%%T%.*s)", LIT(substring(fn.result.nominal->symbol, 2, fn.result.nominal->symbol.len)));
 			} else declaration = gb_string_appendc(declaration, fn.is_async ? "ptr noalias" : "ptr noalias sret(%swift.opaque)");
 			count++;
+			native_index++;
 		}
 		if (fn.is_async) {
 			declaration = gb_string_append_fmt(declaration, "%sptr swiftasync", count++ ? ", " : "");
+			native_index++;
 		}
 		for (auto const &param : fn.parameters) {
 			if (swift_import_empty(param.type)) continue;
 			char const *llvm = swift_import_kind(param.type, SwiftImportValue_String) ? "i64, ptr" : swift_import_projected(param.type) ? alloc_cstring(permanent_allocator(), swift_import_enum_llvm(param.type.nominal, false)) : param.type.llvm;
 			if (fn.is_collection && swift_import_string_array(param.type)) llvm = "ptr noalias";
 			if (swift_import_indirect(param.type) && param.type.nominal->is_record) {
-				llvm = gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "ptr noalias nocapture dereferenceable(%llu)", cast(unsigned long long)param.type.nominal->size);
+				record_parameters = true;
+				supported &= swift_import_struct_parameter(native, native_index, param.type.nominal, false);
+				llvm = "ptr noalias";
 			}
 			declaration = gb_string_append_fmt(declaration, "%s%s", count++ ? ", " : "", llvm);
+			if (fn.is_collection && swift_import_string_array(param.type)) native_index++;
+			else if (swift_import_kind(param.type, SwiftImportValue_String)) native_index += 2;
+			else if (swift_import_projected(param.type) && !swift_import_indirect(param.type)) native_index += cast(unsigned)param.type.nominal->components.count;
+			else native_index++;
 		}
 		if (fn.is_collection) declaration = gb_string_append_fmt(declaration, "%sptr, ptr", count++ ? ", " : "");
 		if (receiver) declaration = gb_string_append_fmt(declaration, "%s%s", count ? ", " : "", fn.is_mutating ? "ptr swiftself" : "ptr noalias swiftself");
 		declaration = gb_string_appendc(declaration, ")");
 		String exported = concatenate_strings(permanent_allocator(), str_lit(" _"), fn.symbol);
-		if (!supported || !swift_import_has_line(ir, make_string_c(declaration), true) ||
+		char *native_declaration = record_parameters && native ? LLVMPrintValueToString(native) : nullptr;
+		defer (if (native_declaration) LLVMDisposeMessage(native_declaration));
+		String inspected = native_declaration ? make_string_c(native_declaration) : ir;
+		if (!supported || !swift_import_has_line(inspected, make_string_c(declaration), true) ||
 		    (!pkg->framework && (!swift_import_has_line(exports, exported, false) ||
 		    (fn.is_async && !swift_import_has_line(exports, concatenate_strings(permanent_allocator(), exported, str_lit("Tu")), false))))) {
 			array_add(&pkg->unsupported, fn.odin_name);
