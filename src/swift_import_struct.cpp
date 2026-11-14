@@ -67,8 +67,11 @@ gb_internal bool swift_import_struct_parameter(LLVMValueRef function, unsigned i
 	if (!function || index >= LLVMCountParams(function)) return false;
 	unsigned position = index+1;
 	unsigned capture = LLVMGetEnumAttributeKindForName("captures", 8);
-	if (!capture) capture = LLVMGetEnumAttributeKindForName("nocapture", 9);
-	LLVMAttributeRef attribute = LLVMGetEnumAttributeAtIndex(function, position, capture);
+	LLVMAttributeRef attribute = capture ? LLVMGetEnumAttributeAtIndex(function, position, capture) : nullptr;
+	if (!attribute) {
+		capture = LLVMGetEnumAttributeKindForName("nocapture", 9);
+		attribute = capture ? LLVMGetEnumAttributeAtIndex(function, position, capture) : nullptr;
+	}
 	if (!attribute || LLVMGetEnumAttributeValue(attribute) != 0) return false;
 	unsigned alignment = LLVMGetEnumAttributeKindForName("align", 5);
 	attribute = LLVMGetEnumAttributeAtIndex(function, position, alignment);
