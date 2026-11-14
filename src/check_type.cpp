@@ -4125,14 +4125,14 @@ gb_internal void check_procedure_param_polymorphic_type(CheckerContext *ctx, Typ
 
 gb_internal bool is_swift_abi_scalar(Type *type) {
 	type = base_type(type);
-	return type == t_i64 || type == t_u64 || type == t_f64 || is_type_pointer(type) || is_type_multi_pointer(type);
+	return type == t_i64 || type == t_u64 || type == t_int || type == t_uint || type == t_f64 || is_type_pointer(type) || is_type_multi_pointer(type);
 }
 
 gb_internal bool is_swift_abi_slice_parameter(Type *type) {
 	type = base_type(type);
 	if (!type || type->kind != Type_Slice) return false;
 	Type *elem = type->Slice.elem;
-	return elem == t_i64 || elem == t_u64 || elem == t_f64;
+	return elem == t_i64 || elem == t_u64 || elem == t_int || elem == t_uint || elem == t_f64;
 }
 
 // Odin enum procedures use their integer backing type internally. The Swift

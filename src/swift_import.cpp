@@ -11,10 +11,14 @@
 
 extern char **environ;
 
+struct SwiftImportRejection {
+	String name, reason;
+};
+
 struct SwiftImportPackage {
 	String module, path, library;
 	String directory;
-	Array<String> unsupported;
+	Array<SwiftImportRejection> unsupported;
 	bool framework;
 };
 
@@ -32,6 +36,22 @@ struct SwiftImportType {
 	char const *odin;
 	char const *llvm;
 	SwiftImportNominal *nominal;
+};
+
+// Keep source identity, Odin spelling and ABI spelling together. Swift.Int
+// and Swift.UInt are pointer-width types on the supported Darwin arm64 target.
+struct SwiftImportScalar {
+	char const *usr;
+	SwiftImportType type;
+};
+
+gb_global SwiftImportScalar const swift_import_scalars[] = {
+	{"s:s6UInt64V", {"Swift.UInt64", "u64", "i64", nullptr}},
+	{"s:s5Int64V",  {"Swift.Int64", "i64", "i64", nullptr}},
+	{"s:Sd",       {"Swift.Double", "f64", "double", nullptr}},
+	{"s:Sb",       {"Swift.Bool", "bool", "i1", nullptr}},
+	{"s:Si",       {"Swift.Int", "int", "i64", nullptr}},
+	{"s:Su",       {"Swift.UInt", "uint", "i64", nullptr}},
 };
 
 struct SwiftImportField {
@@ -69,7 +89,7 @@ struct SwiftImportParameter {
 };
 
 struct SwiftImportFunction {
-	String name, title, symbol, odin_name, base_name;
+	String name, title, symbol, odin_name, base_name, rejection;
 	SwiftImportNominal *owner;
 	Array<SwiftImportParameter> parameters;
 	SwiftImportType result;
@@ -130,7 +150,7 @@ gb_internal isize swift_import_index(String text, String part) {
 gb_internal bool swift_import_reserved_name(String name) {
 	char const *reserved[] = {
 		"_", "context", "nil", "true", "false", "intrinsics", "runtime", "swift_library", "swift", "main",
-		"bool", "int", "rawptr", "string", "u8", "u16", "u32", "u64", "i64", "f64", "Maybe", "mem", "strings",
+		"bool", "int", "uint", "rawptr", "string", "u8", "u16", "u32", "u64", "i64", "f64", "Maybe", "mem", "strings",
 	};
 	for (auto value : reserved) if (name == make_string_c(value)) return true;
 	if (string_starts_with(name, str_lit("_swift_"))) return true;
@@ -251,10 +271,23 @@ gb_internal char const *swift_import_slice_element(SwiftImportNominal *type) {
 	return swift_import_nominal_type(type->argument).odin;
 }
 
+gb_internal bool swift_import_scalar(String name, SwiftImportType *type) {
+	for (auto const &scalar : swift_import_scalars) {
+		if (name == make_string_c(scalar.usr) || name == make_string_c(scalar.type.swift)) {
+			*type = scalar.type;
+			return true;
+		}
+	}
+	return false;
+}
+
 gb_internal SwiftImportType swift_import_nominal_type(SwiftImportNominal *type) {
 	if (type->is_scalar) {
-		char const *odin = type->name == "UInt64" ? "u64" : type->name == "Int64" ? "i64" : "f64";
-		return {alloc_cstring(permanent_allocator(), type->swift_name), odin, type->name == "Double" ? "double" : "i64", type};
+		SwiftImportType scalar = {};
+		bool found = swift_import_scalar(type->swift_name, &scalar);
+		GB_ASSERT(found);
+		scalar.nominal = type;
+		return scalar;
 	}
 	char const *odin = type->kind == SwiftImportValue_String ? "string" : alloc_cstring(permanent_allocator(), type->name);
 	if (swift_import_slice(type)) odin = gb_string_appendc(gb_string_make(permanent_allocator(), "[]"), swift_import_slice_element(type));
@@ -263,10 +296,7 @@ gb_internal SwiftImportType swift_import_nominal_type(SwiftImportNominal *type) 
 }
 
 gb_internal bool swift_import_named_type(String usr, SwiftImportType *type, Array<SwiftImportNominal *> const &types) {
-	if (usr == "s:s6UInt64V") *type = {"Swift.UInt64", "u64", "i64", nullptr};
-	else if (usr == "s:s5Int64V") *type = {"Swift.Int64", "i64", "i64", nullptr};
-	else if (usr == "s:Sd") *type = {"Swift.Double", "f64", "double", nullptr};
-	else {
+	if (!swift_import_scalar(usr, type)) {
 		for (SwiftImportNominal *nominal : types) {
 			if (nominal->usr == usr && !nominal->is_template && !nominal->argument) {
 				*type = swift_import_nominal_type(nominal);
@@ -296,6 +326,8 @@ gb_internal bool swift_import_container_type(String usr, SwiftImportType paramet
 	if (swift_import_slice(parameter.nominal) && usr != "s:Sq") return false;
 	bool optional = usr == "s:Sq";
 	bool array = usr == "s:Sa";
+	// Bool buffer storage requires a separate conversion contract.
+	if (array && make_string_c(parameter.swift) == "Swift.Bool") return false;
 	bool set = usr == "s:Sh";
 
 	SwiftImportNominal *base = nullptr;
@@ -417,6 +449,30 @@ gb_internal bool swift_import_type(Slice<JsonValue *> fragments, bool result, Sw
 	return text == swift_name || text == substring(swift_name, 6, swift_name.len);
 }
 
+gb_internal void swift_import_reject(SwiftImportPackage *pkg, String name, String reason = {}) {
+	if (!reason.len) reason = str_lit("declaration is unavailable for this target or outside the supported ABI subset");
+	for (auto &rejection : pkg->unsupported) {
+		if (rejection.name == name) {
+			rejection.reason = str_lit("ambiguous Swift overload or binding name");
+			return;
+		}
+	}
+	array_add(&pkg->unsupported, SwiftImportRejection{name, reason});
+}
+
+// Record the source type at the rejected parameter/result rather than exposing
+// a generated Odin error. Type aliases and nested Optional/Array names come
+// from the compiler's API description, not a guessed mangled symbol.
+gb_internal String swift_import_type_rejection(JsonValue *api, String parameter = {}) {
+	String type = swift_import_string(api, "printedName");
+	if (!type.len) type = swift_import_string(api, "name");
+	if (!type.len) type = str_lit("unknown");
+	gbString text = gb_string_make(permanent_allocator(), "");
+	if (parameter.len) text = gb_string_append_fmt(text, "parameter '%.*s' has unsupported type or modifier '%.*s'", LIT(parameter), LIT(type));
+	else text = gb_string_append_fmt(text, "unsupported result type '%.*s'", LIT(type));
+	return make_string_c(text);
+}
+
 gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftImportFunction *fn, Array<SwiftImportNominal *> *types) {
 	fn->name = swift_import_string(api, "name");
 	fn->title = swift_import_string(swift_import_member(symbol, "names"), "title");
@@ -480,7 +536,9 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 	if (fn->is_property) {
 		auto children = swift_import_array(api, "children");
 		if (children.count != 1) return false;
-		return swift_import_api_type(children[0], &fn->result, types);
+		bool supported = swift_import_api_type(children[0], &fn->result, types);
+		if (!supported) fn->rejection = swift_import_type_rejection(children[0]);
+		return supported;
 	}
 	auto api_types = swift_import_array(api, "children");
 	JsonValue *signature = swift_import_member(symbol, "functionSignature");
@@ -496,6 +554,7 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 	} else if (!returns || returns->kind != Json_Array || returns->array.count == 0 ||
 	           (!swift_import_type(returns->array, true, &fn->result, *types) &&
 	            (api_types.count == 0 || !swift_import_api_type(api_types[0], &fn->result, types)))) {
+		fn->rejection = swift_import_type_rejection(api_types.count ? api_types[0] : nullptr);
 		return false;
 	}
 	// A UTF-8 result needs an Odin allocation after completion. Keep that
@@ -520,7 +579,10 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 			if (api_types.count != 2 || swift_import_string(api_types[1], "name") != "GenericTypeParam" || swift_import_string(api_types[1], "printedName") != collection_parameter) return false;
 			if (!swift_import_container_type(str_lit("s:Sa"), swift_import_nominal_type(swift_import_string_type(types)), &p.type, types)) return false;
 		} else if (!swift_import_type(swift_import_array(parameter, "declarationFragments"), false, &p.type, *types) &&
-		    (api_types.count <= fn->parameters.count+1 || !swift_import_api_type(api_types[fn->parameters.count+1], &p.type, types))) return false;
+		    (api_types.count <= fn->parameters.count+1 || !swift_import_api_type(api_types[fn->parameters.count+1], &p.type, types))) {
+			fn->rejection = swift_import_type_rejection(api_types.count > fn->parameters.count+1 ? api_types[fn->parameters.count+1] : nullptr, name);
+			return false;
+		}
 		if (p.type.nominal && p.type.nominal->kind == SwiftImportValue_Set) {
 			// Only the SDK's explicit empty default is synthesized. Arbitrary
 			// Set construction needs separate Hashable and ownership support.
@@ -1098,20 +1160,20 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			}
 		}
 		if (!supported) {
-			array_add(&pkg->unsupported, name);
+			swift_import_reject(pkg, name, fn.rejection);
 			continue;
 		}
 		fn.odin_name = name;
 		bool collision = false;
 		for (auto const &previous : functions) collision |= previous.odin_name == name;
-		if (collision) array_add(&pkg->unsupported, name);
+		if (collision) swift_import_reject(pkg, name, str_lit("ambiguous Swift overload or binding name"));
 		else array_add(&functions, fn);
 	}
 	// A name must identify one supported declaration. Never choose an overload
 	// based on whichever order a tool happens to serialize its symbols.
 	for (isize i = functions.count; i-- > 0;) {
-		for (String name : pkg->unsupported) {
-			if (functions[i].odin_name == name) {
+		for (auto const &rejection : pkg->unsupported) {
+			if (functions[i].odin_name == rejection.name) {
 				array_ordered_remove(&functions, i);
 				break;
 			}
@@ -1375,7 +1437,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		if (!supported || !swift_import_has_line(inspected, make_string_c(declaration), true) ||
 		    (!pkg->framework && (!swift_import_has_line(exports, exported, false) ||
 		    (fn.is_async && !swift_import_has_line(exports, concatenate_strings(permanent_allocator(), exported, str_lit("Tu")), false))))) {
-			array_add(&pkg->unsupported, fn.odin_name);
+			swift_import_reject(pkg, fn.odin_name, str_lit("native lowering, value layout, ownership or exported symbol is outside the supported ABI subset"));
 			array_ordered_remove(&functions, index);
 		}
 	}
@@ -1417,7 +1479,8 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		}
 
 	}
-	for (auto name : pkg->unsupported) {
+	for (auto const &rejection : pkg->unsupported) {
+		String name = rejection.name;
 		for (auto generated : names) {
 			if (name == generated) {
 				syntax_error(node, "Swift import: unsupported declaration '%.*s' conflicts with a generated Odin helper", LIT(name));
@@ -1511,11 +1574,11 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			if (other.base_name == fn.base_name || other.odin_name == fn.base_name) count++;
 		}
 		for (auto name : names) if (name == fn.base_name) count++;
-		for (auto name : pkg->unsupported) if (name == fn.base_name) count++;
+		for (auto const &rejection : pkg->unsupported) if (rejection.name == fn.base_name) count++;
 		if (count == 1) {
 			source = gb_string_append_fmt(source, "%.*s :: %.*s\n", LIT(fn.base_name), LIT(fn.odin_name));
 		} else {
-			array_add(&pkg->unsupported, fn.base_name);
+			swift_import_reject(pkg, fn.base_name, str_lit("ambiguous Swift overload or binding name; use its argument-label binding"));
 		}
 	}
 	return swift_import_write(node, swift_import_path(pkg->directory, "import.odin"), source);
@@ -1608,16 +1671,16 @@ gb_internal bool swift_import_setup(Ast *node, String base_dir, String spec, Str
 #endif
 }
 
-gb_internal bool swift_import_unsupported(String path, String name) {
+gb_internal String swift_import_unsupported(String path, String name) {
 #if defined(GB_SYSTEM_OSX)
 	mutex_lock(&swift_import_mutex);
 	defer (mutex_unlock(&swift_import_mutex));
 	for (auto const &pkg : swift_import_packages) {
 		if (pkg.directory != path) continue;
-		for (String unsupported : pkg.unsupported) if (unsupported == name) return true;
+		for (auto const &rejection : pkg.unsupported) if (rejection.name == name) return rejection.reason;
 	}
 #endif
-	return false;
+	return {};
 }
 
 gb_internal void swift_import_cleanup(void) {

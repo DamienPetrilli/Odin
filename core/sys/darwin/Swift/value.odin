@@ -120,7 +120,7 @@ value_take :: proc(source, metadata: rawptr, allocator := context.allocator) -> 
 }
 
 // Fixed standard-library metadata shared by scalar and tuple projections.
-value_metadata :: proc($T: typeid) -> rawptr where T == u64 || T == i64 || T == f64 || T == string {
+value_metadata :: proc($T: typeid) -> rawptr where T == bool || T == int || T == uint || T == u64 || T == i64 || T == f64 || T == string {
 	return array_element_metadata(T)
 }
 

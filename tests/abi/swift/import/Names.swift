@@ -22,3 +22,16 @@ public struct Item {
 	public init(_ value: Swift.UInt64) { self.value = value }
 	public func copy(amount: Swift.UInt64) -> Swift.UInt64 { value + amount }
 }
+
+public struct Int {
+	public let value: Swift.Int
+	public init(_ value: Swift.Int) { self.value = value }
+}
+public struct UInt {
+	public let value: Swift.UInt
+	public init(_ value: Swift.UInt) { self.value = value }
+}
+public func actualFlag(_ value: Swift.Bool) -> Swift.Bool { !value }
+public func actualInt(_ value: Swift.Int) -> Swift.Int { value }
+public func actualUInt(_ value: Swift.UInt) -> Swift.UInt { value }
+public func uint(_ value: Swift.UInt) -> Swift.UInt { value }

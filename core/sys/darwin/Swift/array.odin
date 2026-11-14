@@ -69,14 +69,23 @@ foreign {
 	array_f64_metadata: u8
 	@(link_name="$sSSN")
 	array_string_metadata: u8
+	@(link_name="$sSiN")
+	array_int_metadata: u8
+	@(link_name="$sSuN")
+	array_uint_metadata: u8
+	@(link_name="$sSbN")
+	array_bool_metadata: u8
 }
 
 @(private)
-array_element_metadata :: proc($T: typeid) -> rawptr where T == u64 || T == i64 || T == f64 || T == string {
+array_element_metadata :: proc($T: typeid) -> rawptr where T == bool || T == u64 || T == i64 || T == int || T == uint || T == f64 || T == string {
 	when T == u64 { return &array_u64_metadata }
 	else when T == i64 { return &array_i64_metadata }
 	else when T == f64 { return &array_f64_metadata }
-	else { return &array_string_metadata }
+	else when T == string { return &array_string_metadata }
+	else when T == int { return &array_int_metadata }
+	else when T == uint { return &array_uint_metadata }
+	else { return &array_bool_metadata }
 }
 
 // _ContiguousArrayStorage and its _ArrayBody are fixed-layout ABI types. The
@@ -95,9 +104,9 @@ Array_Storage :: struct {
 #assert(offset_of(Array_Storage, capacity_and_flags) == 24)
 
 @(private)
-array_storage_types: [4]rawptr
+array_storage_types: [6]rawptr
 @(private)
-array_buffer_types: [4]rawptr
+array_buffer_types: [6]rawptr
 @(private)
 array_body_metadata: rawptr
 
@@ -106,7 +115,9 @@ array_element_index :: proc($T: typeid) -> int {
 	when T == u64 { return 0 }
 	else when T == i64 { return 1 }
 	else when T == f64 { return 2 }
-	else { return 3 }
+	else when T == string { return 3 }
+	else when T == int { return 4 }
+	else { return 5 }
 }
 
 @(private)
@@ -159,7 +170,7 @@ array_allocate :: proc(count: int, $T: typeid) -> Array_Allocation {
 // initialized prefix, then use Swift's uninitialized-array deallocation entry.
 // The borrowed Odin input can be changed or freed after this returns.
 @(require_results)
-array_from_odin :: proc(values: []$T) -> (result: Native_Array, ok: bool) where T == u64 || T == i64 || T == f64 || T == string #optional_ok {
+array_from_odin :: proc(values: []$T) -> (result: Native_Array, ok: bool) where T == u64 || T == i64 || T == int || T == uint || T == f64 || T == string #optional_ok {
 	if len(values) == 0 { return Native_Array{&_swiftEmptyArrayStorage}, true }
 	stride := size_of(T)
 	when T == string { stride = size_of(Native_String) }
@@ -191,7 +202,7 @@ array_from_odin :: proc(values: []$T) -> (result: Native_Array, ok: bool) where 
 // Scalar/String arrays have native contiguous storage. Access remains borrowed
 // through this copy; no buffer pointer escapes and the Swift value stays owned.
 @(require_results)
-array_to_odin :: proc(value: Native_Array, $T: typeid) -> (result: []T, ok: bool) where T == u64 || T == i64 || T == f64 || T == string #optional_ok {
+array_to_odin :: proc(value: Native_Array, $T: typeid) -> (result: []T, ok: bool) where T == u64 || T == i64 || T == int || T == uint || T == f64 || T == string #optional_ok {
 	if value.storage == nil { return }
 	if value.storage == &_swiftEmptyArrayStorage { return nil, true }
 	index := array_element_index(T)

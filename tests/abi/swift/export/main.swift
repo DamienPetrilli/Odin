@@ -80,3 +80,19 @@ precondition(echoShort(.low).rawValue == Int16.min && echoShort(.high).rawValue 
 precondition(echoInt(.low).rawValue == Int32.min && echoInt(.high).rawValue == Int32.max)
 precondition(echoNativeUnsigned(.low).rawValue == 0 && echoNativeUnsigned(.high).rawValue == UInt.max)
 print("Native Swift enum export round trips passed")
+
+for value in [Int.min, -73, -1, 0, Int.max] { precondition(identityNativeInt(value) == value) }
+for value in [UInt(0), 1, 73, 1 << 63, UInt.max] { precondition(identityNativeUint(value) == value) }
+precondition(identityBool(false) == false && identityBool(true) == true)
+let words = identityWords(NativeWords(signed: Int.min, unsigned: UInt.max))
+precondition(words.signed == Int.min && words.unsigned == UInt.max)
+var nativeSigned: [Int] = [Int.min, 0, Int.max]
+var nativeUnsigned: [UInt] = [0, 1 << 63, UInt.max]
+nativeSigned.withUnsafeMutableBufferPointer { signed in
+	nativeUnsigned.withUnsafeMutableBufferPointer { unsigned in
+		modifyNativeWords(signed, unsigned)
+	}
+}
+precondition(nativeSigned == [-73, -73, -73] && nativeUnsigned == [UInt.max, UInt.max, UInt.max])
+modifyNativeWords(UnsafeMutableBufferPointer(start: nil, count: 0), UnsafeMutableBufferPointer(start: nil, count: 0))
+print("Native Bool/Int/UInt export-import round trips passed")

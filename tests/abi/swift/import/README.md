@@ -88,11 +88,18 @@ Explicit import-name overrides are outside this subset.
 
 ## Supported subset
 
-The importer supports `Int64`, `UInt64`, `Double`, synchronous String results,
+The importer supports `Bool`, `Int`, `UInt`, `Int64`, `UInt64`, `Double`, synchronous String results,
 and synchronous or asynchronous procedures with those arguments. String inputs
 become ordinary Odin `string` parameters. An asynchronous String result is not
 yet exposed: a failed UTF-8 allocation after completion needs a separate error
 contract from Swift `throws`.
+
+`Bool`, `Int` and `UInt` use native Odin `bool`, `int` and `uint`, including
+scalar async completions, getters and optionals. Int and UInt are 64-bit on the
+supported Darwin arm64 target. Int/UInt arrays use `[]int`/`[]uint` with the same
+copy/ownership rules as the other scalar arrays. Bool arrays and Bool fields in
+direct records remain outside this subset. Narrow integer and Float signatures
+are also unsupported; diagnostics name the rejected parameter or result type.
 
 Copyable, escapable resilient structs use typed addresses backed by Swift
 metadata. Struct constructors, methods, getters and nested types are supported when
@@ -103,7 +110,7 @@ receivers and arguments are copied before start returns. A mutating receiver is
 borrowed through completion, so its changes reach the original value. Do not
 access or destroy that receiver while the call is outstanding.
 
-Plain frozen structs with public stored `UInt64`, `Int64` and `Double` fields
+Plain frozen structs with public stored `UInt64`, `Int64`, `UInt`, `Int` and `Double` fields
 map to ordinary Odin structs. Empty structs are also supported. The importer
 checks every field offset, total size, alignment and native call lowering using
 the target Swift compiler. Unsupported or hidden fields retain opaque storage;
@@ -257,8 +264,9 @@ Inputs are copied before async start returns, and callback results are independe
 of the completed Swift call frame. These rules do not change native task lifetime
 or cancellation.
 
-Swift `[UInt64]`, `[Int64]`, `[Double]` and `[String]` parameters and results map
-to ordinary Odin `[]u64`, `[]i64`, `[]f64` and `[]string`. Inputs are copied into
+Swift `[UInt64]`, `[Int64]`, `[UInt]`, `[Int]`, `[Double]` and `[String]` parameters
+and results map to ordinary Odin `[]u64`, `[]i64`, `[]uint`, `[]int`, `[]f64` and
+`[]string`. Inputs are copied into
 Swift-owned storage before the call (or async start) returns. Results are
 independent copies allocated using `context.allocator`. Delete a returned scalar
 slice; for `[]string`, delete each string and then the slice with that allocator.
@@ -441,7 +449,7 @@ Unicode equality are different operations. A plain Odin string does not gain
 Swift's character semantics.
 
 See `run.sh`, `main.odin`, `values.odin`, `enums.odin`, `strings.odin`,
-`arrays.odin`, `value_arrays.odin`, `records.odin` and `tasks.odin` for executable round trips, overlapping tasks, native handle identity,
+`arrays.odin`, `value_arrays.odin`, `records.odin`, `scalars.odin` and `tasks.odin` for executable round trips, overlapping tasks, native handle identity,
 preserved context, guarded allocations, ownership, failure paths and rejection
 diagnostics.
 

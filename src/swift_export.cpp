@@ -39,6 +39,8 @@ gb_internal char const *swift_export_scalar(Type *type) {
 	if (type == t_u64)  return "Swift.UInt64";
 	if (type == t_f64)  return "Swift.Double";
 	if (type == t_bool) return "Swift.Bool";
+	if (type == t_int)  return "Swift.Int";
+	if (type == t_uint) return "Swift.UInt";
 	return nullptr;
 }
 
@@ -202,7 +204,7 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 		}
 		if (type->Proc.result_count) valid &= swift_export_check_type(type->Proc.results->Tuple.variables[0]->type, false);
 		if (!valid) {
-			error(e->token, "Swift export: expected a synchronous Swift procedure without ABI parameter attributes, with i64, u64, f64, bool, integer enums, flat scalar structs, or borrowed scalar slice parameters, and at most one scalar/enum/struct result");
+			error(e->token, "Swift export: expected a synchronous Swift procedure without ABI parameter attributes, with i64, u64, f64, bool, int, uint, integer enums, flat scalar structs, or borrowed scalar slice parameters, and at most one scalar/enum/struct result");
 			continue;
 		}
 		SwiftExportProcedure proc = {};

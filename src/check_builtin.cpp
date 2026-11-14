@@ -6081,8 +6081,8 @@ gb_internal bool check_builtin_procedure(CheckerContext *c, Operand *operand, As
 		}
 		if (ct->Proc.param_count == 2) {
 			Type *rt = base_type(ct->Proc.params->Tuple.variables[1]->type);
-			if (rt != t_i64 && rt != t_u64 && rt != t_f64) {
-				error(ce->args[1], "Swift async result must be i64, u64, or f64");
+			if (rt != t_i64 && rt != t_u64 && rt != t_int && rt != t_uint && rt != t_bool && rt != t_f64) {
+				error(ce->args[1], "Swift async result must be bool, int, uint, i64, u64, or f64");
 				return false;
 			}
 		}
@@ -6099,8 +6099,8 @@ gb_internal bool check_builtin_procedure(CheckerContext *c, Operand *operand, As
 			Operand arg = {};
 			check_expr(c, &arg, ce->args[i]);
 			Type *at = base_type(arg.type);
-			if (at != t_i64 && at != t_u64 && at != t_f64) {
-				error(ce->args[i], "Swift async arguments must be i64, u64, or f64");
+			if (at != t_i64 && at != t_u64 && at != t_int && at != t_uint && at != t_bool && at != t_f64) {
+				error(ce->args[i], "Swift async arguments must be bool, int, uint, i64, u64, or f64");
 				return false;
 			}
 		}

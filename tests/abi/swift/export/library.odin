@@ -100,3 +100,24 @@ c_answer :: proc "c" (value: i32) -> i32 { return value + 1 }
 
 @(export)
 odin_length :: proc(value: string) -> int { return len(value) }
+
+@(export)
+identity_native_int :: proc "swift" (value: int) -> int { return reply.identity_int(value) }
+@(export)
+identity_native_uint :: proc "swift" (value: uint) -> uint { return reply.identity_uint(value) }
+@(export)
+identity_bool :: proc "swift" (value: bool) -> bool { return reply.identity_bool(value) }
+
+Native_Words :: struct {
+	signed:   int,
+	unsigned: uint,
+}
+
+@(export)
+identity_words :: proc "swift" (value: Native_Words) -> Native_Words { return value }
+
+@(export)
+modify_native_words :: proc "swift" (signed: []int, unsigned: []uint) {
+	for &value in signed { value = -73 }
+	for &value in unsigned { value = max(uint) }
+}

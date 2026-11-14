@@ -685,3 +685,40 @@ public func clearWeakLifetime() { weakLifetime = nil }
 
 public func echoWideRecords(_ values: [WideRecord]) -> [WideRecord] { values }
 public func echoDirectValues(_ values: [DirectValue]) -> [DirectValue] { values }
+
+// Standard scalar identities remain distinct from fixed-width integer types.
+public func echoBool(_ value: Bool) -> Bool { value }
+public func echoInt(_ value: Int) -> Int { value }
+public func echoUInt(_ value: UInt) -> UInt { value }
+public func flipBool(_ value: Bool) -> Bool { !value }
+public func echoBoolLater(_ value: Bool) async -> Bool { await Task.yield(); return value }
+public func echoIntLater(_ value: Int) async -> Int { await Task.yield(); return value }
+public func echoUIntLater(_ value: UInt) async -> UInt { await Task.yield(); return value }
+public func mixedScalarsLater(_ flag: Bool, _ signed: Int, _ unsigned: UInt) async -> Bool {
+	await Task.yield()
+	return flag && signed == -73 && unsigned == UInt.max
+}
+public func optionalBool(_ value: Bool?) -> Bool? { value }
+public func optionalInt(_ value: Int?) -> Int? { value }
+public func optionalUInt(_ value: UInt?) -> UInt? { value }
+public func optionalBoolLater(_ value: Bool?) async -> Bool? { await Task.yield(); return value }
+public func nativeInts(_ values: [Int]) -> [Int] { values }
+public func nativeUInts(_ values: [UInt]) -> [UInt] { values }
+public func nativeIntsLater(_ values: [Int]) async -> [Int] { await Task.yield(); return values }
+@frozen public struct NativeWords {
+	public var signed: Int
+	public var unsigned: UInt
+}
+public func nativeWords(_ value: NativeWords) -> NativeWords { value }
+public struct ScalarState {
+	public let ready: Bool
+	public let signed: Int
+	public let unsigned: UInt
+	public init(_ ready: Bool, _ signed: Int, _ unsigned: UInt) {
+		self.ready = ready; self.signed = signed; self.unsigned = unsigned
+	}
+	public static var canProceed: Bool { true }
+}
+public func unsupportedScalarArgument(_ value: Float) -> Int { Int(value) }
+public func unsupportedScalarResult(_ value: Int) -> Float { Float(value) }
+public func unsupportedBoolArray(_ values: [Bool]) -> [Bool] { values }

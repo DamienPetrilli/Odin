@@ -108,7 +108,11 @@ gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool ha
 			array_add(&args, lbValue{parent, t_rawptr});
 			lbValue capture = lb_emit_runtime_call(resume, "swift_async_payload", args);
 			LLVMValueRef result = LLVMBuildStructGEP2(resume->builder, capture_type, capture.value, cast(unsigned)values.count, "result");
-			LLVMBuildStore(resume->builder, LLVMGetParam(resume->value, 1), result);
+			LLVMValueRef value = LLVMGetParam(resume->value, 1);
+			if (base_type(result_type) == t_bool) {
+				value = LLVMBuildZExt(resume->builder, value, lb_type(m, result_type), "");
+			}
+			LLVMBuildStore(resume->builder, value, result);
 		}
 		auto args = array_make<lbValue>(temporary_allocator());
 		array_add(&args, lbValue{child, t_rawptr});

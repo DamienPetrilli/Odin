@@ -6579,8 +6579,9 @@ gb_internal Entity *check_selector(CheckerContext *c, Operand *operand, Ast *nod
 			bool allow_builtin = false;
 			if (!is_entity_declared_for_selector(entity, import_scope, &allow_builtin)) {
 				ERROR_BLOCK();
-				if (swift_import_unsupported(e->ImportName.path, entity_name)) {
-					error(node, "Swift import: '%.*s' is unavailable for this target, overloaded, or outside the supported ABI subset", LIT(entity_name));
+				String swift_rejection = swift_import_unsupported(e->ImportName.path, entity_name);
+				if (swift_rejection.len) {
+					error(node, "Swift import: '%.*s': %.*s", LIT(entity_name), LIT(swift_rejection));
 				} else {
 					error(node, "'%.*s' is not declared by '%.*s'", LIT(entity_name), LIT(import_name));
 				}
