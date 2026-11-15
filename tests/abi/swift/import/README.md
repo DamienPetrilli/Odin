@@ -356,7 +356,8 @@ One supported generic specialization accepts a single
 `Collection<String>` argument using Swift `Array<String>` metadata and its
 standard Collection conformance. This does not implement Odin protocol
 conformances or general Swift generics. An explicit empty `Set` default on a
-single-parameter function may be omitted; nonempty Set construction is not supported.
+single-parameter function may be omitted; a second overload accepts an explicit
+slice of candidates. See Set inputs below.
 
 Asynchronous untyped `throws` adds the module's native `Async_Error` union to the
 completion. Nil means success with a usable result; non-nil means no result to
@@ -728,3 +729,47 @@ elapsed time. The module cache can be removed when no builds are using it; Swift
 recreates it on demand.
 
 For the reverse direction, see [Swift-facing Odin exports](../export/README.md).
+
+## Set inputs
+
+A supported Swift `Set<T>` parameter accepts an ordinary Odin slice. Swift's
+Hashable conformance determines uniqueness, including custom equality and
+canonically equivalent Strings. Odin does not sort, mutate or deduplicate the
+caller's slice.
+
+```swift
+public func uniqueCount(_ values: Set<UInt64>) -> UInt64 {
+    UInt64(values.count)
+}
+```
+
+```odin
+foreign import example "swift:Example"
+count := example.unique_count([]u64{7, 7, 9}) or_return
+assert(count == 2)
+```
+
+The initial subset accepts the supported scalar, String, UUID, record and owned
+value element mappings used by arrays, when the concrete Swift type conforms to
+Hashable. Bool elements, nested Sets, Set results, inout parameters and automatic
+Set exports are outside this subset. This does not expose general Swift protocol
+conformance from Odin. A Swift `Set` is not layout-compatible with an Odin slice.
+
+The generated code resolves the concrete Swift Hashable conformance. Nontrivial
+members use Swift's native literal constructor, which consumes a converted Array.
+The supported 64-bit scalars initialize fresh Swift-owned Set storage directly,
+after the compiler checks the SDK's fixed layout and calling conventions and the
+runtime checks the actual allocation. Hashing and equality call Swift's concrete
+implementations, including Double's signed-zero and NaN behavior. Unrecognized
+layouts retain the literal-constructor path. No borrowed or shared native storage
+is mutated, and no Swift inspection code is linked.
+
+The caller retains its input ownership. A synchronous call releases the temporary
+Set afterward; a consuming Swift initializer receives its ownership. Async starts
+complete conversion before returning, so the caller may then destroy its input
+owners, strings and slice. The task holds the native Set through completion and
+releases it before the Odin callback. A failed conversion releases initialized
+values and any earlier converted arguments; no callback runs after a failed start.
+
+See `sets.odin` for duplicate removal, custom equality with colliding hashes,
+input preservation, consuming initialization, failure cleanup and async lifetimes.

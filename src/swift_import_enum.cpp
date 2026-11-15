@@ -264,11 +264,12 @@ gb_internal bool swift_import_enum_layout(LLVMModuleRef module, LLVMTargetDataRe
 // cases. Dependent concrete types are resolved before their parent.
 gb_internal bool swift_import_resolve_enum(SwiftImportNominal *type) {
 	if (type->resolved) return type->supported;
-	if (!type->is_enum && !swift_import_slice(type)) return type->supported;
+	if (!type->is_enum && !swift_import_slice(type) && type->kind != SwiftImportValue_Set) return type->supported;
 	if (type->resolving) return false;
 	type->resolving = true;
-	if (swift_import_slice(type)) {
+	if (swift_import_slice(type) || type->kind == SwiftImportValue_Set) {
 		type->supported &= swift_import_resolve_enum(type->argument);
+		if (type->kind == SwiftImportValue_Set) type->supported &= type->set_array && swift_import_resolve_enum(type->set_array);
 		type->resolving = false;
 		type->resolved = true;
 		return type->supported;
@@ -279,7 +280,7 @@ gb_internal bool swift_import_resolve_enum(SwiftImportNominal *type) {
 		if (!c.available || (c.has_payload && c.fields.count == 0)) supported = false;
 		for (auto const &field : c.fields) {
 			if (!field.type.odin) { supported = false; continue; }
-			if (field.type.nominal) supported &= swift_import_resolve_enum(field.type.nominal);
+			if (field.type.nominal) supported &= field.type.nominal->kind != SwiftImportValue_Set && swift_import_resolve_enum(field.type.nominal);
 			type->owns |= swift_import_owns(field.type);
 		}
 	}

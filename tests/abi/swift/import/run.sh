@@ -41,6 +41,7 @@ cp "$here/records.odin" "$build/records.odin"
 cp "$here/mixed_records.odin" "$build/mixed_records.odin"
 cp "$here/dates.odin" "$build/dates.odin"
 cp "$here/uuids.odin" "$build/uuids.odin"
+cp "$here/sets.odin" "$build/sets.odin"
 cp "$here/owned_records.odin" "$build/owned_records.odin"
 cp "$here/errors.odin" "$build/errors.odin"
 cp "$here/scalars.odin" "$build/scalars.odin"
@@ -82,6 +83,15 @@ run_fixture() {
 }
 run_fixture "$build/import"
 run_fixture "$build/names-test"
+
+mkdir -p "$build/sets/fixture"
+"${swiftc[@]}" -parse-as-library -enable-library-evolution -module-name SwiftSetSync \
+	-emit-object -o "$build/sets/fixture/SwiftSetSync.o" \
+	-emit-module-path "$build/sets/fixture/SwiftSetSync.swiftmodule" "$here/SetSync.swift"
+cp "$here/set_sync.odin" "$build/sets/main.odin"
+"$ODIN" build "$build/sets" "${odin_target[@]}" "${odin_opt[@]}" \
+	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/sets-test"
+run_fixture "$build/sets-test"
 
 # A static archive and repeated imports use the same normal build path.
 # Keep the original module as the SDK and replace only the binary with a newer
@@ -148,7 +158,7 @@ package rejected
 foreign import fixture "swift:fixture/SwiftImportFixture"
 main :: proc() {
 ODIN
-for selection in narrow generic throwing isolated_sync overloaded future inout_value typed_throwing unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields unsupported_scalar_argument unsupported_scalar_result unsupported_bool_array; do
+for selection in narrow generic throwing isolated_sync overloaded future inout_value typed_throwing unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields unsupported_scalar_argument unsupported_scalar_result unsupported_bool_array unsupported_set_result unsupported_optional_set unsupported_bool_set; do
 	printf '\t_ = fixture.%s\n' "$selection" >> "$build/rejected.odin"
 done
 printf '}\n' >> "$build/rejected.odin"
@@ -156,7 +166,7 @@ if "$ODIN" check "$build/rejected.odin" -file "${odin_target[@]}" > "$build/inva
 	echo "Expected importer to reject unsupported declarations" >&2
 	exit 1
 fi
-for selection in narrow generic throwing isolated_sync overloaded future inout_value typed_throwing unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields unsupported_scalar_argument unsupported_scalar_result unsupported_bool_array; do
+for selection in narrow generic throwing isolated_sync overloaded future inout_value typed_throwing unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields unsupported_scalar_argument unsupported_scalar_result unsupported_bool_array unsupported_set_result unsupported_optional_set unsupported_bool_set; do
 	if ! grep -F "Swift import:" "$build/invalid.log" | grep -Fq "'$selection'"; then
 		cat "$build/invalid.log" >&2
 		echo "Missing rejection for $selection" >&2

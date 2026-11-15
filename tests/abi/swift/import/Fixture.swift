@@ -1005,3 +1005,78 @@ public func cancellableIdentifier(_ value: Foundation.UUID) async throws -> Foun
 	case value(Foundation.UUID)
 }
 public func echoIdentifierChoice(_ value: IdentifierChoice) -> IdentifierChoice { value }
+
+// Set construction must use Swift equality, including user-defined equality
+// and collisions. Odin supplies candidates without changing the input slice.
+@frozen public struct SetRecord: Hashable {
+	public var key: UInt64
+	public var ignored: UInt64
+	public init(_ key: UInt64, _ ignored: UInt64) { self.key = key; self.ignored = ignored }
+	public static func == (a: SetRecord, b: SetRecord) -> Bool { a.key == b.key }
+	public func hash(into hasher: inout Hasher) { hasher.combine(UInt64(0)) }
+}
+public struct SetTracked: Hashable, @unchecked Sendable {
+	private let lifetime = Lifetime()
+	public let key: UInt64
+	public init(_ key: UInt64) { self.key = key }
+	public static func == (a: SetTracked, b: SetTracked) -> Bool { a.key == b.key }
+	public func hash(into hasher: inout Hasher) { hasher.combine(UInt64(0)) }
+}
+public func setCount(_ values: Set<UInt64>) -> UInt64 { UInt64(values.count) }
+public func setDefaults(values: Set<UInt64> = []) -> UInt64 { UInt64(values.count) }
+public func setWords(_ values: Set<UInt64>) -> [UInt64] { values.sorted() }
+public func setTextCount(_ values: Set<String>) -> UInt64 { UInt64(values.count) }
+public func setIdentifierCount(_ values: Set<UUID>) -> UInt64 { UInt64(values.count) }
+public func setRecordKeys(_ values: Set<SetRecord>) -> [UInt64] { values.map { $0.key }.sorted() }
+public func setTrackedCount(_ values: Set<SetTracked>) -> UInt64 { UInt64(values.count) }
+public func setTrackedLater(_ values: Set<SetTracked>) async -> UInt64 {
+	await Task.yield()
+	return UInt64(values.count)
+}
+public func setTrackedCancelled(_ values: Set<SetTracked>) async throws -> UInt64 {
+	while !Task.isCancelled { await Task.yield() }
+	try Task.checkCancellation()
+	return UInt64(values.count)
+}
+@frozen public enum SetPayload { case value(String) }
+public func setThenOutcome(_ values: Set<SetTracked>, _ outcome: SetPayload) -> UInt64 { UInt64(values.count) }
+public func unsupportedSetResult() -> Set<UInt64> { [1, 2] }
+public func unsupportedOptionalSet(_ values: Set<UInt64>?) -> UInt64 { UInt64(values?.count ?? 0) }
+
+public func setThenOutcomeLater(_ values: Set<SetTracked>, _ outcome: SetPayload) async -> UInt64 { await Task.yield(); return UInt64(values.count) }
+public func setTextLater(_ values: Set<String>) async -> UInt64 { await Task.yield(); return UInt64(values.count) }
+public func unsupportedBoolSet(_ values: Set<Bool>) -> UInt64 { UInt64(values.count) }
+public func setRecordFirst(_ values: Set<SetRecord>) -> UInt64 { values.first!.ignored }
+public struct SetOwner {
+	private let values: Set<SetTracked>
+	public init(_ values: Set<SetTracked>) { self.values = values }
+	public var count: UInt64 { UInt64(values.count) }
+}
+
+public func setModes(_ values: Set<Mode>) -> UInt64 { UInt64(values.count) }
+@frozen public enum SetText: Hashable { case name(String), empty }
+public func setTextCases(_ values: Set<SetText>) -> UInt64 { UInt64(values.count) }
+public func setDoubles(_ values: Set<Double>) -> UInt64 { UInt64(values.count) }
+
+public func setIntFirst(_ values: Set<Int>) -> Int { values.first! }
+public func setUIntFirst(_ values: Set<UInt>) -> UInt { values.first! }
+public func setInt64First(_ values: Set<Int64>) -> Int64 { values.first! }
+public func setDoubleFirst(_ values: Set<Double>) -> Double { values.first! }
+
+// Exercise lookup, growth and removal in Swift after native storage construction.
+public func setCheckWords(_ values: Set<UInt64>, _ input: [UInt64]) -> Bool {
+	var actual = values
+	var expected = Set(input)
+	guard actual == expected && input.allSatisfy({ actual.contains($0) }) else { return false }
+	for value in UInt64(0)..<UInt64(128) { actual.insert(value); expected.insert(value) }
+	for value in input { actual.remove(value); expected.remove(value) }
+	return actual == expected
+}
+public func setInts(_ values: Set<Int>) -> [Int] { values.sorted() }
+public func setUInts(_ values: Set<UInt>) -> [UInt] { values.sorted() }
+public func setInt64s(_ values: Set<Int64>) -> [Int64] { values.sorted() }
+public func setDoubleBits(_ values: Set<Double>) -> [UInt64] { values.map { $0.bitPattern }.sorted() }
+public func setWordsLater(_ values: Set<UInt64>) async -> UInt64 {
+	await Task.yield()
+	return UInt64(values.count)
+}
