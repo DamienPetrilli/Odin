@@ -281,7 +281,7 @@ gb_internal lbValue lb_swift_export_uuid_read(lbProcedure *p, Type *type, lbValu
 	LLVMTypeRef result_type = LLVMStructTypeInContext(m->ctx, words, 2, false);
 	LLVMTypeRef argument = lb_type(m, t_rawptr);
 	LLVMTypeRef signature = LLVMFunctionType(result_type, &argument, 1, false);
-	char const *name = alloc_cstring(temporary_allocator(), swift_export_uuid.uuid_getter);
+	char const *name = alloc_cstring(temporary_allocator(), swift_export_uuid_getter);
 	LLVMValueRef function = LLVMGetNamedFunction(m->mod, name);
 	if (!function) function = LLVMAddFunction(m->mod, name, signature);
 	LLVMSetFunctionCallConv(function, LLVMSwiftCallConv);
@@ -311,7 +311,7 @@ gb_internal void lb_swift_export_uuid_initialize(lbProcedure *p, lbValue pointer
 		values[i+1] = LLVMBuildExtractValue(p->builder, value.value, i, "");
 	}
 	LLVMTypeRef signature = LLVMFunctionType(LLVMVoidTypeInContext(m->ctx), types, 17, false);
-	char const *name = alloc_cstring(temporary_allocator(), swift_export_uuid.uuid_initializer);
+	char const *name = alloc_cstring(temporary_allocator(), swift_export_uuid_initializer);
 	LLVMValueRef function = LLVMGetNamedFunction(m->mod, name);
 	if (!function) function = LLVMAddFunction(m->mod, name, signature);
 	LLVMSetFunctionCallConv(function, LLVMSwiftCallConv);
