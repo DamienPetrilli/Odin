@@ -29,6 +29,12 @@ gb_internal bool swift_import_owns(SwiftImportType const &type) {
 	return type.nominal && !type.nominal->is_scalar && (!type.nominal->projected || type.nominal->owns);
 }
 
+// A native resilient value can require destruction even when its Odin
+// projection is an unowned scalar (for example Foundation.Date).
+gb_internal bool swift_import_native_owns(SwiftImportType const &type) {
+	return swift_import_owns(type) || (swift_import_projected(type) && !type.nominal->alignment);
+}
+
 gb_internal String swift_import_metadata(SwiftImportType const &type) {
 	if (type.nominal && !type.nominal->is_scalar) {
 		return make_string_c(gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "_swift_%.*s_metadata(0).type", LIT(type.nominal->name)));
@@ -410,9 +416,42 @@ gb_internal gbString swift_import_emit_plain_enum(gbString source, SwiftImportNo
 	return gb_string_appendc(source, "}\n\n");
 }
 
+// Resilient generic specializations share case-tag symbols. Emit one foreign
+// global per symbol, including in single-module builds where duplicate LLVM
+// globals would otherwise acquire invalid numeric suffixes.
+gb_internal gbString swift_import_emit_enum_tags(gbString source, Array<SwiftImportNominal *> const &types) {
+	auto imported = array_make<SwiftImportCase *>(temporary_allocator());
+	for (auto type : types) {
+		if (!type->supported || !type->is_enum || !type->projected || swift_import_plain_enum(type)) continue;
+		for_array(i, type->cases) {
+			auto &c = type->cases[i];
+			c.tag_name = make_string_c(gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "_swift_%.*s_tag_%td", LIT(type->name), i));
+			if (type->is_frozen) {
+				source = gb_string_append_fmt(source, "@(private)\n%.*s :: u32(%u)\n", LIT(c.tag_name), c.tag);
+				continue;
+			}
+			bool duplicate = false;
+			for (auto previous : imported) {
+				if (previous->symbol == c.symbol) {
+					c.tag_name = previous->tag_name;
+					duplicate = true;
+					break;
+				}
+			}
+			if (duplicate) continue;
+			array_add(&imported, &c);
+			source = gb_string_append_fmt(source, "@(private)\nforeign swift_library {\n\t@(link_name=\"%.*s\")\n\t%.*s: u32\n}\n", LIT(c.symbol), LIT(c.tag_name));
+		}
+	}
+	return source;
+}
+
 gb_internal gbString swift_import_emit_enum(gbString source, SwiftImportNominal *type) {
 	if (swift_import_plain_enum(type)) return swift_import_emit_plain_enum(source, type);
 	String name = type->name;
+	// Odin requires at least two variants for #no_nil. Keep a single payload
+	// case as an ordinary union, rejecting its extra nil state on conversion.
+	bool nullable = type->is_frozen && !type->is_optional && type->cases.count == 1;
 	if (type->is_optional) {
 		source = gb_string_append_fmt(source, "%.*s :: Maybe(%s)\n", LIT(name), swift_import_nominal_type(type->argument).odin);
 	} else {
@@ -423,7 +462,7 @@ gb_internal gbString swift_import_emit_enum(gbString source, SwiftImportNominal 
 		}
 		if (!type->is_frozen) source = gb_string_append_fmt(source,
 			"@(private)\n_swift_unknown_%.*s :: distinct rawptr\n%.*s_Unknown :: struct {value: _swift_unknown_%.*s}\n", LIT(name), LIT(name), LIT(name));
-		source = gb_string_append_fmt(source, "%.*s :: union #no_nil {\n", LIT(name));
+		source = gb_string_append_fmt(source, "%.*s :: union%s {\n", LIT(name), nullable ? "" : " #no_nil");
 		for (auto const &c : type->cases) source = gb_string_append_fmt(source, "\t%.*s,\n", LIT(swift_import_case_name(type, c)));
 		if (!type->is_frozen) source = gb_string_append_fmt(source, "\t%.*s_Unknown,\n", LIT(name));
 		source = gb_string_appendc(source, "}\n");
@@ -437,11 +476,6 @@ gb_internal gbString swift_import_emit_enum(gbString source, SwiftImportNominal 
 			source = gb_string_appendc(source, "}\n");
 		} else source = gb_string_append_fmt(source, "struct #align(%llu) {bytes: [%llu]u8}\n", cast(unsigned long long)type->alignment, cast(unsigned long long)type->size);
 	}
-	for_array(i, type->cases) {
-		auto const &c = type->cases[i];
-		if (type->is_frozen) source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_tag_%td :: u32(%u)\n", LIT(name), i, c.tag);
-		else source = gb_string_append_fmt(source, "@(private)\nforeign swift_library {\n\t@(link_name=\"%.*s\")\n\t_swift_%.*s_tag_%td: u32\n}\n", LIT(c.symbol), LIT(name), i);
-	}
 
 	// Consuming native-to-Odin projection. Native temporary storage is freed by
 	// the caller separately; neither stack nor async capture storage is freed.
@@ -452,7 +486,7 @@ gb_internal gbString swift_import_emit_enum(gbString source, SwiftImportNominal 
 	else source = gb_string_append_fmt(source, "metadata := _swift_%.*s_metadata(0).type\ntag, tagged := swift.enum_tag(storage, metadata)\nassert(tagged)\n", LIT(name));
 	for_array(i, type->cases) {
 		auto const &c = type->cases[i];
-		source = gb_string_append_fmt(source, "if tag == _swift_%.*s_tag_%td {\n", LIT(name), i);
+		source = gb_string_append_fmt(source, "if tag == %.*s {\n", LIT(c.tag_name));
 		if (c.has_payload && !plain_optional) source = gb_string_appendc(source, "swift.enum_project(storage, metadata)\n");
 		source = swift_import_emit_tuple(source, c);
 		for_array(j, c.fields) {
@@ -497,13 +531,14 @@ gb_internal gbString swift_import_emit_enum(gbString source, SwiftImportNominal 
 			String value = type->is_optional ? str_lit("item") : concatenate_strings(permanent_allocator(), str_lit("item."), field.name);
 			String address = swift_import_field_address(c, j);
 			source = swift_import_emit_initialize_field(source, field.type, value, address);
-			if (swift_import_owns(field.type)) source = gb_string_append_fmt(source, "defer if !ok { swift.value_deinitialize(%.*s, %.*s) }\n", LIT(address), LIT(swift_import_metadata(field.type)));
+			if (swift_import_native_owns(field.type)) source = gb_string_append_fmt(source, "defer if !ok { swift.value_deinitialize(%.*s, %.*s) }\n", LIT(address), LIT(swift_import_metadata(field.type)));
 		}
 		if (plain_optional) source = gb_string_append_fmt(source, "(cast([^]u8)storage)[%llu] = %u\n", cast(unsigned long long)(type->size-1), c.tag);
-		else source = gb_string_append_fmt(source, "swift.enum_inject(storage, metadata, _swift_%.*s_tag_%td)\n", LIT(name), i);
+		else source = gb_string_append_fmt(source, "swift.enum_inject(storage, metadata, %.*s)\n", LIT(c.tag_name));
 		source = gb_string_appendc(source, "return true\n");
 	}
 	if (!type->is_frozen) source = gb_string_append_fmt(source, "case %.*s_Unknown:\nif item.value == nil { return false }\nswift.value_initialize_copy(storage, rawptr(item.value), metadata)\nreturn true\n", LIT(name));
+	if (nullable) source = gb_string_appendc(source, "case nil: return false\n");
 	source = gb_string_appendc(source, "}\nreturn false\n}\n");
 
 	// Public ownership helpers act on ordinary Odin data. Assignment remains
@@ -516,6 +551,7 @@ gb_internal gbString swift_import_emit_enum(gbString source, SwiftImportNominal 
 			type->is_optional ? str_lit("item") : concatenate_strings(permanent_allocator(), str_lit("item."), field.name));
 	}
 	if (!type->is_frozen) source = gb_string_append_fmt(source, "case %.*s_Unknown:\nswift.value_destroy(rawptr(item.value), _swift_%.*s_metadata(0).type)\n", LIT(name), LIT(name));
+	if (nullable) source = gb_string_appendc(source, "case nil:\n");
 	source = gb_string_appendc(source, "}\n}\n");
 	source = gb_string_append_fmt(source, "@(require_results)\n%.*s_copy :: proc(value: %.*s, allocator := context.allocator) -> (result: %.*s, ok: bool) #optional_ok {\ncontext.allocator = allocator\nswitch item in value {\n", LIT(name), LIT(name), LIT(name));
 	for (auto const &c : type->cases) {
@@ -535,5 +571,6 @@ gb_internal gbString swift_import_emit_enum(gbString source, SwiftImportNominal 
 		source = swift_import_emit_case_result(source, type, c);
 	}
 	if (!type->is_frozen) source = gb_string_append_fmt(source, "case %.*s_Unknown:\ncopy := swift.value_copy(rawptr(item.value), _swift_%.*s_metadata(0).type, allocator) or_return\nreturn %.*s_Unknown{_swift_unknown_%.*s(copy)}, true\n", LIT(name), LIT(name), LIT(name), LIT(name));
+	if (nullable) source = gb_string_appendc(source, "case nil: return\n");
 	return gb_string_appendc(source, "}\nreturn\n}\n\n");
 }

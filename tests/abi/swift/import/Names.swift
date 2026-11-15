@@ -35,3 +35,9 @@ public func actualFlag(_ value: Swift.Bool) -> Swift.Bool { !value }
 public func actualInt(_ value: Swift.Int) -> Swift.Int { value }
 public func actualUInt(_ value: Swift.UInt) -> Swift.UInt { value }
 public func uint(_ value: Swift.UInt) -> Swift.UInt { value }
+
+private enum PrivateFailure: Error { case rejected }
+public func failWithoutPublicError() async throws -> Swift.UInt64 {
+	await Task.yield()
+	throw PrivateFailure.rejected
+}

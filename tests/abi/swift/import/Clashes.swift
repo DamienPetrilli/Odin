@@ -1,4 +1,18 @@
-#if BUILTIN
+#if ASYNC_ERROR_ALIAS
+public typealias Async_Error = UInt64
+public func checked() async throws -> UInt64 { 17 }
+#elseif ASYNC_ERROR_UNSUPPORTED
+public enum Async_Error { case value(any Error) }
+public func checked() async throws -> UInt64 { 17 }
+#elseif ASYNC_ERROR_TYPE
+public struct Async_Error { public let value: UInt64 }
+public func checked() async throws -> UInt64 { 17 }
+#elseif ERROR_HELPER
+@frozen public enum Failure: Error {
+	case rejected
+	public static func fromError(_ value: UInt64) -> UInt64 { value }
+}
+#elseif BUILTIN
 public struct f64 { public let value: Swift.UInt64 }
 public func actualDouble() -> Swift.Double { 12.5 }
 #elseif FLATTENED

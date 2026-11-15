@@ -82,13 +82,13 @@ check_strings :: proc() {
 	check_collections()
 }
 
-texts_received :: proc(task: swift.Task, values: []fixture.TextValue, error: swift.Error, converted: bool) {
+texts_received :: proc(task: swift.Task, values: []fixture.TextValue, error: fixture.Async_Error) {
 	expected := take_expected(task)
-	defer swift.error_release(error)
+	defer fixture.Async_Error_destroy(error)
 	if expected == 0 {
 		assert(values == nil && error != nil)
 	} else {
-		assert(error == nil && converted && len(values) == 1)
+		assert(error == nil && len(values) == 1)
 		value := fixture.TextValue_copy(values[0]) or_else panic("Array element")
 		fixture.Array_TextValue_destroy(values)
 		text := fixture.TextValue_text(value) or_else panic("Array element text")
@@ -108,14 +108,14 @@ echo_received :: proc(task: swift.Task, values: []string, ok: bool) {
 	collection_calls += 1
 }
 
-accepted_text :: proc(task: swift.Task, outcome: fixture.ValueOutcome, error: swift.Error, ok: bool) {
+accepted_text :: proc(task: swift.Task, outcome: fixture.ValueOutcome, error: fixture.Async_Error) {
 	assert(pthread_main_np() == 1)
 	expected := take_expected(task)
-	defer swift.error_release(error)
+	defer fixture.Async_Error_destroy(error)
 	if expected == 0 {
-		assert(!ok && error != nil)
+		assert(error != nil)
 	} else {
-		assert(ok && error == nil)
+		assert(error == nil)
 		item := outcome.(fixture.ValueOutcome_Accepted)
 		assert(fixture.Value_value(item.value) == expected)
 		fixture.ValueOutcome_destroy(outcome)

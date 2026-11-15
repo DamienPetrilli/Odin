@@ -447,6 +447,11 @@ public func verification(_ value: Value) -> Verification<Value> {
 	.unverified(value, .blocked(code: 7, message: "Verification failed"))
 }
 
+// Two specializations share the same resilient nested enum-case symbols.
+public func textVerification(_ value: TextValue) -> Verification<TextValue> {
+	.unverified(value, .invalidSignature)
+}
+
 // An uninhabited namespace must not break unrelated imported declarations.
 public enum Namespace {
 	public static func answer() -> UInt64 { 42 }
@@ -831,3 +836,140 @@ public func checkedBoolMixedLater(_ value: BoolMixed, _ fail: Bool) async throws
 }
 @frozen public enum BoolRecordResult { case value(BoolMixed), empty }
 public func echoBoolRecordResult(_ value: BoolRecordResult) -> BoolRecordResult { value }
+
+// External resilient values are projected through their original native API.
+public func dateFromSeconds(_ seconds: Double) -> Date { Date(timeIntervalSinceReferenceDate: seconds) }
+public func dateSeconds(_ value: Date) -> Double { value.timeIntervalSinceReferenceDate }
+public func echoDate(_ value: Date) -> Date { value }
+public func echoOptionalDate(_ value: Date?) -> Date? { value }
+public func echoDates(_ values: [Date]) -> [Date] { values }
+public func offsetDate(_ value: Date, _ seconds: Double) -> Date { value.addingTimeInterval(seconds) }
+public func echoDateLater(_ value: Date) async -> Date {
+	await Task.yield()
+	return value
+}
+public func echoOptionalDateLater(_ value: Date?) async -> Date? {
+	await Task.yield()
+	return value
+}
+
+@frozen public struct TextRecord {
+	public var title: String
+	public var count: Int
+	public var flag: Bool
+	public init(_ title: String, _ count: Int, _ flag: Bool) {
+		self.title = title; self.count = count; self.flag = flag
+	}
+}
+@frozen public struct WideTextRecord {
+	public var flag: Bool
+	public var title: String
+	public var subtitle: String
+	public var count: Int
+	public init(_ flag: Bool, _ title: String, _ subtitle: String, _ count: Int) {
+		self.flag = flag; self.title = title; self.subtitle = subtitle; self.count = count
+	}
+}
+public func echoTextRecord(_ value: TextRecord) -> TextRecord { value }
+public func changeTextRecord(_ value: TextRecord) -> TextRecord {
+	var copy = value
+	copy.title += "!"; copy.count += 1; copy.flag.toggle()
+	return copy
+}
+public func echoWideTextRecord(_ value: WideTextRecord) -> WideTextRecord { value }
+public func echoTextRecords(_ values: [TextRecord]) -> [TextRecord] { values }
+public func optionalTextRecord(_ value: TextRecord?) -> TextRecord? { value }
+@frozen public enum TextRecordResult { case record(TextRecord), empty }
+public func echoTextRecordResult(_ value: TextRecordResult) -> TextRecordResult { value }
+public func echoTextRecordLater(_ value: TextRecord) async -> TextRecord { await Task.yield(); return value }
+public func echoWideTextRecordLater(_ value: WideTextRecord) async -> WideTextRecord { await Task.yield(); return value }
+public func checkedTextRecordLater(_ value: TextRecord, _ fail: Bool) async throws -> TextRecord {
+	await Task.yield()
+	if fail { throw ValueFailure() }
+	return value
+}
+
+private struct DiagnosticFailure: Error, CustomStringConvertible, @unchecked Sendable {
+	let message: String
+	let lifetime: Lifetime
+	var description: String { message }
+}
+public func diagnosticFailure(_ message: String) async throws -> UInt64 {
+	await Task.yield()
+	throw DiagnosticFailure(message: message, lifetime: Lifetime())
+}
+public func bridgedDiagnosticFailure() async throws -> UInt64 {
+	await Task.yield()
+	throw NSError(domain: "SwiftImportFixture", code: 73, userInfo: nil)
+}
+
+// A resilient value larger than the inline temporary must retain heap fallback.
+public enum LargeTemporary {
+	case values(UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64)
+	case empty
+}
+public func echoLargeTemporary(_ value: LargeTemporary) -> LargeTemporary { value }
+
+@frozen public enum PlainFailure: UInt64, Error {
+	case missing = 17
+	case denied = 41
+}
+@frozen public enum SoleFailure: Error { case rejected }
+@frozen public enum InspectionFailure: Error, @unchecked Sendable {
+	case message(String, UInt64)
+	case retained(Value)
+	case empty
+}
+public enum EvolvingFailure: Error, @unchecked Sendable {
+	case known(String)
+	case wide(UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64)
+#if EVOLVED_VALUE_ENUM
+	case future(Value, Value)
+#endif
+}
+public func plainFailureCode(_ value: PlainFailure) -> UInt64 { value.rawValue }
+public func inspectionFailureCode(_ value: InspectionFailure) -> UInt64 {
+	switch value {
+	case .message(_, let code): return code
+	case .retained(let value): return value.value
+	case .empty: return 0
+	}
+}
+public func evolvingFailureCode(_ value: EvolvingFailure) -> UInt64 {
+	switch value {
+	case .known: return 73
+	case .wide(let first, _, _, _, _, _, _, _, _, let last): return first + last
+#if EVOLVED_VALUE_ENUM
+	case .future(let first, let second): return first.value + second.value
+#endif
+	}
+}
+public func inspectionFailure(_ selection: UInt64) async throws -> UInt64 {
+	await Task.yield()
+	switch selection {
+	case 0: throw PlainFailure.missing
+	case 1: throw PlainFailure.denied
+	case 2: throw InspectionFailure.message("UTF-8 failure 📚\u{0}after", 73)
+	case 3: throw InspectionFailure.retained(Value(91))
+	case 4: throw EvolvingFailure.known("Known resilient failure")
+	case 5: throw EvolvingFailure.wide(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)
+	case 6:
+#if EVOLVED_VALUE_ENUM
+		throw EvolvingFailure.future(Value(17), Value(25))
+#else
+		throw EvolvingFailure.known("Future library control")
+#endif
+	case 7: throw SoleFailure.rejected
+	case 8: throw InspectionFailure.empty
+	case 9: throw GenericFailure<Value>.invalid(Value(73))
+	case 10: throw UnsupportedFailure.nested(InspectionFailure.retained(Value(99)))
+	default: return 42
+	}
+}
+
+@frozen public enum GenericFailure<T>: Error, @unchecked Sendable { case invalid(T) }
+public func genericFailureCode(_ value: GenericFailure<Value>) -> UInt64 {
+	switch value { case .invalid(let value): return value.value }
+}
+
+public enum UnsupportedFailure: Error, @unchecked Sendable { case nested(any Error) }

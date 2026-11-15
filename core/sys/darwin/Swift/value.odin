@@ -274,3 +274,63 @@ value_destroy_many :: proc(values: []$T, metadata: rawptr) where intrinsics.type
 		index = end
 	}
 }
+
+// Caller-owned scratch for a synchronous native value. Check the runtime layout
+// before borrowing this buffer; larger future values retain the allocation path.
+// Never copy a pointer into this storage into an asynchronous task capture.
+Value_Temporary :: struct #align(16) {
+	bytes: [64]u8,
+}
+
+@(require_results)
+value_temporary :: proc(temporary: ^Value_Temporary, metadata: rawptr) -> (value: rawptr, ok: bool) #optional_ok {
+	if temporary == nil || metadata == nil { return }
+	witness := value_witnesses(metadata)
+	alignment := uint(witness.flags & 0xff)+1
+	if witness.stride >= witness.size && witness.stride > 0 &&
+	   witness.stride <= size_of(Value_Temporary) && alignment <= align_of(Value_Temporary) &&
+	   alignment & (alignment-1) == 0 {
+		return temporary, true
+	}
+	return value_allocate(metadata)
+}
+
+// Storage only: deinitialize the native value first if it still owns a value.
+value_temporary_free :: proc(temporary: ^Value_Temporary, value: rawptr) {
+	if value != rawptr(temporary) {
+		value_free_uninitialized(value)
+	}
+}
+
+// Snapshot complete metadata once when a generated import is initialized. These
+// fields are immutable after startup; native calls cannot modify their storage.
+// Keep a runtime-checked fallback rather than assuming a resilient value's size.
+Value_Layout :: struct {
+	metadata: rawptr,
+	destroy: proc "c" (value, metadata: rawptr),
+	inline_temporary: bool,
+}
+
+value_layout :: proc "contextless" (metadata: rawptr) -> Value_Layout {
+	if metadata == nil { return {} }
+	witness := value_witnesses(metadata)
+	alignment := uint(witness.flags & 0xff)+1
+	fits := witness.stride >= witness.size && witness.stride > 0 &&
+	        witness.stride <= size_of(Value_Temporary) && alignment <= align_of(Value_Temporary) &&
+	        alignment & (alignment-1) == 0
+	// Swift ABI ValueWitnessFlags::IsNonPOD: POD destruction is a no-op.
+	destroy := witness.destroy
+	if witness.flags & 0x10000 == 0 { destroy = nil }
+	return {metadata, destroy, fits}
+}
+
+@(require_results)
+value_temporary_from_layout :: #force_inline proc(temporary: ^Value_Temporary, layout: Value_Layout) -> (value: rawptr, ok: bool) #optional_ok {
+	if temporary == nil { return }
+	if layout.inline_temporary { return temporary, true }
+	return #force_no_inline value_allocate(layout.metadata)
+}
+
+value_deinitialize_from_layout :: #force_inline proc(value: rawptr, layout: Value_Layout) {
+	if layout.destroy != nil { layout.destroy(value, layout.metadata) }
+}

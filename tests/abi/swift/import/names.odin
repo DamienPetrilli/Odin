@@ -1,8 +1,26 @@
 package swift_names_test
 
 foreign import fixture "swift:fixture/SwiftNamesFixture"
+import swift "core:sys/darwin/Swift"
+import cf "core:sys/darwin/CoreFoundation"
+import "core:time"
+
+error_calls: int
+private_error :: proc(task: swift.Task, value: u64, error: fixture.Async_Error) {
+	defer fixture.Async_Error_destroy(error)
+	unknown := error.(swift.Unknown_Error)
+	assert(unknown.error != nil && value == 0)
+	error_calls += 1
+}
 
 main :: proc() {
+	task := fixture.fail_without_public_error(private_error) or_else panic("Private error start")
+	swift.task_release(task)
+	deadline := time.tick_now()
+	for error_calls == 0 && time.tick_since(deadline) < 10*time.Second {
+		cf.RunLoopRunInMode(cf.kRunLoopDefaultMode, 0.01, false)
+	}
+	assert(error_calls == 1)
 	assert(fixture.len_(40) == 42)
 	assert(fixture.f64_(12.0) == 12.5)
 	item := fixture.Item_init(31) or_else panic("Named helper alias")

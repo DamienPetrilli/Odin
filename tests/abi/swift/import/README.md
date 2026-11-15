@@ -146,7 +146,7 @@ while arrays use the verified common stride. No extra owner is needed.
 Sync and async free functions, supported constructors, optional/enum payloads,
 and direct/indirect record arguments/results are checked. Async inputs are copied
 before start returns. Native record instance methods, nested records, other smaller
-fields, custom alignment and records with owned fields are outside this direct
+fields and custom alignment are outside this direct
 subset. Odin field assignment edits a local value, including fields declared
 `let` in Swift; direct construction does not run a Swift initializer or enforce
 its application invariants.
@@ -184,7 +184,10 @@ is rejected. Names that collide after case conversion are diagnosed.
 
 Swift optionals map to native `Maybe(T)`, including nested optionals, strings,
 supported slices and projected enums. Supported associated-value enums map to
-native `union #no_nil` types with a named struct per case. Multiple payloads
+native unions with a named struct per case. Two or more variants use `#no_nil`.
+A frozen enum with one payload case uses an ordinary union; its extra Odin nil
+state is not a Swift case. Conversion and copying reject nil; destruction is a
+no-op for nil. Multiple payloads
 become fields; labels are preserved in snake case, with `value` for a single
 unlabeled payload or `value_0`, `value_1`, etc. for multiple unlabeled payloads.
 Cases with identical payload types still have distinct case structs. Concrete
@@ -258,7 +261,8 @@ remain present. A nested optional preserves each level of absence.
 
 Async allocating enum/optional results add a conversion boolean to completion,
 just like arrays: `proc(task: swift.Task, result: example.Lookup, ok: bool)`.
-With untyped Swift throws, the owned `swift.Error` precedes that boolean.
+With untyped Swift throws, an owned module `Async_Error` replaces the boolean;
+only a nil error makes the result usable.
 Only a successful conversion transfers an owned result to the callback. Failed
 conversions clean all partially constructed fields; a thrown error leaves no
 result to destroy. Trivial async scalar optionals need no conversion boolean.
@@ -289,9 +293,10 @@ defer delete(values)
 
 An async array result adds a final conversion `ok` to its callback:
 `proc(task: swift.Task, values: []u64, ok: bool)`. With Swift `throws`, the signature
-is `proc(task: swift.Task, values: []u64, error: swift.Error, ok: bool)`. Conversion
-failure gives an empty slice and `ok = false`; partial copies are cleaned up.
-A Swift error also gives `ok = false`, with the owned error set. A successful
+is `proc(task: swift.Task, values: []u64, err: example.Async_Error)`.
+Conversion failure gives an empty slice and `swift.Result_Conversion_Failed`;
+partial copies are cleaned up. A thrown Swift error becomes a concrete or
+fallback union case. Only `err == nil` transfers a usable result. A successful
 start and successful result conversion are separate events. Allocators captured
 by the start must remain valid through completion and result deallocation.
 
@@ -353,12 +358,14 @@ standard Collection conformance. This does not implement Odin protocol
 conformances or general Swift generics. An explicit empty `Set` default on a
 single-parameter function may be omitted; nonempty Set construction is not supported.
 
-Asynchronous untyped `throws` adds an owned `swift.Error` to the completion.
-A nil error means success; on failure the result is zero-initialized. Release
-the error with `swift.error_release`, or retain it explicitly if another owner
-needs it. Start rejection still means no callback. Synchronous and typed throws
-remain unsupported. Async MainActor procedures execute on the main executor;
-this does not add an actor or async/await system to Odin.
+Asynchronous untyped `throws` adds the module's native `Async_Error` union to the
+completion. Nil means success with a usable result; non-nil means no result to
+destroy. The union includes supported concrete Error enums and explicit fallbacks
+for unknown errors or conversion failures. The callback owns it: use
+`Async_Error_destroy` once, transfer it, or use `Async_Error_copy` for another owner.
+Start rejection still means no callback. Synchronous and typed throws remain
+unsupported. Async MainActor procedures execute on the main executor; this does
+not add an actor or async/await system to Odin.
 
 Full argument-label names distinguish declarations, and a unique supported
 procedure also gets its short name. Unsupported or ambiguous declarations are
@@ -410,6 +417,159 @@ Swift ownership: copying and destruction use value witnesses, and internal Swift
 allocations still belong to Swift. An Odin arena cannot replace Swift's heap.
 Any arena used for outer storage or saved callback context must remain alive
 until those allocations and callbacks are finished.
+
+## External Date values
+
+External `Foundation.Date` maps to `swift.Date`, an ordinary Odin `distinct f64`
+containing seconds since 2001-01-01 00:00:00 UTC. Imported modules alias the same
+canonical type. `Date?` maps to `Maybe(swift.Date)` and `[Date]` to `[]swift.Date`.
+The value needs no destruction. This preserves Swift's precision and range;
+`core:time.Time` has a narrower range and cannot represent subnanosecond values.
+Conversion to another epoch or time representation is an explicit application choice.
+
+```swift
+import Foundation
+public func echoDate(_ value: Date) -> Date { value }
+```
+
+```odin
+value := example.echo_date(swift.Date(0)) or_return
+assert(value == 0) // 2001-01-01, not the Unix epoch.
+```
+
+The compiler inspects the native getter and initializer. It constructs and destroys
+resilient Swift storage through the original ABI, rather than interpreting Swift
+memory as a Double. Synchronous temporary storage uses checked inline capacity
+with allocation fallback. Complete Date metadata and its checked temporary layout
+are initialized once, following Odin global initialization dependencies. Destruction
+is skipped only when Swift metadata identifies a trivially destructible value;
+nontrivial values retain native destruction. Async native storage survives suspension. This bounded
+mapping recognizes Foundation.Date's compiler identity, not any type named Date.
+It does not add automatic Date exports or UUID/Decimal/Data projections.
+
+## Frozen records with string fields
+
+Flat frozen records with public stored String and the supported scalar fields
+use ordinary Odin structs. Native String storage stays private to the conversion.
+Supported optional, enum-payload, slice and async forms use the same ownership rules.
+
+```swift
+@frozen public struct Book {
+    public var title: String
+    public var pages: Int
+    public init(_ title: String, _ pages: Int) {
+        self.title = title; self.pages = pages
+    }
+}
+public func echoBook(_ value: Book) -> Book { value }
+```
+
+```odin
+input := example.Book{title = "Café 📚", pages = 73}
+book := example.echo_book(input) or_return
+defer example.Book_destroy(book)
+copy := example.Book_copy(book) or_return
+defer example.Book_destroy(copy)
+assert(copy.title == input.title)
+```
+
+Inputs borrow Odin fields and construct independent native fields. Returned strings
+belong to the caller's allocator. Copy creates independent owned fields; assignment
+only copies descriptors. Destroy an owned result once, using its allocation's
+allocator. A literal or borrowed input does not become owned just because its type
+has a destroy helper. Partial conversion failures destroy initialized fields.
+Async callbacks receive an independently owned record plus a conversion boolean;
+these fields may outlive the callback/task, but their allocator must remain valid.
+
+Record literals initialize a fresh native value and do not call a Swift initializer.
+The caller must respect any application-level field invariants. This does not mutate
+Swift let properties on a live instance. Hidden fields, nested/array fields, direct
+record instance methods and automatic exports of Odin string records remain outside
+this subset. They are not accepted by assuming equal byte sizes.
+
+## Callback errors
+
+An untyped throwing callback receives the generated module's `Async_Error`, an
+ordinary nil-capable Odin union. It contains the module's supported concrete Error
+enums, using their existing enum/union representations, and three fallback types:
+
+| Case | Meaning and ownership |
+| --- | --- |
+| `nil` | Swift returned successfully and the Odin result is usable. |
+| Imported concrete error type | Independent native Odin enum or owned payload union. |
+| `swift.Unknown_Error` | Owned `.error` box for an unmapped, private or unsupported type. |
+| `swift.Error_Conversion_Failed` | Matching concrete type could not be projected; owned original `.error` box is preserved. |
+| `swift.Result_Conversion_Failed` | Swift returned successfully, but copying the result failed; no error box or result owner. |
+
+Only use/destroy the result when the error is nil. The callback owns the error
+union independently of the task. `defer example.Async_Error_destroy(err)` releases
+its active payload; `Async_Error_copy` creates an independent owner. Assignment
+only aliases owners. Copy/destroy accept the allocator used for Odin strings/slices;
+opaque native owners remember their allocator. Unknown and failed-projection
+fallbacks retain the original box when copied, without allocating Odin storage.
+
+```swift
+@frozen public enum Failure: Error { case missing, denied }
+public func lookup() async throws -> UInt64 { throw Failure.missing }
+```
+
+```odin
+lookup_received :: proc(task: swift.Task, value: u64, err: example.Async_Error) {
+	defer example.Async_Error_destroy(err)
+	if err == nil {
+		// Use value.
+		return
+	}
+	switch failure in err {
+	case example.Failure:
+		messages := [example.Failure]string {
+			.Missing = "Missing item",
+			.Denied = "Access denied",
+		}
+		message := messages[failure]
+		// Present the application's message.
+	case swift.Unknown_Error:
+		// failure.error remains available for diagnostics.
+	case swift.Error_Conversion_Failed:
+		// failure.error preserves the original error for diagnostics or retry.
+	case swift.Result_Conversion_Failed:
+		// A successful Swift result could not be copied to Odin.
+	}
+}
+```
+
+Payload errors select their native Odin union within `Async_Error`; switch on that
+value to access associated strings or other data. Destroying the outer union cleans
+those payloads. Frozen payload-free errors are native enums, suitable for ordinary
+enumerated arrays. Nonfrozen errors preserve unknown future cases in their existing
+owned `Type_Unknown` alternative. A future error type not known at build time becomes
+`swift.Unknown_Error`, so untyped throws never assumes a closed set of types.
+
+The union contains all supported Error enums in the imported module, not a guessed
+per-function throw list. Its names (`Async_Error`, `Async_Error_copy`,
+`Async_Error_destroy`) must not collide with Swift declarations. No Swift shim,
+new attribute or application-written ABI declaration is required.
+
+## Low-level error inspection
+
+Fallback `.error` boxes can be inspected without consuming them.
+`swift.error_type_name` and `swift.error_description` return independently owned
+Odin strings via `(string, bool) #optional_ok`. Delete the returned strings; the
+outer error union still owns its box. Nil or output-allocation failure returns
+false. Descriptions follow Swift `String(describing:)`, including custom descriptions.
+Names and descriptions are diagnostic text, not stable codes or localized messages.
+These operations use the Swift runtime and standard library, including runtime
+handling of bridged errors; they introduce no Foundation conversion dependency.
+
+`Type_from_error(error) -> (value: Type, err: swift.Error_Cast_Error)` remains an
+explicit inspection/recovery helper. It borrows the box and tests exact metadata:
+`nil` means an independent concrete value, `.Type_Mismatch` means nil or another
+type, and `.Conversion_Failed` means matching data could not be copied. Use/destroy
+its output only on nil status. Normal callbacks already perform this projection;
+application code need not call the helper to handle a supported error type.
+It is not Swift's broader bridging cast behavior. Error structs, unsupported
+payloads, synchronous throws and typed throws remain outside the projection subset;
+thrown values with those unsupported representations survive as owned fallbacks.
 
 ## Strings
 
@@ -464,10 +624,10 @@ the callback, including when Odin allocation fails. An empty result succeeds wit
 `converted = true` and needs no Odin allocation.
 
 For `async throws -> String`, the callback is
-`proc(task: swift.Task, text: string, error: swift.Error, converted: bool)`.
-A Swift error produces empty text and `converted = false`; release the owned error
-with `swift.error_release`. A successful Swift return followed by output conversion
-failure produces empty text, nil error and `converted = false`. Neither failure
+`proc(task: swift.Task, text: string, err: example.Async_Error)`.
+A thrown Swift error produces empty text and an owned error-union case. A successful
+Swift return followed by output conversion failure produces empty text and
+`swift.Result_Conversion_Failed`. Only nil err transfers an owned string. Neither failure
 changes the already accepted start or suppresses its completion. Cancellation
 follows the existing cooperative task contract; it can produce either an error
 or a successful result, depending on the Swift function.

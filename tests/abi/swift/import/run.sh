@@ -39,6 +39,9 @@ cp "$here/arrays.odin" "$build/arrays.odin"
 cp "$here/value_arrays.odin" "$build/value_arrays.odin"
 cp "$here/records.odin" "$build/records.odin"
 cp "$here/mixed_records.odin" "$build/mixed_records.odin"
+cp "$here/dates.odin" "$build/dates.odin"
+cp "$here/owned_records.odin" "$build/owned_records.odin"
+cp "$here/errors.odin" "$build/errors.odin"
 cp "$here/scalars.odin" "$build/scalars.odin"
 
 # Odin imports, checks and links the Swift module in a single invocation.
@@ -99,7 +102,8 @@ check_second_import :: proc "contextless" () {
 	assert(second.add(10, 20) == 30)
 }
 ODIN
-"$ODIN" build "$build" "${odin_target[@]}" "${odin_opt[@]}" -define:EVOLVED_VALUE_ENUM=true -out:"$build/repeated"
+# Single-module codegen must share tag globals across generic specializations.
+"$ODIN" build "$build" "${odin_target[@]}" "${odin_opt[@]}" -use-single-module -define:EVOLVED_VALUE_ENUM=true -out:"$build/repeated"
 run_fixture "$build/repeated"
 if [[ "$sdk" == iphonesimulator ]]; then
 	echo "Swift import tests passed on iOS simulator ($mode)"
@@ -114,7 +118,7 @@ package clashes
 foreign import fixture "swift:fixture/SwiftClashesFixture"
 main :: proc() {}
 ODIN
-for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE FROZEN_ENUM_CASE STRING_TYPE ARRAY_TYPE RECORD_FIELD; do
+for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE FROZEN_ENUM_CASE STRING_TYPE ARRAY_TYPE RECORD_FIELD ERROR_HELPER ASYNC_ERROR_TYPE ASYNC_ERROR_ALIAS ASYNC_ERROR_UNSUPPORTED; do
 	"${swiftc[@]}" -D "$selection" -parse-as-library -enable-library-evolution -module-name SwiftClashesFixture \
 		-emit-object -o "$build/clashes/fixture/SwiftClashesFixture.o" \
 		-emit-module-path "$build/clashes/fixture/SwiftClashesFixture.swiftmodule" "$here/Clashes.swift"
@@ -125,7 +129,8 @@ for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE FROZEN_EN
 	case "$selection" in
 		BUILTIN) diagnostic="type 'f64' conflicts" ;;
 		FLATTENED | STRING_TYPE | ARRAY_TYPE) diagnostic="map to the same Odin name" ;;
-		HELPER | ENUM_CASE | FROZEN_ENUM_CASE | RECORD_FIELD) diagnostic="is ambiguous" ;;
+		HELPER | ENUM_CASE | FROZEN_ENUM_CASE | RECORD_FIELD | ERROR_HELPER) diagnostic="is ambiguous" ;;
+		ASYNC_ERROR_TYPE | ASYNC_ERROR_ALIAS | ASYNC_ERROR_UNSUPPORTED) diagnostic="conflicts with generated async error declarations" ;;
 		UNSUPPORTED_HELPER) diagnostic="conflicts with a generated Odin helper" ;;
 	esac
 	if ! grep -F 'Swift import:' "$build/invalid.log" | grep -Fq "$diagnostic"; then

@@ -30,7 +30,7 @@ gb_internal gbString swift_import_emit_array(gbString source, SwiftImportNominal
 	SwiftImportType element = swift_import_nominal_type(type->argument);
 	String metadata = swift_import_metadata(element);
 	source = gb_string_append_fmt(source, "%.*s :: []%s\n@(private)\n_swift_%.*s_cache: swift.Array_Value_Cache\n", LIT(name), element.odin, LIT(name));
-	if (element.nominal->is_record) {
+	if (element.nominal->is_record && !element.nominal->owns) {
 		source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_from :: proc(values: []%s) -> (result: swift.Native_Array, ok: bool) #optional_ok {\nreturn swift.array_from_trivial(values, %.*s, &_swift_%.*s_cache, %llu)\n}\n", LIT(name), element.odin, LIT(metadata), LIT(name), cast(unsigned long long)element.nominal->size);
 		source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_to :: proc(value: swift.Native_Array) -> (result: []%s, ok: bool) #optional_ok {\nreturn swift.array_to_trivial(value, %.*s, &_swift_%.*s_cache, %s, %llu)\n}\n", LIT(name), element.odin, LIT(metadata), LIT(name), element.odin, cast(unsigned long long)element.nominal->size);
 		source = gb_string_append_fmt(source, "%.*s_destroy :: proc(values: []%s, allocator := context.allocator) {\ndelete(values, allocator)\n}\n", LIT(name), element.odin);

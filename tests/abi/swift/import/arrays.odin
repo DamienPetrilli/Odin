@@ -61,13 +61,13 @@ array_failed :: proc(task: swift.Task, values: []u64, ok: bool) {
 	array_calls += 1
 }
 
-array_throwing :: proc(task: swift.Task, values: []u64, error: swift.Error, ok: bool) {
+array_throwing :: proc(task: swift.Task, values: []u64, error: fixture.Async_Error) {
 	expected := take_expected(task)
 	if expected == 0 {
-		assert(!ok && error != nil && len(values) == 0)
-		swift.error_release(error)
+		assert(error != nil && len(values) == 0)
+		fixture.Async_Error_destroy(error)
 	} else {
-		assert(ok && error == nil && len(values) == 4)
+		assert(error == nil && len(values) == 4)
 		for value, i in values { assert(value == u64(i)+expected) }
 		delete(values)
 	}

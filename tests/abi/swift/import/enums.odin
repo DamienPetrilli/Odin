@@ -123,7 +123,8 @@ check_projected_enums :: proc() {
 	left := fixture.Value_init(17) or_else panic("Left value")
 	right := fixture.Value_init(29) or_else panic("Right value")
 	pair: fixture.Payloads = fixture.Payloads_Pair{left, right}
-	for remaining in 0..<3 {
+	// Native temporaries fit the checked stack buffer; only two output owners allocate.
+	for remaining in 0..<2 {
 		state.remaining = remaining
 		_, copied := fixture.echo_payloads(pair)
 		assert(!copied && fixture.live_value_count() == 2)
@@ -144,6 +145,13 @@ check_projected_enums :: proc() {
 	failure := unverified.value_1.(fixture.Verification_Value_Failure_Blocked)
 	assert(fixture.Value_value(unverified.value_0) == 17 && failure.code == 7 && failure.message == "Verification failed")
 	fixture.Verification_Value_destroy(verification)
+	text_value := fixture.TextValue_init("Second generic specialization") or_else panic("Text value")
+	text_verification := fixture.text_verification(text_value) or_else panic("Shared enum tags")
+	fixture.TextValue_destroy(text_value)
+	text_unverified := text_verification.(fixture.Verification_TextValue_Unverified)
+	_, invalid_signature := text_unverified.value_1.(fixture.Verification_TextValue_Failure_InvalidSignature)
+	assert(invalid_signature)
+	fixture.Verification_TextValue_destroy(text_verification)
 
 	// A string-array payload owns every string and its slice. Exercise partial
 	// copy and conversion failures, not only the successful recursive cleanup.
@@ -159,7 +167,7 @@ check_projected_enums :: proc() {
 	fixture.Payloads_destroy(owned_texts)
 	assert(copied_texts.(fixture.Payloads_Texts).value[1] == "second owned payload")
 	fixture.Payloads_destroy(copied_texts)
-	for remaining in 0..<4 {
+	for remaining in 0..<3 {
 		state.remaining = remaining
 		_, copied := fixture.echo_payloads(texts)
 		assert(!copied)

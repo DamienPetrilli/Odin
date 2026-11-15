@@ -9,15 +9,16 @@ foreign import fixture "swift:fixture/SwiftImportFixture"
 
 value_array_calls: int
 
-value_array_received :: proc(task: swift.Task, values: []fixture.Value, error: swift.Error, converted: bool) {
+value_array_received :: proc(task: swift.Task, values: []fixture.Value, error: fixture.Async_Error) {
 	expected := take_expected(task)
-	defer swift.error_release(error)
+	defer fixture.Async_Error_destroy(error)
 	if expected == 0 {
-		assert(error != nil && !converted && values == nil)
+		assert(error != nil && values == nil)
 	} else if expected == 1 {
-		assert(error == nil && !converted && values == nil)
+		_, failed := error.(swift.Result_Conversion_Failed)
+		assert(failed && values == nil)
 	} else {
-		assert(error == nil && converted && len(values) == 3)
+		assert(error == nil && len(values) == 3)
 		for value, index in values { assert(fixture.Value_value(value) == expected+u64(index)) }
 		fixture.Array_Value_destroy(values)
 	}
