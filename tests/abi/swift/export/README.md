@@ -81,6 +81,36 @@ values.withUnsafeMutableBufferPointer { buffer in
 // values == [17, 27, 37]
 ```
 
+`core:encoding/uuid.Identifier` parameters and results become `Foundation.UUID`:
+
+```odin
+package identifiers
+import "core:encoding/uuid"
+
+@(export)
+echo_identifier :: proc "swift" (id: uuid.Identifier) -> uuid.Identifier {
+	return id
+}
+```
+
+```swift
+import Foundation
+import OdinIdentifiers
+
+let id = UUID()
+precondition(echoIdentifier(id) == id)
+```
+
+This recognizes the exact core type, including aliases, rather than treating any
+`[16]u8` as a UUID. The generated entry reads borrowed Swift parameters through
+the verified byte getter and initializes Swift's result through its initializer.
+The Odin body receives an independent sixteen-byte value with no per-value
+cleanup. This does not promise a fixed layout for native Swift UUID storage.
+The initial subset covers direct parameters/results, not UUID fields, optional
+or array exports. Low-level handwritten `foreign` UUID declarations are rejected;
+use the importer for calls into Swift. A module or exported type named `Foundation`
+is rejected when UUID is present because it would shadow the required module.
+
 Strings, owned collections, slice results, closures, generics, async exports,
 and throwing exports are outside this subset and receive diagnostics. Swift
 calling Odin is a separate direction from the richer existing Swift importer.

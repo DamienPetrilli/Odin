@@ -28,7 +28,7 @@ swiftc=(xcrun --sdk "$sdk" swiftc -target "$triple" -swift-version 6 -warnings-a
 	-module-cache-path "${TMPDIR:-/tmp}/odin-swift-module-cache" "${swift_opt[@]}")
 "${swiftc[@]}" -parse-as-library -module-name SwiftReply -emit-object \
 	-o "$build/reply/SwiftReply.o" -emit-module-path "$build/reply/SwiftReply.swiftmodule" "$here/Reply.swift"
-cp "$here/library.odin" "$here/enums.odin" "$here/records.odin" "$build/"
+cp "$here/library.odin" "$here/enums.odin" "$here/records.odin" "$here/uuids.odin" "$build/"
 "$ODIN" build "$build" -build-mode:static "${odin_target[@]}" "${odin_opt[@]}" \
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/libOdinExportFixture.a"
 # Use the same Apple sanitizer runtime for Swift and Odin. Instrument Odin's
@@ -261,4 +261,23 @@ if "$ODIN" build "$build/symbols.odin" -file -build-mode:static "${odin_target[@
 fi
 grep -q 'conflicts with a Swift-generated symbol' "$build/symbols.log"
 test ! -e "$build/OdinSymbols.swiftmodule"
+
+# Only the canonical core Identifier maps to Foundation.UUID, through automatic
+# static-module entry points. Never expose its byte array as native UUID storage.
+for kind in FOREIGN UNEXPORTED LOOKALIKE MODULE SHADOW; do
+	extra=(-swift-module-name:OdinRejectedUuids)
+	if [[ "$kind" == MODULE ]]; then extra=(-swift-module-name:Foundation); fi
+	if "$ODIN" build "$here/rejected_uuids.odin" -file -build-mode:static "${odin_target[@]}" \
+		-define:"$kind=true" "${extra[@]}" -out:"$build/rejected-uuid.a" > "$build/rejected-uuid.log" 2>&1; then
+		echo "Unexpected accepted UUID export ($kind)" >&2; exit 1
+	fi
+	case "$kind" in
+		FOREIGN|UNEXPORTED) diagnostic='Swift UUID values require' ;;
+		LOOKALIKE) diagnostic='Unsupported parameter type' ;;
+		MODULE) diagnostic="conflicts with UUID's module" ;;
+		SHADOW) diagnostic='shadows a module name' ;;
+	esac
+	grep -q "$diagnostic" "$build/rejected-uuid.log" || { cat "$build/rejected-uuid.log" >&2; exit 1; }
+	test ! -e "$build/OdinRejectedUuids.swiftmodule"
+done
 echo "Swift export checks passed ($sdk, $mode)"

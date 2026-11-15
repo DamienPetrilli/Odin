@@ -40,6 +40,7 @@ cp "$here/value_arrays.odin" "$build/value_arrays.odin"
 cp "$here/records.odin" "$build/records.odin"
 cp "$here/mixed_records.odin" "$build/mixed_records.odin"
 cp "$here/dates.odin" "$build/dates.odin"
+cp "$here/uuids.odin" "$build/uuids.odin"
 cp "$here/owned_records.odin" "$build/owned_records.odin"
 cp "$here/errors.odin" "$build/errors.odin"
 cp "$here/scalars.odin" "$build/scalars.odin"
@@ -118,7 +119,7 @@ package clashes
 foreign import fixture "swift:fixture/SwiftClashesFixture"
 main :: proc() {}
 ODIN
-for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE FROZEN_ENUM_CASE STRING_TYPE ARRAY_TYPE RECORD_FIELD ERROR_HELPER ASYNC_ERROR_TYPE ASYNC_ERROR_ALIAS ASYNC_ERROR_UNSUPPORTED; do
+for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE FROZEN_ENUM_CASE STRING_TYPE ARRAY_TYPE RECORD_FIELD UUID_TYPE ERROR_HELPER ASYNC_ERROR_TYPE ASYNC_ERROR_ALIAS ASYNC_ERROR_UNSUPPORTED; do
 	"${swiftc[@]}" -D "$selection" -parse-as-library -enable-library-evolution -module-name SwiftClashesFixture \
 		-emit-object -o "$build/clashes/fixture/SwiftClashesFixture.o" \
 		-emit-module-path "$build/clashes/fixture/SwiftClashesFixture.swiftmodule" "$here/Clashes.swift"
@@ -128,7 +129,7 @@ for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE FROZEN_EN
 	fi
 	case "$selection" in
 		BUILTIN) diagnostic="type 'f64' conflicts" ;;
-		FLATTENED | STRING_TYPE | ARRAY_TYPE) diagnostic="map to the same Odin name" ;;
+		FLATTENED | STRING_TYPE | ARRAY_TYPE | UUID_TYPE) diagnostic="map to the same Odin name" ;;
 		HELPER | ENUM_CASE | FROZEN_ENUM_CASE | RECORD_FIELD | ERROR_HELPER) diagnostic="is ambiguous" ;;
 		ASYNC_ERROR_TYPE | ASYNC_ERROR_ALIAS | ASYNC_ERROR_UNSUPPORTED) diagnostic="conflicts with generated async error declarations" ;;
 		UNSUPPORTED_HELPER) diagnostic="conflicts with a generated Odin helper" ;;

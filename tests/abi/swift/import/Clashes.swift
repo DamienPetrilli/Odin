@@ -1,3 +1,4 @@
+import Foundation
 #if ASYNC_ERROR_ALIAS
 public typealias Async_Error = UInt64
 public func checked() async throws -> UInt64 { 17 }
@@ -38,6 +39,9 @@ public struct Array_Value { public let value: Swift.UInt64 }
 public func values() -> [Value] { [] }
 #elseif RECORD_FIELD
 @frozen public struct Record { public let itemId: UInt64; public let item_id: UInt64 }
+#elseif UUID_TYPE
+public struct UUID { public let value: Swift.UInt64 }
+public func identifier(_ value: Foundation.UUID) -> Foundation.UUID { value }
 #elseif STRING_TYPE
 public struct String { public let value: Swift.UInt64 }
 public func text() -> Swift.String { "text" }

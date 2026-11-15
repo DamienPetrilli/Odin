@@ -72,6 +72,7 @@ struct SwiftImportNominal {
 	String name, swift_name, usr, symbol, mangled, indirect_llvm;
 	String generic_parent, generic_suffix;
 	String date_getter, date_initializer;
+	String uuid_getter, uuid_initializer;
 	JsonValue *declaration;
 	SwiftImportNominal *argument;
 	Array<SwiftImportCase> cases;
@@ -80,7 +81,7 @@ struct SwiftImportNominal {
 	u64 size, alignment, stride;
 	bool projected, owns, resolving, resolved, static_metadata;
 	SwiftImportValueKind kind;
-	bool supported, is_enum, is_frozen, is_template, is_optional, is_scalar, is_record, is_date, is_error;
+	bool supported, is_enum, is_frozen, is_template, is_optional, is_scalar, is_record, is_date, is_uuid, is_error;
 };
 
 struct SwiftImportParameter {
@@ -401,6 +402,22 @@ gb_internal bool swift_import_api_type(JsonValue *api, SwiftImportType *type, Ar
 		}
 		date->is_date = true;
 		*type = swift_import_nominal_type(date);
+		return true;
+	}
+	if (usr == "s:10Foundation4UUIDV" && children.count == 0) {
+		SwiftImportNominal *uuid = nullptr;
+		for (auto candidate : *types) if (candidate->usr == usr) uuid = candidate;
+		if (!uuid) {
+			uuid = gb_alloc_item(permanent_allocator(), SwiftImportNominal);
+			*uuid = {};
+			uuid->name = str_lit("UUID");
+			uuid->swift_name = str_lit("Foundation.UUID");
+			uuid->usr = usr;
+			uuid->symbol = str_lit("$s10Foundation4UUIDV");
+			array_add(types, uuid);
+		}
+		uuid->is_uuid = true;
+		*type = swift_import_nominal_type(uuid);
 		return true;
 	}
 	if (children.count == 0) {
@@ -749,11 +766,13 @@ gb_internal bool swift_import_string_array(SwiftImportType const &type) {
 #include "swift_import_array.cpp"
 #include "swift_import_struct.cpp"
 #include "swift_import_date.cpp"
+#include "swift_import_uuid.cpp"
 #include "swift_import_error.cpp"
 
 gb_internal gbString swift_import_emit_type(gbString source, SwiftImportNominal *type) {
 	if (type->is_scalar) return source;
 	if (type->is_date) return swift_import_emit_date(source, type);
+	if (type->is_uuid) return swift_import_emit_uuid(source, type);
 	String name = type->name;
 	if (!type->projected && type->kind != SwiftImportValue_String && !swift_import_slice(type)) source = gb_string_append_fmt(source,
 		"// Typed address of a Swift value. Assignment aliases; copy creates an owned value.\n"
@@ -869,8 +888,13 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		for (auto const &param : fn.parameters) consumes |= param.consumed && !param.empty_set;
 		if (consumes) source = gb_string_appendc(source, "\t_swift_called := false\n");
 		bool has_date = fn.result.nominal && fn.result.nominal->is_date;
-		for (auto const &param : fn.parameters) has_date |= param.type.nominal && param.type.nominal->is_date;
+		bool has_uuid = fn.result.nominal && fn.result.nominal->is_uuid;
+		for (auto const &param : fn.parameters) {
+			has_date |= param.type.nominal && param.type.nominal->is_date;
+			has_uuid |= param.type.nominal && param.type.nominal->is_uuid;
+		}
 		if (has_date) source = gb_string_appendc(source, "\t_swift_date_layout := _swift_Date_layout\n");
+		if (has_uuid) source = gb_string_appendc(source, "\t_swift_uuid_layout := _swift_UUID_layout\n");
 		if (receiver) source = gb_string_appendc(source, "\tassert(receiver != nil, \"Cannot borrow a nil Swift value\")\n");
 		for_array(i, fn.parameters) {
 			auto const &param = fn.parameters[i];
@@ -879,10 +903,12 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 				auto type = param.type.nominal;
 				if (type->alignment) source = gb_string_append_fmt(source, "\t_swift_arg%td: %s\n", i, swift_import_enum_native(type));
 				else if (type->is_date) source = gb_string_append_fmt(source, "\t_swift_temporary%td: swift.Value_Temporary = ---\n\t_swift_arg%td := swift.value_temporary_from_layout(&_swift_temporary%td, _swift_date_layout) or_return\n\tdefer if !_swift_date_layout.inline_temporary { swift.value_free_uninitialized(_swift_arg%td) }\n", i, i, i, i);
+				else if (type->is_uuid) source = gb_string_append_fmt(source, "\t_swift_temporary%td: swift.Value_Temporary = ---\n\t_swift_arg%td := swift.value_temporary_from_layout(&_swift_temporary%td, _swift_uuid_layout) or_return\n\tdefer if !_swift_uuid_layout.inline_temporary { swift.value_free_uninitialized(_swift_arg%td) }\n", i, i, i, i);
 				else source = gb_string_append_fmt(source, "\t_swift_temporary%td: swift.Value_Temporary = ---\n\t_swift_arg%td := swift.value_temporary(&_swift_temporary%td, _swift_%.*s_metadata(0).type) or_return\n\tdefer swift.value_temporary_free(&_swift_temporary%td, _swift_arg%td)\n", i, i, i, LIT(type->name), i, i);
 				if (fallible) source = gb_string_append_fmt(source, "\tif !_swift_%.*s_initialize(%s_swift_arg%td, %.*s) { return }\n", LIT(type->name), type->alignment ? "&" : "", i, LIT(param.name));
 				else source = gb_string_append_fmt(source, "\t_swift_initialized%td := _swift_%.*s_initialize(%s_swift_arg%td, %.*s)\n\tassert(_swift_initialized%td)\n", i, LIT(type->name), type->alignment ? "&" : "", i, LIT(param.name), i);
 				if (type->is_date) source = gb_string_append_fmt(source, "\tdefer %sswift.value_deinitialize_from_layout(_swift_arg%td, _swift_date_layout)%s\n", param.consumed ? "if !_swift_called { " : "", i, param.consumed ? " }" : "");
+				else if (type->is_uuid) source = gb_string_append_fmt(source, "\tdefer %sswift.value_deinitialize_from_layout(_swift_arg%td, _swift_uuid_layout)%s\n", param.consumed ? "if !_swift_called { " : "", i, param.consumed ? " }" : "");
 				else if (swift_import_native_owns(swift_import_nominal_type(type))) source = gb_string_append_fmt(source, "\tdefer %sswift.value_deinitialize(%s_swift_arg%td, _swift_%.*s_metadata(0).type)%s\n", param.consumed ? "if !_swift_called { " : "", type->alignment ? "&" : "", i, LIT(type->name), param.consumed ? " }" : "");
 			} else if (swift_import_kind(param.type, SwiftImportValue_String)) {
 				source = gb_string_append_fmt(source, "\t_swift_arg%td := swift.string_from_odin(%.*s) or_return\n\tdefer %sswift.string_destroy(&_swift_arg%td)%s\n", i, LIT(param.name), param.consumed ? "if !_swift_called { " : "", i, param.consumed ? " }" : "");
@@ -899,13 +925,14 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		}
 		if (fixed_result) source = gb_string_append_fmt(source, "\t_swift_storage: %s\n", swift_import_enum_native(fn.result.nominal));
 		if (projected_result && fn.result.nominal->is_date) source = gb_string_appendc(source, "\t_swift_result_temporary: swift.Value_Temporary = ---\n\t_swift_storage := swift.value_temporary_from_layout(&_swift_result_temporary, _swift_date_layout) or_return\n\tdefer if !_swift_date_layout.inline_temporary { swift.value_free_uninitialized(_swift_storage) }\n");
+		else if (projected_result && fn.result.nominal->is_uuid) source = gb_string_appendc(source, "\t_swift_result_temporary: swift.Value_Temporary = ---\n\t_swift_storage := swift.value_temporary_from_layout(&_swift_result_temporary, _swift_uuid_layout) or_return\n\tdefer if !_swift_uuid_layout.inline_temporary { swift.value_free_uninitialized(_swift_storage) }\n");
 		else if (projected_result && !fixed_result) source = gb_string_append_fmt(source, "\t_swift_result_temporary: swift.Value_Temporary = ---\n\t_swift_storage := swift.value_temporary(&_swift_result_temporary, _swift_%.*s_metadata(0).type) or_return\n\tdefer swift.value_temporary_free(&_swift_result_temporary, _swift_storage)\n", LIT(fn.result.nominal->name));
 		else if (allocated_result) source = gb_string_append_fmt(source, "\t_swift_storage := swift.value_allocate(_swift_%.*s_metadata(0).type) or_return\n", LIT(fn.result.nominal->name));
 		char const *assignment = !fn.result.odin || indirect_result || empty_result ? "" : projected_result ? "_swift_storage = " : owned_result ? "(cast(^rawptr)_swift_storage)^ = " : "_swift_value := ";
 		source = gb_string_append_fmt(source, "\t%s_swift_%.*s_native(%s%s%s)\n", assignment, LIT(name), indirect_result ? (fixed_result ? "&_swift_storage" : "_swift_storage") : "", indirect_result && gb_string_length(arguments) ? ", " : "", arguments);
 		if (consumes) source = gb_string_appendc(source, "\t_swift_called = true\n");
 		if (projected_result) {
-			source = gb_string_append_fmt(source, "\t_swift_result_value, _swift_converted := _swift_%.*s_take(%s_swift_storage%s)\n", LIT(fn.result.nominal->name), fixed_result ? "&" : "", fn.result.nominal->is_date ? ", _swift_date_layout" : "");
+			source = gb_string_append_fmt(source, "\t_swift_result_value, _swift_converted := _swift_%.*s_take(%s_swift_storage%s)\n", LIT(fn.result.nominal->name), fixed_result ? "&" : "", fn.result.nominal->is_date ? ", _swift_date_layout" : fn.result.nominal->is_uuid ? ", _swift_uuid_layout" : "");
 			if (fallible) source = gb_string_appendc(source, "\treturn _swift_result_value, _swift_converted\n");
 			else source = gb_string_appendc(source, "\tassert(_swift_converted)\n\treturn _swift_result_value\n");
 		} else if (slice_result) source = gb_string_append_fmt(source, "\tdefer swift.array_destroy(swift.Native_Array{_swift_value})\n\treturn %.*s\n", LIT(swift_import_array_to(fn.result.nominal, str_lit("swift.Native_Array{_swift_value}"))));
@@ -1304,10 +1331,11 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 
 	gbString probe = gb_string_make(permanent_allocator(), "");
 	probe = gb_string_append_fmt(probe, "import %.*s\n", LIT(pkg->module));
-	for (auto type : types) if (type->is_date) { probe = gb_string_appendc(probe, "import Foundation\n"); break; }
+	for (auto type : types) if (type->is_date || type->is_uuid) { probe = gb_string_appendc(probe, "import Foundation\n"); break; }
 	for_array(i, types) {
 		if (types[i]->is_template) continue;
 		if (types[i]->is_date) probe = swift_import_date_probe(probe, types[i], i);
+		if (types[i]->is_uuid) probe = swift_import_uuid_probe(probe, types[i], i);
 		probe = gb_string_append_fmt(probe, "@_silgen_name(\"odin_swift_import_metadata_%td\")\npublic func metadata_%td() -> Any.Type { %.*s.self }\n", i, i, LIT(types[i]->swift_name));
 		if ((types[i]->is_enum && types[i]->cases.count) || types[i]->is_record) {
 			probe = gb_string_append_fmt(probe,
@@ -1402,7 +1430,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 				"declare swiftcc %%swift.metadata_response @\"%.*sMa\"(i64)", LIT(type->symbol));
 			String exported = concatenate3_strings(permanent_allocator(), str_lit(" _"), type->symbol, str_lit("Ma"));
 			type->supported = swift_import_has_line(ir, make_string_c(declaration), true) &&
-			                  (pkg->framework || type->is_date || swift_import_has_line(exports, exported, false));
+			                  (pkg->framework || type->is_date || type->is_uuid || swift_import_has_line(exports, exported, false));
 		}
 		if (!type->argument && type->is_frozen) {
 			String symbol = concatenate_strings(permanent_allocator(), type->symbol, str_lit("N"));
@@ -1413,6 +1441,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			}
 		}
 		if (type->is_date) type->supported &= swift_import_date_layout(inspection, sil, type, i);
+		if (type->is_uuid) type->supported &= swift_import_uuid_layout(inspection, sil, type, i);
 		if (type->is_enum) type->supported &= swift_import_enum_layout(inspection, layout, type, i);
 		if (type->is_record) swift_import_struct_layout(inspection, layout, type, i);
 		if (type->is_enum && !type->is_frozen) {
@@ -1514,7 +1543,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	for (auto type : types) {
 		if (!type->supported || type->is_scalar || type->kind == SwiftImportValue_String || (swift_import_slice(type) && !swift_import_value_slice(type))) continue;
 		if (!swift_import_add_name(node, &names, type->name)) return false;
-		if (type->is_date) continue;
+		if (type->is_date || type->is_uuid) continue;
 		if (type->is_error && type->projected && !swift_import_add_name(node, &names, concatenate_strings(permanent_allocator(), type->name, str_lit("_from_error")))) return false;
 		if (type->is_record) {
 			auto members = array_make<String>(permanent_allocator());
@@ -1605,6 +1634,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		LIT(pkg->module), cast(unsigned long long)fnv64a(identity.text, identity.len));
 	if (has_scalar_async) source = gb_string_appendc(source, "import \"base:intrinsics\"\n");
 	if (has_value_async) source = gb_string_appendc(source, "import \"base:runtime\"\n");
+	for (auto type : types) if (type->supported && type->is_uuid) { source = gb_string_appendc(source, "import _swift_uuid \"core:encoding/uuid\"\n"); break; }
 	if (has_values) source = gb_string_appendc(source, "@(require)\nimport \"core:mem\"\n@(require)\nimport \"core:strings\"\n");
 	if (has_values || has_scalar_async || has_value_async) source = gb_string_appendc(source, "import swift \"core:sys/darwin/Swift\"\n");
 	source = gb_string_appendc(source, "\n");

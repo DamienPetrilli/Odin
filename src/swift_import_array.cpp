@@ -52,13 +52,20 @@ gb_internal gbString swift_import_emit_array(gbString source, SwiftImportNominal
 	if (!element.nominal->projected) {
 		source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_to :: proc(value: swift.Native_Array) -> (result: []%s, ok: bool) #optional_ok {\nreturn swift.array_take_values(value, %.*s, &_swift_%.*s_cache, %s)\n}\n", LIT(name), element.odin, LIT(metadata), LIT(name), element.odin);
 	} else {
-		source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_to :: proc(value: swift.Native_Array) -> (result: []%s, ok: bool) #optional_ok {\nmetadata := %.*s\nbuffer := swift.array_value_buffer(value, metadata, &_swift_%.*s_cache) or_return\nif buffer.count == 0 { return nil, true }\nallocator := context.allocator\nvalues, err := make([]%s, buffer.count, allocator)\nif err != nil || raw_data(values) == nil { return }\ninitialized := 0\n", LIT(name), element.odin, LIT(metadata), LIT(name), element.odin);
+		source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_to :: proc(value: swift.Native_Array) -> (result: []%s, ok: bool) #optional_ok {\nmetadata := %.*s\nbuffer := swift.array_value_buffer(value, metadata, &_swift_%.*s_cache) or_return\nif buffer.count == 0 { return nil, true }\nallocator := context.allocator\nvalues, err := %s([]%s, buffer.count, allocator)\nif err != nil || raw_data(values) == nil { return }\ninitialized := 0\n", LIT(name), element.odin, LIT(metadata), LIT(name), element.nominal->is_uuid ? "non_zero_make" : "make", element.odin);
 		source = swift_import_emit_array_cleanup(source, element);
-		if (element.nominal->alignment) source = gb_string_append_fmt(source, "temporary: %s\nstorage := rawptr(&temporary)\n", swift_import_enum_native(element.nominal));
-		else source = gb_string_appendc(source, "storage := swift.value_allocate(metadata) or_return\ndefer swift.value_free_uninitialized(storage)\n");
-		source = gb_string_appendc(source, "for index in 0..<buffer.count {\naddress := swift.array_value_element(buffer, index)\n");
-		source = gb_string_append_fmt(source, "swift.value_initialize_copy(storage, address, metadata)\nitem := _swift_%.*s_take(storage) or_return\n", LIT(element.nominal->name));
-		source = gb_string_appendc(source, "values[index] = item\ninitialized += 1\n}\nreturn values, true\n}\n");
+		if (element.nominal->is_uuid) {
+			// UUID's getter borrows the live array element. No native copy,
+			// scratch owner, or per-element destroy is necessary. Every output
+			// byte is initialized before it is read, so zero filling is unnecessary.
+			source = gb_string_appendc(source, "for initialized < buffer.count {\nvalues[initialized] = _swift_UUID_read(swift.array_value_element(buffer, initialized))\ninitialized += 1\n}\nreturn values, true\n}\n");
+		} else {
+			if (element.nominal->alignment) source = gb_string_append_fmt(source, "temporary: %s\nstorage := rawptr(&temporary)\n", swift_import_enum_native(element.nominal));
+			else source = gb_string_appendc(source, "storage := swift.value_allocate(metadata) or_return\ndefer swift.value_free_uninitialized(storage)\n");
+			source = gb_string_appendc(source, "for index in 0..<buffer.count {\naddress := swift.array_value_element(buffer, index)\n");
+			source = gb_string_append_fmt(source, "swift.value_initialize_copy(storage, address, metadata)\nitem := _swift_%.*s_take(storage) or_return\n", LIT(element.nominal->name));
+			source = gb_string_appendc(source, "values[index] = item\ninitialized += 1\n}\nreturn values, true\n}\n");
+		}
 	}
 
 	source = gb_string_append_fmt(source, "%.*s_destroy :: proc(values: []%s, allocator := context.allocator) {\n", LIT(name), element.odin);

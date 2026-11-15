@@ -1608,6 +1608,13 @@ gb_internal void check_proc_decl(CheckerContext *ctx, Entity *e, DeclInfo *d) {
 	// NOTE(harold): See export/linkage note above(where is_export is assigned) regarding Objective-C method implementations
 	bool is_foreign = e->Procedure.is_foreign;
 	bool is_export  = e->Procedure.is_export;
+	if (pt->calling_convention == ProcCC_Swift) {
+		bool uuid = pt->result_count == 1 && is_swift_uuid_type(pt->results->Tuple.variables[0]->type);
+		for (isize i = 0; i < pt->param_count; i++) uuid |= is_swift_uuid_type(pt->params->Tuple.variables[i]->type);
+		if (uuid && (is_foreign || !is_export || build_context.build_mode != BuildMode_StaticLibrary || e->pkg != ctx->info->init_package)) {
+			error(e->token, "Swift UUID values require an @(export) procedure in the initial package of a static library; use foreign import for Swift calls");
+		}
+	}
 	
 	if (ac.linkage.len != 0) {
 		     if (ac.linkage == "internal")  { e->flags |= EntityFlag_CustomLinkage_Internal; }

@@ -4192,7 +4192,19 @@ gb_internal bool swift_abi_record_has_narrow_fields(Type *type) {
 	return false;
 }
 
+// Recognize the core value by package identity, not by shape or user spelling.
+gb_internal bool is_swift_uuid_type(Type *type) {
+	if (!type || type->kind != Type_Named || type->Named.name != "Identifier") return false;
+	Entity *name = type->Named.type_name;
+	if (!name || !name->pkg) return false;
+	Type *bt = base_type(type);
+	if (bt->kind != Type_Array || bt->Array.count != 16 || bt->Array.elem != t_u8) return false;
+	String path = get_fullpath_core_collection(temporary_allocator(), str_lit("encoding/uuid"), nullptr);
+	return name->pkg->fullpath == path;
+}
+
 gb_internal bool is_type_supported_by_swift_abi(Type *type) {
+	if (is_swift_uuid_type(type)) return true;
 	type = base_type(type);
 	if (type == t_bool || type == t_u8 || type == t_u16 || type == t_u32 || is_swift_abi_scalar(type) || is_swift_abi_enum(type)) {
 		return true;
@@ -4333,7 +4345,7 @@ gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc
 	if (swift_async) {
 		for (isize i = 0; i < param_count; i++) {
 			Entity *param = params->Tuple.variables[i];
-			if (param->flags & EntityFlag_ByPtr || !is_type_supported_by_swift_abi(param->type)) {
+			if (param->flags & EntityFlag_ByPtr || is_swift_uuid_type(param->type) || !is_type_supported_by_swift_abi(param->type)) {
 				error(param->token, "Unsupported parameter type for the \"swift/async\" calling convention");
 				success = false;
 			}

@@ -97,6 +97,7 @@ main :: proc() {
 	check_records()
 	check_mixed_records()
 	check_dates()
+	check_uuids()
 	check_owned_records()
 	check_error_inspection()
 	check_typed_errors()

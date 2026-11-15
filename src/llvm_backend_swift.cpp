@@ -272,6 +272,56 @@ gb_internal lbValue lb_swift_export_enum(lbProcedure *p, Type *type, lbValue val
 	return lbValue{result, result_type};
 }
 
+// UUID storage remains Swift-owned. Read borrowed parameters through the public
+// getter and initialize an indirect result exactly once through its constructor.
+gb_internal lbValue lb_swift_export_uuid_read(lbProcedure *p, Type *type, lbValue pointer) {
+	lbModule *m = p->module;
+	LLVMTypeRef word = lb_type(m, t_u64);
+	LLVMTypeRef words[] = {word, word};
+	LLVMTypeRef result_type = LLVMStructTypeInContext(m->ctx, words, 2, false);
+	LLVMTypeRef argument = lb_type(m, t_rawptr);
+	LLVMTypeRef signature = LLVMFunctionType(result_type, &argument, 1, false);
+	char const *name = alloc_cstring(temporary_allocator(), swift_export_uuid.uuid_getter);
+	LLVMValueRef function = LLVMGetNamedFunction(m->mod, name);
+	if (!function) function = LLVMAddFunction(m->mod, name, signature);
+	LLVMSetFunctionCallConv(function, LLVMSwiftCallConv);
+	LLVMAttributeRef self = LLVMCreateEnumAttribute(m->ctx, LLVMGetEnumAttributeKindForName("swiftself", 9), 0);
+	LLVMAddAttributeAtIndex(function, 1, self);
+	LLVMValueRef value = LLVMBuildCall2(p->builder, signature, function, &pointer.value, 1, "");
+	LLVMSetInstructionCallConv(value, LLVMSwiftCallConv);
+	LLVMAddCallSiteAttribute(value, 1, self);
+	LLVMValueRef bytes = LLVMGetUndef(lb_type(m, type));
+	for (unsigned i = 0; i < 16; i++) {
+		LLVMValueRef part = LLVMBuildExtractValue(p->builder, value, i/8, "");
+		if (i%8) part = LLVMBuildLShr(p->builder, part, LLVMConstInt(word, 8*(i%8), false), "");
+		part = LLVMBuildTrunc(p->builder, part, lb_type(m, t_u8), "");
+		bytes = LLVMBuildInsertValue(p->builder, bytes, part, i, "");
+	}
+	return {bytes, type};
+}
+
+gb_internal void lb_swift_export_uuid_initialize(lbProcedure *p, lbValue pointer, lbValue value) {
+	lbModule *m = p->module;
+	LLVMTypeRef types[17];
+	LLVMValueRef values[17];
+	types[0] = lb_type(m, t_rawptr);
+	values[0] = pointer.value;
+	for (unsigned i = 0; i < 16; i++) {
+		types[i+1] = lb_type(m, t_u8);
+		values[i+1] = LLVMBuildExtractValue(p->builder, value.value, i, "");
+	}
+	LLVMTypeRef signature = LLVMFunctionType(LLVMVoidTypeInContext(m->ctx), types, 17, false);
+	char const *name = alloc_cstring(temporary_allocator(), swift_export_uuid.uuid_initializer);
+	LLVMValueRef function = LLVMGetNamedFunction(m->mod, name);
+	if (!function) function = LLVMAddFunction(m->mod, name, signature);
+	LLVMSetFunctionCallConv(function, LLVMSwiftCallConv);
+	LLVMAttributeRef sret = lb_create_enum_attribute_with_type(m->ctx, "sret", lb_type(m, t_u8));
+	LLVMAddAttributeAtIndex(function, 1, sret);
+	LLVMValueRef call = LLVMBuildCall2(p->builder, signature, function, values, 17, "");
+	LLVMSetInstructionCallConv(call, LLVMSwiftCallConv);
+	LLVMAddCallSiteAttribute(call, 1, sret);
+}
+
 // Module entries preserve their generated link names and call the exported
 // Swift procedures with their native convention, without an Odin context.
 gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
@@ -284,10 +334,15 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 	LLVMSetLinkage(gen->cleanup_runtime->value, LLVMExternalLinkage);
 	for (auto const &exported : swift_export_procedures) {
 		Type *original = base_type(exported.entity->type);
+		Type *result_type = original->Proc.result_count ? original->Proc.results->Tuple.variables[0]->type : nullptr;
+		bool uuid_result = is_swift_uuid_type(result_type);
 		auto params = array_make<Type *>(temporary_allocator());
+		if (uuid_result) array_add(&params, t_rawptr);
 		for (isize i = 0; i < original->Proc.param_count; i++) {
 			Type *type = original->Proc.params->Tuple.variables[i]->type;
-			if (is_type_enum(type)) {
+			if (is_swift_uuid_type(type)) {
+				array_add(&params, t_rawptr);
+			} else if (is_type_enum(type)) {
 				if (Type *tag = swift_export_enum_tag_type(type)) array_add(&params, tag);
 			} else if (is_type_slice(type)) {
 				// UnsafeMutableBufferPointer's optional address and count are
@@ -302,8 +357,8 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 		if (tuple) {
 			for (Entity *param : tuple->Tuple.variables) param->token = make_token_ident(str_lit("arg"));
 		}
-		Type *result_type = original->Proc.result_count ? original->Proc.results->Tuple.variables[0]->type : nullptr;
-		Type *native_result = is_type_enum(result_type) ? swift_export_enum_tag_type(result_type) : result_type;
+		if (uuid_result) tuple->Tuple.variables[0]->flags |= EntityFlag_SwiftResult;
+		Type *native_result = uuid_result ? nullptr : is_type_enum(result_type) ? swift_export_enum_tag_type(result_type) : result_type;
 		Type *results = native_result ? alloc_type_tuple_from_field_types(&native_result, 1, false, true) : nullptr;
 		Type *type = alloc_type_proc(nullptr, tuple, params.count, results, native_result ? 1 : 0, false, ProcCC_Swift);
 		lbProcedure *p = lb_create_dummy_procedure(m, exported.symbol, type);
@@ -312,14 +367,16 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 		if (build_context.sanitizer_flags & SanitizerFlag_Address) lb_add_attribute_to_proc(m, p->value, "sanitize_address");
 		lb_begin_procedure_body(p);
 		auto args = array_make<lbValue>(temporary_allocator());
-		isize index = 0;
+		isize index = uuid_result ? 1 : 0;
 		for (isize i = 0; i < original->Proc.param_count; i++) {
 			Type *param_type = original->Proc.params->Tuple.variables[i]->type;
 			lbValue value = {};
 			if (!is_type_enum(param_type) || swift_export_enum_tag_type(param_type)) {
 				value = lb_emit_load(p, lb_find_value_from_entity(m, tuple->Tuple.variables[index++]));
 			}
-			if (is_type_enum(param_type)) {
+			if (is_swift_uuid_type(param_type)) {
+				value = lb_swift_export_uuid_read(p, param_type, value);
+			} else if (is_type_enum(param_type)) {
 				value = lb_swift_export_enum(p, param_type, value, false);
 			} else if (is_type_slice(param_type)) {
 				lbValue count = lb_emit_load(p, lb_find_value_from_entity(m, tuple->Tuple.variables[index++]));
@@ -332,6 +389,10 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 		}
 		lbValue result = lb_emit_call(p, lb_find_procedure_value_from_entity(m, exported.entity), args);
 		if (is_type_enum(result_type)) result = lb_swift_export_enum(p, result_type, result, true);
+		if (uuid_result) {
+			lbValue destination = lb_emit_load(p, lb_find_value_from_entity(m, tuple->Tuple.variables[0]));
+			lb_swift_export_uuid_initialize(p, destination, result);
+		}
 		if (native_result) {
 			lb_build_return_stmt_internal(p, result, exported.entity->token.pos);
 		} else {

@@ -973,3 +973,35 @@ public func genericFailureCode(_ value: GenericFailure<Value>) -> UInt64 {
 }
 
 public enum UnsupportedFailure: Error, @unchecked Sendable { case nested(any Error) }
+
+public func echoIdentifier(_ value: Foundation.UUID) -> Foundation.UUID { value }
+public func reverseIdentifier(_ value: Foundation.UUID) -> Foundation.UUID {
+	let b = value.uuid
+	return Foundation.UUID(uuid: (b.15, b.14, b.13, b.12, b.11, b.10, b.9, b.8, b.7, b.6, b.5, b.4, b.3, b.2, b.1, b.0))
+}
+public func identifierText(_ value: Foundation.UUID) -> Swift.String { value.uuidString }
+public func echoOptionalIdentifier(_ value: Foundation.UUID?) -> Foundation.UUID? { value }
+public func echoIdentifiers(_ values: [Foundation.UUID]) -> [Foundation.UUID] { values }
+public func reverseIdentifiers(_ values: [Foundation.UUID]) -> [Foundation.UUID] { values.map(reverseIdentifier) }
+public func echoIdentifierLater(_ value: Foundation.UUID) async -> Foundation.UUID {
+	await Task.yield()
+	return value
+}
+public func echoOptionalIdentifierLater(_ value: Foundation.UUID?) async -> Foundation.UUID? { value }
+public func echoIdentifiersLater(_ values: [Foundation.UUID]) async -> [Foundation.UUID] {
+	await Task.yield()
+	return values
+}
+public func checkedIdentifier(_ value: Foundation.UUID, _ fail: Swift.Bool) async throws -> Foundation.UUID {
+	if fail { throw PlainFailure.denied }
+	return value
+}
+public func cancellableIdentifier(_ value: Foundation.UUID) async throws -> Foundation.UUID {
+	try await Task.sleep(nanoseconds: 60_000_000_000)
+	return value
+}
+@frozen public enum IdentifierChoice {
+	case none
+	case value(Foundation.UUID)
+}
+public func echoIdentifierChoice(_ value: IdentifierChoice) -> IdentifierChoice { value }

@@ -16,6 +16,7 @@ gb_global Array<SwiftExportProcedure> swift_export_procedures;
 gb_global Array<Type *> swift_export_types;
 gb_global String swift_export_directory;
 gb_global Ast *swift_export_node;
+gb_global SwiftImportNominal swift_export_uuid;
 
 gb_internal String swift_export_name(String name, bool upper) {
 	gbString result = gb_string_make(permanent_allocator(), "");
@@ -70,6 +71,7 @@ gb_internal Type *swift_export_enum_tag_type(Type *type) {
 
 gb_internal String swift_export_type_name(Type *type, bool escaped = false) {
 	if (char const *name = swift_export_scalar(type)) return make_string_c(name);
+	if (is_swift_uuid_type(type)) return str_lit("Foundation.UUID");
 	if (is_type_slice(type)) {
 		gbString name = gb_string_append_fmt(gb_string_make(permanent_allocator(), ""),
 			"Swift.UnsafeMutableBufferPointer<%s>", swift_export_scalar(base_type(type)->Slice.elem));
@@ -87,6 +89,11 @@ gb_internal GB_COMPARE_PROC(swift_export_enum_value_compare) {
 
 gb_internal bool swift_export_check_type(Type *type, bool parameter) {
 	if (swift_export_scalar(type)) return true;
+	if (is_swift_uuid_type(type)) {
+		swift_export_uuid.is_uuid = true;
+		swift_export_uuid.swift_name = str_lit("Foundation.UUID");
+		return true;
+	}
 	Type *bt = base_type(type);
 	if (parameter && type == bt && bt->kind == Type_Slice) {
 		return swift_export_scalar(bt->Slice.elem) != nullptr && bt->Slice.elem != t_bool;
@@ -204,7 +211,7 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 		}
 		if (type->Proc.result_count) valid &= swift_export_check_type(type->Proc.results->Tuple.variables[0]->type, false);
 		if (!valid) {
-			error(e->token, "Swift export: expected a synchronous Swift procedure without ABI parameter attributes, with i64, u64, f64, bool, int, uint, integer enums, flat scalar structs, or borrowed scalar slice parameters, and at most one scalar/enum/struct result");
+			error(e->token, "Swift export: expected a synchronous Swift procedure without ABI parameter attributes, with i64, u64, f64, bool, int, uint, integer enums, flat scalar structs, uuid.Identifier, or borrowed scalar slice parameters, and at most one scalar/enum/struct/UUID result");
 			continue;
 		}
 		SwiftExportProcedure proc = {};
@@ -221,8 +228,8 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 	for (Type *type : swift_export_types) {
 		String name = swift_export_type_name(type);
 		if (!swift_import_identifier(name)) error(type->Named.type_name->token, "Swift export: invalid type name after case conversion");
-		if (name == "Swift") {
-			error(type->Named.type_name->token, "Swift export: type 'Swift' shadows a module name; rename the type");
+		if (name == "Swift" || (swift_export_uuid.is_uuid && name == "Foundation")) {
+			error(type->Named.type_name->token, "Swift export: type '%.*s' shadows a module name; rename the type", LIT(name));
 		} else if (name == build_context.swift_module_name) {
 			error(type->Named.type_name->token, "Swift export: type '%.*s' shadows a module name; rename the type or select another -swift-module-name", LIT(name));
 		}
@@ -251,6 +258,10 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 	if (any_errors()) return false;
 	if (!swift_export_procedures.count) {
 		gb_printf_err("Swift export: no @(export) procedures in the initial package\n");
+		return false;
+	}
+	if (swift_export_uuid.is_uuid && build_context.swift_module_name == "Foundation") {
+		gb_printf_err("Swift export: module name 'Foundation' conflicts with UUID's module\n");
 		return false;
 	}
 	swift_export_node = swift_export_procedures[0].entity->identifier;
@@ -307,6 +318,10 @@ gb_internal bool swift_export_check_types() {
 	return false;
 #else
 	gbString source = gb_string_make(permanent_allocator(), "");
+	if (swift_export_uuid.is_uuid) {
+		source = gb_string_appendc(source, "import Foundation\n");
+		source = swift_import_uuid_probe(source, &swift_export_uuid, 0);
+	}
 	auto records = array_make<SwiftImportNominal>(temporary_allocator(), swift_export_types.count);
 	for_array(i, swift_export_types) {
 		Type *type = swift_export_types[i];
@@ -367,6 +382,15 @@ gb_internal bool swift_export_check_types() {
 	array_add(&args, str_lit("-o"));
 	array_add(&args, swift_import_path(dir, "Types.ll"));
 	if (!swift_import_exec(swift_export_node, dir, args, nullptr, true)) return false;
+	String sil = {};
+	if (swift_export_uuid.is_uuid) {
+		for (auto &arg : args) {
+			if (arg == "-emit-ir") arg = str_lit("-emit-silgen");
+			if (arg == swift_import_path(dir, "Types.ll")) arg = swift_import_path(dir, "Types.sil");
+		}
+		if (!swift_import_exec(swift_export_node, dir, args, nullptr, true)) return false;
+		sil = swift_import_read(swift_import_path(dir, "Types.sil"));
+	}
 	String ir = swift_import_read(swift_import_path(dir, "Types.ll"));
 	LLVMContextRef context = LLVMContextCreate();
 	defer (LLVMContextDispose(context));
@@ -381,6 +405,10 @@ gb_internal bool swift_export_check_types() {
 	defer (LLVMDisposeModule(module));
 	LLVMTargetDataRef data = LLVMCreateTargetData(LLVMGetDataLayoutStr(module));
 	defer (LLVMDisposeTargetData(data));
+	if (swift_export_uuid.is_uuid && !swift_import_uuid_layout(module, sil, &swift_export_uuid, 0)) {
+		error(swift_export_node, "Swift export: unsupported native UUID lowering or ownership");
+		return false;
+	}
 	for_array(i, swift_export_types) {
 		Type *type = swift_export_types[i];
 		if (is_type_struct(type)) {
@@ -442,6 +470,7 @@ gb_internal bool swift_export_link(Array<String> const &objects) {
 	return false;
 #else
 	gbString source = gb_string_make(permanent_allocator(), "// Generated by Odin.\n");
+	if (swift_export_uuid.is_uuid) source = gb_string_appendc(source, "import Foundation\n");
 	for (Type *type : swift_export_types) {
 		if (is_type_enum(type)) {
 			source = swift_export_emit_enum(source, type);

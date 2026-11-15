@@ -660,6 +660,49 @@ standard-library strings in both directions, independent storage after owner
 release, invalid UTF-8 and failed allocation. It also checks the trailing-byte
 aggregate ABI used by Swift's UTF-8 copy result.
 
+## UUID values
+
+`Foundation.UUID` maps to `core:encoding/uuid.Identifier`, including optional
+values, array elements and asynchronous results. Imported `UUID` names alias the
+same core type across modules. All sixteen bytes are preserved, including a
+present all-zero identifier; it is distinct from an absent optional.
+
+```swift
+import Foundation
+public func echoIdentifier(_ value: UUID) -> UUID { value }
+public func identifierLater(_ value: UUID) async -> UUID { value }
+```
+
+```odin
+foreign import example "swift:Example"
+import "core:encoding/uuid"
+import swift "core:sys/darwin/Swift"
+
+id := uuid.Identifier{15 = 42}
+copy := example.echo_identifier(id) or_return
+task := example.identifier_later(copy, received) or_return
+swift.task_release(task)
+
+received :: proc(task: swift.Task, value: uuid.Identifier) {
+	// An independent plain value; no per-value destroy or release.
+	use_identifier(value)
+}
+```
+
+The compiler inspects the SDK's native byte getter and initializer. It does not
+assume Swift's resilient UUID has Odin's byte-array layout, use text conversion,
+or bridge through NSUUID. Native temporary size/alignment and destruction follow
+Swift metadata. Async input is initialized before start returns; output bytes are
+copied before native result/frame cleanup. Odin assignment copies the identifier.
+A returned `[]uuid.Identifier` owns only its slice allocation: `delete(values)`
+is sufficient. Optional results use `Maybe(uuid.Identifier)`.
+
+UUID belongs to Foundation, so APIs using it depend on that Swift module. This
+mapping does not add Foundation to generic String conversion or extend the
+current Darwin arm64 support to Linux. UUID fields inside imported records and
+UUID methods/initializers are outside this initial projection. See `uuids.odin`
+for value, optional, union, slice, async, cancellation and allocation-failure tests.
+
 ## iOS simulator execution
 
 `run.sh iphonesimulator debug` (or `release`) links the fixtures without running

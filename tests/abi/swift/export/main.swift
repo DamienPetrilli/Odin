@@ -1,3 +1,4 @@
+import Foundation
 import OdinExportFixture
 
 precondition(String(reflecting: Reading.self) == "OdinExportFixture.Reading")
@@ -168,3 +169,22 @@ print("Mixed Bool record exports passed")
 }
 checkBoolWideStorage(BoolWide(flag: true, a: -73, b: UInt.max, c: 0.5, d: 41, end: false))
 print("Mixed Bool record tail padding preserved")
+
+let uuidZero = Foundation.UUID(uuid: (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0))
+precondition(zeroIdentifier() == uuidZero)
+for seed in 0..<256 {
+	let bytes = (0..<16).map { UInt8(truncatingIfNeeded: seed*31 + $0*17) }
+	let id = Foundation.UUID(uuid: (bytes[0],bytes[1],bytes[2],bytes[3],bytes[4],bytes[5],bytes[6],bytes[7],bytes[8],bytes[9],bytes[10],bytes[11],bytes[12],bytes[13],bytes[14],bytes[15]))
+	precondition(chooseIdentifier(id, true, uuidZero) == id)
+	precondition(chooseIdentifier(id, false, uuidZero) == uuidZero)
+	precondition(roundTripIdentifier(id) == id)
+	let changed = changeIdentifier(id, 1)
+	withUnsafeBytes(of: changed.uuid) { storage in
+		for index in 0..<16 { precondition(storage[index] == bytes[index] &+ 1) }
+	}
+	withUnsafeBytes(of: id.uuid) { storage in
+		for index in 0..<16 { precondition(storage[index] == bytes[index]) }
+	}
+	precondition(identifierChecksum(id) == bytes.enumerated().reduce(UInt64(0)) { $0 + UInt64($1.element)*UInt64($1.offset+1) })
+}
+print("Native UUID export/import round trips passed")

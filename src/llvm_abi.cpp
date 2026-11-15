@@ -2724,6 +2724,14 @@ gb_internal lbArgType lb_swift_abi_value(LLVMContextRef c, LLVMTypeRef type, boo
 	if (base_type(odin_type) == t_bool) {
 		return lb_arg_type_direct(type, LLVMInt1TypeInContext(c), nullptr, nullptr);
 	}
+	if (is_swift_uuid_type(odin_type)) {
+		// This is the Odin implementation's byte array, not native UUID storage.
+		// Coerce it to two words so a nested call cannot clobber byte components
+		// beyond Swift's direct return registers. The exported entry converts
+		// resilient Swift storage using its inspected getter and initializer.
+		LLVMTypeRef words[] = {LLVMInt64TypeInContext(c), LLVMInt64TypeInContext(c)};
+		return lb_arg_type_direct(type, LLVMStructTypeInContext(c, words, 2, false), nullptr, nullptr);
+	}
 	if (!lb_is_type_kind(type, LLVMStructTypeKind)) {
 		return lb_arg_type_direct(type);
 	}
