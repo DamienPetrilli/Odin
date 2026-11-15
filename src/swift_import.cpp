@@ -58,6 +58,7 @@ struct SwiftImportField {
 	String name;
 	SwiftImportType type;
 	String swift_name;
+	u64 offset;
 };
 
 struct SwiftImportCase {
@@ -68,14 +69,14 @@ struct SwiftImportCase {
 };
 
 struct SwiftImportNominal {
-	String name, swift_name, usr, symbol, mangled;
+	String name, swift_name, usr, symbol, mangled, indirect_llvm;
 	String generic_parent, generic_suffix;
 	JsonValue *declaration;
 	SwiftImportNominal *argument;
 	Array<SwiftImportCase> cases;
 	Array<SwiftImportField> fields;
 	Array<SwiftImportType> components;
-	u64 size, alignment;
+	u64 size, alignment, stride;
 	bool projected, owns, resolving, resolved, static_metadata;
 	SwiftImportValueKind kind;
 	bool supported, is_enum, is_frozen, is_template, is_optional, is_scalar, is_record;
@@ -1399,11 +1400,11 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			fn.is_async || indirect_result || swift_import_empty(fn.result) || !fn.result.llvm ? "void" : swift_import_projected(fn.result) ? alloc_cstring(permanent_allocator(), swift_import_enum_llvm(fn.result.nominal, true)) : fn.result.llvm, LIT(fn.symbol));
 		isize count = 0;
 		if (indirect_result) {
-			if (fn.result.nominal->is_record) {
+			if (fn.result.nominal->projected && fn.result.nominal->alignment) {
 				record_parameters = true;
 				supported &= swift_import_struct_parameter(native, native_index, fn.result.nominal, true);
 				if (fn.is_async) declaration = gb_string_appendc(declaration, "ptr noalias");
-				else declaration = gb_string_append_fmt(declaration, "ptr noalias sret(%%T%.*s)", LIT(substring(fn.result.nominal->symbol, 2, fn.result.nominal->symbol.len)));
+				else declaration = gb_string_append_fmt(declaration, "ptr noalias sret(%%%.*s)", LIT(fn.result.nominal->indirect_llvm));
 			} else declaration = gb_string_appendc(declaration, fn.is_async ? "ptr noalias" : "ptr noalias sret(%swift.opaque)");
 			count++;
 			native_index++;
@@ -1416,7 +1417,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			if (swift_import_empty(param.type)) continue;
 			char const *llvm = swift_import_kind(param.type, SwiftImportValue_String) ? "i64, ptr" : swift_import_projected(param.type) ? alloc_cstring(permanent_allocator(), swift_import_enum_llvm(param.type.nominal, false)) : param.type.llvm;
 			if (fn.is_collection && swift_import_string_array(param.type)) llvm = "ptr noalias";
-			if (swift_import_indirect(param.type) && param.type.nominal->is_record) {
+			if (swift_import_indirect(param.type) && param.type.nominal->projected && param.type.nominal->alignment) {
 				record_parameters = true;
 				supported &= swift_import_struct_parameter(native, native_index, param.type.nominal, false);
 				llvm = "ptr noalias";

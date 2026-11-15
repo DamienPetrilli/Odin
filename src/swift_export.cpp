@@ -108,9 +108,9 @@ gb_internal bool swift_export_check_type(Type *type, bool parameter) {
 			}
 		}
 	} else if (bt->kind == Type_Struct) {
-		// Full-width trivial fields have identical offsets, size and stride.
+		// The target Swift compiler verifies field offsets and native lowering.
 		for (Entity *field : bt->Struct.fields) {
-			if (!swift_export_scalar(field->type) || field->type == t_bool || is_blank_ident(field->token)) return false;
+			if (!swift_export_scalar(field->type) || is_blank_ident(field->token)) return false;
 		}
 	} else return false;
 	array_add(&swift_export_types, type);
@@ -133,7 +133,7 @@ gb_internal bool is_swift_export_procedure(Checker *checker, Entity *e) {
 	return cc == ProcCC_Swift || cc == ProcCC_SwiftAsync;
 }
 
-gb_internal bool swift_export_check_enums();
+gb_internal bool swift_export_check_types();
 
 gb_internal bool swift_export_prepare(Checker *checker) {
 	// Only static library builds produce a Swift module. Object/executable
@@ -262,7 +262,7 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 	swift_export_directory = make_string_c(directory);
 	if (!swift_import_directories.allocator.proc) array_init(&swift_import_directories, permanent_allocator());
 	array_add(&swift_import_directories, swift_export_directory);
-	return swift_export_check_enums();
+	return swift_export_check_types();
 #endif
 }
 
@@ -278,13 +278,61 @@ gb_internal gbString swift_export_emit_enum(gbString source, Type *type) {
 	return gb_string_appendc(source, "}\n");
 }
 
-gb_internal bool swift_export_check_enums() {
+gb_internal gbString swift_export_emit_struct(gbString source, Type *type) {
+	String name = swift_export_type_name(type);
+	source = gb_string_append_fmt(source, "@frozen public struct `%.*s` {\n", LIT(name));
+	for (Entity *field : base_type(type)->Struct.fields) {
+		String field_name = swift_export_name(field->token.string, false);
+		source = gb_string_append_fmt(source, "\tpublic var `%.*s`: %s\n", LIT(field_name), swift_export_scalar(field->type));
+	}
+	source = gb_string_appendc(source, "\tpublic init(");
+	isize index = 0;
+	for (Entity *field : base_type(type)->Struct.fields) {
+		String field_name = swift_export_name(field->token.string, false);
+		source = gb_string_append_fmt(source, "%s`%.*s` p%td: %s", index ? ", " : "", LIT(field_name), index, swift_export_scalar(field->type));
+		index++;
+	}
+	source = gb_string_appendc(source, ") {\n");
+	index = 0;
+	for (Entity *field : base_type(type)->Struct.fields) {
+		String field_name = swift_export_name(field->token.string, false);
+		source = gb_string_append_fmt(source, "\t\tself.`%.*s` = p%td\n", LIT(field_name), index++);
+	}
+	source = gb_string_appendc(source, "\t}\n}\n");
+	return source;
+}
+
+gb_internal bool swift_export_check_types() {
 #if !defined(GB_SYSTEM_OSX)
 	return false;
 #else
 	gbString source = gb_string_make(permanent_allocator(), "");
+	auto records = array_make<SwiftImportNominal>(temporary_allocator(), swift_export_types.count);
 	for_array(i, swift_export_types) {
 		Type *type = swift_export_types[i];
+		if (is_type_struct(type)) {
+			source = swift_export_emit_struct(source, type);
+			auto &record = records[i];
+			record.is_record = record.is_frozen = true;
+			record.swift_name = swift_export_type_name(type, true);
+			array_init(&record.fields, temporary_allocator());
+			for (Entity *field : base_type(type)->Struct.fields) {
+				SwiftImportField item = {};
+				item.swift_name = swift_export_name(field->token.string, false);
+				for (auto const &scalar : swift_import_scalars) {
+					if (make_string_c(scalar.type.swift) == make_string_c(swift_export_scalar(field->type))) item.type = scalar.type;
+				}
+				array_add(&record.fields, item);
+			}
+			source = gb_string_append_fmt(source,
+				"@_silgen_name(\"odin_swift_import_load_%td\") public func load_%td(_ value: Swift.UnsafePointer<%.*s>) -> %.*s { value.pointee }\n"
+				"@_silgen_name(\"odin_swift_import_layout_%td\") public func layout_%td() -> (Swift.Int, Swift.Int) { (Swift.MemoryLayout<%.*s>.size, Swift.MemoryLayout<%.*s>.alignment) }\n"
+				"@_silgen_name(\"odin_swift_export_record_%td\") public func record_%td(_ value: %.*s) -> %.*s { value }\n",
+				i, i, LIT(record.swift_name), LIT(record.swift_name), i, i, LIT(record.swift_name), LIT(record.swift_name),
+				i, i, LIT(record.swift_name), LIT(record.swift_name));
+			source = swift_import_struct_probe(source, &record, i);
+			continue;
+		}
 		if (!is_type_enum(type)) continue;
 		source = swift_export_emit_enum(source, type);
 		String name = swift_export_type_name(type, true);
@@ -304,7 +352,7 @@ gb_internal bool swift_export_check_enums() {
 	}
 	if (!gb_string_length(source)) return true;
 	String dir = swift_export_directory;
-	if (!swift_import_write(swift_export_node, swift_import_path(dir, "Enums.swift"), source, true)) return false;
+	if (!swift_import_write(swift_export_node, swift_import_path(dir, "Types.swift"), source, true)) return false;
 	auto args = array_make<String>(permanent_allocator());
 	array_add(&args, str_lit("--sdk"));
 	array_add(&args, selected_subtarget == Subtarget_iPhone ? str_lit("iphoneos") : selected_subtarget == Subtarget_iPhoneSimulator ? str_lit("iphonesimulator") : str_lit("macosx"));
@@ -315,24 +363,55 @@ gb_internal bool swift_export_check_enums() {
 	array_add(&args, build_context.swift_module_name);
 	array_add(&args, str_lit("-module-cache-path"));
 	array_add(&args, swift_import_path(temporary_directory(permanent_allocator()), "odin-swift-module-cache"));
-	array_add(&args, swift_import_path(dir, "Enums.swift"));
+	array_add(&args, swift_import_path(dir, "Types.swift"));
 	array_add(&args, str_lit("-o"));
-	array_add(&args, swift_import_path(dir, "Enums.ll"));
+	array_add(&args, swift_import_path(dir, "Types.ll"));
 	if (!swift_import_exec(swift_export_node, dir, args, nullptr, true)) return false;
-	String ir = swift_import_read(swift_import_path(dir, "Enums.ll"));
+	String ir = swift_import_read(swift_import_path(dir, "Types.ll"));
 	LLVMContextRef context = LLVMContextCreate();
 	defer (LLVMContextDispose(context));
-	LLVMMemoryBufferRef buffer = LLVMCreateMemoryBufferWithMemoryRangeCopy(cast(char const *)ir.text, ir.len, "Swift enum export");
+	LLVMMemoryBufferRef buffer = LLVMCreateMemoryBufferWithMemoryRangeCopy(cast(char const *)ir.text, ir.len, "Swift type export");
 	LLVMModuleRef module = nullptr;
 	char *diagnostic = nullptr;
 	if (LLVMParseIRInContext(context, buffer, &module, &diagnostic)) {
-		error(swift_export_node, "Swift export: cannot inspect enum lowering: %s", diagnostic ? diagnostic : "invalid IR");
+		error(swift_export_node, "Swift export: cannot inspect native type lowering: %s", diagnostic ? diagnostic : "invalid IR");
 		LLVMDisposeMessage(diagnostic);
 		return false;
 	}
 	defer (LLVMDisposeModule(module));
+	LLVMTargetDataRef data = LLVMCreateTargetData(LLVMGetDataLayoutStr(module));
+	defer (LLVMDisposeTargetData(data));
 	for_array(i, swift_export_types) {
 		Type *type = swift_export_types[i];
+		if (is_type_struct(type)) {
+			auto &record = records[i];
+			swift_import_struct_layout(module, data, &record, i);
+			bool valid = record.projected && record.stride == cast(u64)gb_max(i64(1), type_size_of(type)) &&
+			             record.alignment == cast(u64)type_align_of(type);
+			for_array(j, record.fields) valid &= record.fields[j].offset == cast(u64)type_offset_of(type, j);
+			SwiftABIRecordComponent components[4];
+			isize count = swift_abi_record_components(type, components, gb_count_of(components));
+			gbString name = gb_string_append_fmt(gb_string_make(temporary_allocator(), ""), "odin_swift_export_record_%td", i);
+			LLVMValueRef echo = LLVMGetNamedFunction(module, name);
+			valid &= echo && LLVMGetFunctionCallConv(echo) == LLVMSwiftCallConv;
+			if (echo && count > gb_count_of(components)) {
+				valid &= record.components.count == 0 && LLVMCountParams(echo) == 2 &&
+				         LLVMGetTypeKind(LLVMGetReturnType(LLVMGlobalGetValueType(echo))) == LLVMVoidTypeKind;
+				valid &= swift_import_struct_parameter(echo, 0, &record, true) && swift_import_struct_parameter(echo, 1, &record, false);
+			} else if (echo) {
+				valid &= record.components.count == count && LLVMCountParams(echo) == cast(unsigned)count;
+				LLVMTypeRef result = LLVMGetReturnType(LLVMGlobalGetValueType(echo));
+				for (isize j = 0; j < count && valid; j++) {
+					Type *field = base_type(components[j].type);
+					LLVMTypeRef expected = field == t_bool ? LLVMInt1TypeInContext(context) : field == t_f64 ? LLVMDoubleTypeInContext(context) :
+					                       LLVMIntTypeInContext(context, cast(unsigned)type_size_of(field)*8);
+					LLVMTypeRef returned = count == 1 ? result : LLVMGetTypeKind(result) == LLVMStructTypeKind && LLVMCountStructElementTypes(result) == count ? LLVMStructGetTypeAtIndex(result, cast(unsigned)j) : nullptr;
+					valid &= LLVMTypeOf(LLVMGetParam(echo, cast(unsigned)j)) == expected && returned == expected;
+				}
+			}
+			if (!valid) error(type->Named.type_name->token, "Swift export: unsupported native record layout or lowering for '%.*s'", LIT(type->Named.name));
+			continue;
+		}
 		if (!is_type_enum(type)) continue;
 		isize count = base_type(type)->Enum.fields.count;
 		unsigned bits = count == 1 ? 0 : count <= 256 ? 8 : 16;
@@ -368,26 +447,7 @@ gb_internal bool swift_export_link(Array<String> const &objects) {
 			source = swift_export_emit_enum(source, type);
 			continue;
 		}
-		String name = swift_export_type_name(type);
-		source = gb_string_append_fmt(source, "@frozen public struct `%.*s` {\n", LIT(name));
-		for (Entity *field : base_type(type)->Struct.fields) {
-			String field_name = swift_export_name(field->token.string, false);
-			source = gb_string_append_fmt(source, "\tpublic var `%.*s`: %s\n", LIT(field_name), swift_export_scalar(field->type));
-		}
-		source = gb_string_appendc(source, "\tpublic init(");
-		isize index = 0;
-		for (Entity *field : base_type(type)->Struct.fields) {
-			String field_name = swift_export_name(field->token.string, false);
-			source = gb_string_append_fmt(source, "%s`%.*s` p%td: %s", index ? ", " : "", LIT(field_name), index, swift_export_scalar(field->type));
-			index++;
-		}
-		source = gb_string_appendc(source, ") {\n");
-		index = 0;
-		for (Entity *field : base_type(type)->Struct.fields) {
-			String field_name = swift_export_name(field->token.string, false);
-			source = gb_string_append_fmt(source, "\t\tself.`%.*s` = p%td\n", LIT(field_name), index++);
-		}
-		source = gb_string_appendc(source, "\t}\n}\n");
+		source = swift_export_emit_struct(source, type);
 	}
 	for (auto const &proc : swift_export_procedures) {
 		Type *type = base_type(proc.entity->type);

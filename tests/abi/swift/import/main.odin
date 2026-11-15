@@ -95,6 +95,7 @@ main :: proc() {
 	check_arrays()
 	check_value_arrays()
 	check_records()
+	check_mixed_records()
 	check_scalars()
 	check_tasks()
 	assert(fixture.add(17, 9) == 26)

@@ -114,15 +114,51 @@ gb_internal bool swift_import_coercion_uses(LLVMValueRef pointer) {
 	return true;
 }
 
+// Some load probes copy the value to a local before coercing it. Accept only
+// nonescaping temporaries initialized by one bounded memcpy from known storage.
+gb_internal bool swift_import_copied_offset(LLVMTargetDataRef data, LLVMValueRef pointer, LLVMValueRef base, u64 offset, u64 size, unsigned depth = 0) {
+	u64 source_offset = 0;
+	if (swift_import_pointer_offset(data, pointer, base, &source_offset)) return source_offset == offset;
+	if (depth == 4) return false;
+	LLVMValueRef root = pointer;
+	while (LLVMIsAGetElementPtrInst(root)) root = LLVMGetOperand(root, 0);
+	if (!LLVMIsAAllocaInst(root) || !swift_import_pointer_offset(data, pointer, root, &source_offset) || source_offset != offset) return false;
+	LLVMValueRef copy = nullptr;
+	auto pending = array_make<LLVMValueRef>(temporary_allocator());
+	array_add(&pending, root);
+	for (isize i = 0; i < pending.count; i++) {
+		for (auto use = LLVMGetFirstUse(pending[i]); use; use = LLVMGetNextUse(use)) {
+			LLVMValueRef user = LLVMGetUser(use);
+			if (LLVMIsAGetElementPtrInst(user)) { array_add(&pending, user); continue; }
+			if (LLVMIsALoadInst(user)) continue;
+			if (!LLVMIsACallInst(user)) return false;
+			size_t length = 0;
+			char const *text = LLVMGetValueName2(LLVMGetCalledValue(user), &length);
+			String name = make_string(cast(u8 *)text, length);
+			if (string_starts_with(name, str_lit("llvm.lifetime."))) continue;
+			if (!string_starts_with(name, str_lit("llvm.memcpy."))) return false;
+			if (LLVMGetOperand(user, 1) == pending[i]) continue;
+			if (LLVMGetOperand(user, 0) != root || copy) return false;
+			copy = user;
+		}
+	}
+	if (!copy || !LLVMIsAConstantInt(LLVMGetOperand(copy, 2)) ||
+	    LLVMConstIntGetZExtValue(LLVMGetOperand(copy, 2)) < offset+size) return false;
+	return swift_import_copied_offset(data, LLVMGetOperand(copy, 1), base, 0, offset+size, depth+1);
+}
+
 // Swift sometimes gathers adjacent tag bytes through a temporary integer
 // coercion. Verify every byte's source and reject calls/escaping pointers to
 // that temporary, rather than assuming register order equals storage order.
-gb_internal bool swift_import_component_load(LLVMTargetDataRef data, LLVMValueRef value, LLVMValueRef function, u64 offset, u64 size) {
+gb_internal bool swift_import_component_load(LLVMTargetDataRef data, LLVMValueRef value, LLVMValueRef function, u64 offset, u64 size, u64 extent = 0) {
+	if (extent == 0) extent = size;
 	LLVMValueRef load = swift_import_loaded_value(value);
-	if (!load || LLVMStoreSizeOfType(data, LLVMTypeOf(load)) != size) return false;
+	if (!load) return false;
+	u64 loaded = LLVMStoreSizeOfType(data, LLVMTypeOf(load));
+	if (loaded != size && !(LLVMIsAZExtInst(value) && LLVMGetOperand(value, 0) == load && loaded == extent && loaded < size)) return false;
 	LLVMValueRef pointer = LLVMGetOperand(load, 0);
 	u64 source_offset = 0;
-	if (swift_import_pointer_offset(data, pointer, LLVMGetParam(function, 0), &source_offset)) return source_offset == offset;
+	if (loaded <= extent && swift_import_copied_offset(data, pointer, LLVMGetParam(function, 0), offset, loaded)) return true;
 	LLVMValueRef root = pointer;
 	while (LLVMIsAGetElementPtrInst(root)) root = LLVMGetOperand(root, 0);
 	if (!LLVMIsAAllocaInst(root) || !swift_import_coercion_uses(root) ||
@@ -135,7 +171,7 @@ gb_internal bool swift_import_component_load(LLVMTargetDataRef data, LLVMValueRe
 			if (!swift_import_pointer_offset(data, LLVMGetOperand(instruction, 1), root, &destination)) continue;
 			u64 bytes = LLVMStoreSizeOfType(data, LLVMTypeOf(LLVMGetOperand(instruction, 0)));
 			if (destination >= offset+size || destination+bytes <= offset) continue;
-			if (destination < offset || bytes > size || destination+bytes > offset+size) return false;
+			if (destination < offset || bytes > size || destination+bytes > offset+extent) return false;
 			LLVMValueRef field = swift_import_loaded_value(LLVMGetOperand(instruction, 0));
 			u64 original = 0;
 			if (!field || LLVMStoreSizeOfType(data, LLVMTypeOf(field)) != bytes ||
@@ -146,7 +182,9 @@ gb_internal bool swift_import_component_load(LLVMTargetDataRef data, LLVMValueRe
 			covered |= mask;
 		}
 	}
-	return covered == (u64(1)<<size)-1;
+	// Unwritten bytes in this verified temporary are padding, not payload.
+	// No call or escaping pointer may have filled them with other data.
+	return covered != 0;
 }
 
 gb_internal bool swift_import_enum_layout(LLVMModuleRef module, LLVMTargetDataRef data, SwiftImportNominal *type, isize index) {
@@ -165,7 +203,16 @@ gb_internal bool swift_import_enum_layout(LLVMModuleRef module, LLVMTargetDataRe
 	if (!load) return false;
 	LLVMTypeRef ret = LLVMGetReturnType(LLVMGlobalGetValueType(load));
 	if (type->alignment && type->size == 0) return LLVMGetTypeKind(ret) == LLVMVoidTypeKind && LLVMCountParams(load) == 1;
-	if (LLVMGetTypeKind(ret) == LLVMVoidTypeKind) return true;
+	if (LLVMGetTypeKind(ret) == LLVMVoidTypeKind) {
+		unsigned sret = LLVMGetEnumAttributeKindForName("sret", 4);
+		LLVMAttributeRef attribute = LLVMGetEnumAttributeAtIndex(load, 1, sret);
+		if (!attribute || !LLVMIsTypeAttribute(attribute) || LLVMCountParams(load) != 2) return false;
+		LLVMTypeRef result_type = LLVMGetTypeAttributeValue(attribute);
+		char const *name = LLVMGetTypeKind(result_type) == LLVMStructTypeKind ? LLVMGetStructName(result_type) : nullptr;
+		if (!name) return false;
+		type->indirect_llvm = copy_string(permanent_allocator(), make_string_c(name));
+		return true;
+	}
 	if (!type->alignment || LLVMCountParams(load) != 1) return false;
 	result = swift_import_return(load);
 	if (!result) return false;
@@ -181,9 +228,9 @@ gb_internal bool swift_import_enum_layout(LLVMModuleRef module, LLVMTargetDataRe
 		if (LLVMGetTypeKind(component) == LLVMIntegerTypeKind) {
 			unsigned bits = LLVMGetIntTypeWidth(component);
 			if (bits == 64) { odin = "u64"; llvm = "i64"; }
-			else if ((bits == 16 || bits == 8 || bits == 1) && i+1 == count) {
-				odin = bits == 16 ? "u16" : bits == 8 ? "u8" : "bool";
-				llvm = bits == 16 ? "i16" : bits == 8 ? "i8" : "i1";
+			else if (bits == 32 || bits == 16 || bits == 8 || bits == 1) {
+				odin = bits == 32 ? "u32" : bits == 16 ? "u16" : bits == 8 ? "u8" : "bool";
+				llvm = bits == 32 ? "i32" : bits == 16 ? "i16" : bits == 8 ? "i8" : "i1";
 				size = bits == 1 ? 1 : bits/8;
 			}
 		} else if (LLVMGetTypeKind(component) == LLVMDoubleTypeKind) { odin = "f64"; llvm = "double"; }
@@ -197,8 +244,11 @@ gb_internal bool swift_import_enum_layout(LLVMModuleRef module, LLVMTargetDataRe
 				part = LLVMGetOperand(part, 0);
 			}
 		}
-		if (!swift_import_component_load(data, part, load, end, size)) return false;
-		end += size;
+		end = align_formula(end, LLVMABIAlignmentOfType(data, component));
+		if (end >= type->size) return false;
+		u64 extent = gb_min(size, type->size-end);
+		if (!swift_import_component_load(data, part, load, end, size, extent)) return false;
+		end += extent;
 		array_add(&type->components, (SwiftImportType{nullptr, odin, llvm, nullptr}));
 	}
 	return end == type->size;

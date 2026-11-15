@@ -741,3 +741,93 @@ public struct ScalarState {
 public func unsupportedScalarArgument(_ value: Float) -> Int { Int(value) }
 public func unsupportedScalarResult(_ value: Int) -> Float { Float(value) }
 public func unsupportedBoolArray(_ values: [Bool]) -> [Bool] { values }
+
+// Bool fields have byte storage but may share native integer registers.
+@frozen public struct BoolOnly {
+	public var flag: Bool
+}
+public func echoBoolOnly(_ value: BoolOnly) -> BoolOnly { value }
+@frozen public struct BoolTriple {
+	public var a: Bool
+	public var b: Bool
+	public var c: Bool
+}
+public func echoBoolTriple(_ value: BoolTriple) -> BoolTriple { value }
+@frozen public struct BoolRun {
+	public var a: Bool
+	public var b: Bool
+	public var c: Bool
+	public var d: Bool
+	public var e: Bool
+	public var f: Bool
+	public var g: Bool
+	public var h: Bool
+	public var i: Bool
+}
+public func echoBoolRun(_ value: BoolRun) -> BoolRun { value }
+@frozen public struct BoolHead {
+	public var flag: Bool
+	public var count: Int
+}
+public func echoBoolHead(_ value: BoolHead) -> BoolHead { value }
+@frozen public struct BoolTail {
+	public var count: Int
+	public var flag: Bool
+}
+public func echoBoolTail(_ value: BoolTail) -> BoolTail { value }
+@frozen public struct BoolMixed {
+	public var a: Bool
+	public var b: Bool
+	public var count: Int
+	public var fraction: Double
+	public var c: Bool
+}
+public func echoBoolMixed(_ value: BoolMixed) -> BoolMixed { value }
+@frozen public struct BoolWide {
+	public var flag: Bool
+	public var a: Int
+	public var b: UInt
+	public var c: Double
+	public var d: Int
+	public var end: Bool
+}
+public func echoBoolWide(_ value: BoolWide) -> BoolWide { value }
+public func optionalBoolTriple(_ value: BoolTriple?) -> BoolTriple? { value }
+public func echoBoolTripleLater(_ value: BoolTriple) async -> BoolTriple {
+	await Task.yield()
+	return value
+}
+public func optionalBoolTail(_ value: BoolTail?) -> BoolTail? { value }
+public func echoBoolTailLater(_ value: BoolTail) async -> BoolTail {
+	await Task.yield()
+	return value
+}
+public func optionalBoolMixed(_ value: BoolMixed?) -> BoolMixed? { value }
+public func echoBoolMixedLater(_ value: BoolMixed) async -> BoolMixed {
+	await Task.yield()
+	return value
+}
+public func optionalBoolWide(_ value: BoolWide?) -> BoolWide? { value }
+public func echoBoolWideLater(_ value: BoolWide) async -> BoolWide {
+	await Task.yield()
+	return value
+}
+public func echoBoolTriples(_ values: [BoolTriple]) -> [BoolTriple] { values }
+public func echoBoolRuns(_ values: [BoolRun]) -> [BoolRun] { values }
+public func echoBoolTails(_ values: [BoolTail]) -> [BoolTail] { values }
+public func echoBoolMixeds(_ values: [BoolMixed]) -> [BoolMixed] { values }
+public func echoBoolWides(_ values: [BoolWide]) -> [BoolWide] { values }
+public func flipBoolMixed(_ value: BoolMixed) -> BoolMixed {
+	BoolMixed(a: !value.a, b: !value.b, count: value.count &+ 1, fraction: value.fraction + 0.25, c: !value.c)
+}
+public func echoBoolTailsLater(_ values: [BoolTail]) async -> [BoolTail] {
+	await Task.yield()
+	return values
+}
+public func checkedBoolMixedLater(_ value: BoolMixed, _ fail: Bool) async throws -> BoolMixed {
+	await Task.yield()
+	if fail { throw ValueFailure() }
+	return value
+}
+@frozen public enum BoolRecordResult { case value(BoolMixed), empty }
+public func echoBoolRecordResult(_ value: BoolRecordResult) -> BoolRecordResult { value }

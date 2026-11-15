@@ -842,7 +842,17 @@ gb_internal void lb_begin_procedure_body(lbProcedure *p) {
 					if (e->token.string.len != 0 && !is_blank_ident(e->token.string)) {
 						LLVMTypeRef param_type = lb_type(p->module, e->type);
 						LLVMValueRef value = nullptr;
-						if (arg_type->kind == lbArg_Expand) {
+						if (arg_type->swift_record) {
+							LLVMTypeRef abi = arg_type->cast_type;
+							value = LLVMGetParam(p->value, param_offset+llvm_param_index);
+							if (arg_type->kind == lbArg_Expand) {
+								value = LLVMGetUndef(abi);
+								for (unsigned j = 0; j < lb_abi_arg_count(*arg_type); j++) {
+									value = LLVMBuildInsertValue(p->builder, value, LLVMGetParam(p->value, param_offset+llvm_param_index+j), j, "");
+								}
+							}
+							value = lb_swift_record_unpack(p, value, e->type);
+						} else if (arg_type->kind == lbArg_Expand) {
 							value = LLVMGetUndef(param_type);
 							unsigned count = lb_abi_arg_count(*arg_type);
 							for (unsigned j = 0; j < count; j++) {
@@ -892,7 +902,10 @@ gb_internal void lb_begin_procedure_body(lbProcedure *p) {
 						ptr.type = alloc_type_pointer(e->type);
 						LLVMValueRef incoming_ptr = ptr.value;
 
-						if (do_callee_copy) {
+						if (arg_type->swift_record) {
+							lbValue value = {lb_swift_record_load(p, ptr.value, e->type), e->type};
+							ptr = lb_address_from_load_or_generate_local(p, value);
+						} else if (do_callee_copy) {
 							lbValue new_ptr = lb_add_local_generated(p, e->type, false).addr;
 							if (sz <= 16 && !realign) {
 								lb_copy_small_parameter(p, new_ptr, ptr, e->type);
@@ -1239,7 +1252,8 @@ gb_internal lbValue lb_emit_call_internal(lbProcedure *p, lbValue value, lbValue
 		if (return_ptr.value != nullptr) {
 			param_offset += 1;
 
-			LLVMAddCallSiteAttribute(ret, 1, lb_create_enum_attribute_with_type(p->module->ctx, "sret", ft->ret.type));
+			LLVMAttributeRef attr = ft->ret.swift_record ? ft->ret.attribute : lb_create_enum_attribute_with_type(p->module->ctx, "sret", ft->ret.type);
+			LLVMAddCallSiteAttribute(ret, 1, attr);
 		}
 
 		for_array(i, ft->args) {
@@ -1408,7 +1422,14 @@ gb_internal lbValue lb_emit_call(lbProcedure *p, lbValue value, Array<lbValue> c
 			lbValue x = lb_emit_conv(p, args[i], original_type);
 			LLVMTypeRef xt = lb_type(p->module, x.type);
 
-			if (arg->kind == lbArg_Expand) {
+			if (arg->swift_record && arg->kind != lbArg_Indirect) {
+				LLVMValueRef packed = lb_swift_record_pack(p, x, arg->cast_type);
+				if (arg->kind == lbArg_Expand) {
+					for (unsigned j = 0; j < lb_abi_arg_count(*arg); j++) {
+						array_add(&processed_args, (lbValue{LLVMBuildExtractValue(p->builder, packed, j, ""), t_uintptr}));
+					}
+				} else { x.value = packed; array_add(&processed_args, x); }
+			} else if (arg->kind == lbArg_Expand) {
 				unsigned count = lb_abi_arg_count(*arg);
 				for (unsigned j = 0; j < count; j++) {
 					lbValue field = lb_emit_struct_ev(p, x, cast(i32)j);
@@ -1494,7 +1515,9 @@ gb_internal lbValue lb_emit_call(lbProcedure *p, lbValue value, Array<lbValue> c
 			result = lb_emit_load(p, return_ptr);
 		} else if (rt != nullptr) {
 			result = lb_emit_call_internal(p, value, {}, processed_args, rt, context_ptr, inlining, tailing);
-			if (ft->ret.coerce_offsets.count > 0) {
+			if (ft->ret.swift_record) {
+				result.value = lb_swift_record_unpack(p, result.value, rt);
+			} else if (ft->ret.coerce_offsets.count > 0) {
 				result.value = lb_coerce_fields_store(p, result.value, rt, &ft->ret);
 			} else {
 				if (ft->ret.cast_type) {

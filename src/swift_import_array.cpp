@@ -31,8 +31,8 @@ gb_internal gbString swift_import_emit_array(gbString source, SwiftImportNominal
 	String metadata = swift_import_metadata(element);
 	source = gb_string_append_fmt(source, "%.*s :: []%s\n@(private)\n_swift_%.*s_cache: swift.Array_Value_Cache\n", LIT(name), element.odin, LIT(name));
 	if (element.nominal->is_record) {
-		source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_from :: proc(values: []%s) -> (result: swift.Native_Array, ok: bool) #optional_ok {\nreturn swift.array_from_trivial(values, %.*s, &_swift_%.*s_cache)\n}\n", LIT(name), element.odin, LIT(metadata), LIT(name));
-		source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_to :: proc(value: swift.Native_Array) -> (result: []%s, ok: bool) #optional_ok {\nreturn swift.array_to_trivial(value, %.*s, &_swift_%.*s_cache, %s)\n}\n", LIT(name), element.odin, LIT(metadata), LIT(name), element.odin);
+		source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_from :: proc(values: []%s) -> (result: swift.Native_Array, ok: bool) #optional_ok {\nreturn swift.array_from_trivial(values, %.*s, &_swift_%.*s_cache, %llu)\n}\n", LIT(name), element.odin, LIT(metadata), LIT(name), cast(unsigned long long)element.nominal->size);
+		source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_to :: proc(value: swift.Native_Array) -> (result: []%s, ok: bool) #optional_ok {\nreturn swift.array_to_trivial(value, %.*s, &_swift_%.*s_cache, %s, %llu)\n}\n", LIT(name), element.odin, LIT(metadata), LIT(name), element.odin, cast(unsigned long long)element.nominal->size);
 		source = gb_string_append_fmt(source, "%.*s_destroy :: proc(values: []%s, allocator := context.allocator) {\ndelete(values, allocator)\n}\n", LIT(name), element.odin);
 		return gb_string_append_fmt(source, "@(require_results)\n%.*s_copy :: proc(value: []%s, allocator := context.allocator) -> (result: []%s, ok: bool) #optional_ok {\nvalues, err := non_zero_make([]%s, len(value), allocator)\nif err != nil { return }\ncopy(values, value)\nreturn values, true\n}\n\n", LIT(name), element.odin, element.odin, element.odin);
 	}

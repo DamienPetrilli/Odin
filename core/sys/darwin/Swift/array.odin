@@ -351,16 +351,16 @@ array_value_abort :: proc(buffer: Array_Value_Buffer, initialized: int, metadata
 // The importer proves plain frozen record layouts before using these helpers.
 // Verify the runtime witnesses too: POD permits copying bytes and no destruction.
 @(private)
-array_trivial_layout :: proc(metadata: rawptr, $T: typeid) -> bool {
+array_trivial_layout :: proc(metadata: rawptr, $T: typeid, native_size: int) -> bool {
 	if metadata == nil { return false }
 	witness := value_witnesses(metadata)
-	return witness.flags & 0x10000 == 0 && witness.size == size_of(T) &&
+	return witness.flags & 0x10000 == 0 && 0 <= native_size && native_size <= size_of(T) && witness.size == uint(native_size) &&
 	       witness.stride == max(1, size_of(T)) && witness.flags & 0xff == align_of(T)-1
 }
 
 @(require_results)
-array_from_trivial :: proc(values: []$T, metadata: rawptr, cache: ^Array_Value_Cache) -> (result: Native_Array, ok: bool) #optional_ok {
-	if !array_trivial_layout(metadata, T) { return }
+array_from_trivial :: proc(values: []$T, metadata: rawptr, cache: ^Array_Value_Cache, native_size := size_of(T)) -> (result: Native_Array, ok: bool) #optional_ok {
+	if !array_trivial_layout(metadata, T, native_size) { return }
 	buffer := array_value_allocate(len(values), metadata, cache) or_return
 	when size_of(T) != 0 {
 		if len(values) != 0 { mem.copy_non_overlapping(buffer.elements, raw_data(values), len(values)*size_of(T)) }
@@ -369,8 +369,8 @@ array_from_trivial :: proc(values: []$T, metadata: rawptr, cache: ^Array_Value_C
 }
 
 @(require_results)
-array_to_trivial :: proc(value: Native_Array, metadata: rawptr, cache: ^Array_Value_Cache, $T: typeid) -> (result: []T, ok: bool) #optional_ok {
-	if !array_trivial_layout(metadata, T) { return }
+array_to_trivial :: proc(value: Native_Array, metadata: rawptr, cache: ^Array_Value_Cache, $T: typeid, native_size := size_of(T)) -> (result: []T, ok: bool) #optional_ok {
+	if !array_trivial_layout(metadata, T, native_size) { return }
 	buffer := array_value_buffer(value, metadata, cache) or_return
 	if buffer.count == 0 { return nil, true }
 	when size_of(T) == 0 {

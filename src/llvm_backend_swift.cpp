@@ -1,3 +1,80 @@
+// Gather only fields, never padding. Swift may use a four-byte register for
+// three Bool bytes, while an Odin value still occupies exactly three bytes.
+gb_internal LLVMValueRef lb_swift_record_pack(lbProcedure *p, lbValue value, LLVMTypeRef abi) {
+	SwiftABIRecordComponent components[4];
+	isize count = swift_abi_record_components(value.type, components, gb_count_of(components));
+	GB_ASSERT(count <= gb_count_of(components));
+	LLVMValueRef result = LLVMGetUndef(abi);
+	for (isize i = 0; i < count; i++) {
+		auto const &component = components[i];
+		LLVMTypeRef target = count == 1 ? abi : LLVMStructGetTypeAtIndex(abi, cast(unsigned)i);
+		LLVMValueRef packed = LLVMConstNull(target);
+		for (isize j = 0; j < component.count; j++) {
+			isize index = component.first+j;
+			lbValue field = lb_emit_struct_ev(p, value, cast(i32)index);
+			LLVMValueRef part = field.value;
+			if (base_type(field.type) == t_bool) part = LLVMBuildICmp(p->builder, LLVMIntNE, part, LLVMConstNull(LLVMTypeOf(part)), "");
+			if (component.count == 1) {
+				packed = part;
+			} else {
+				part = LLVMBuildIntCast2(p->builder, part, target, false, "");
+				i64 shift = 8*(type_offset_of(value.type, index)-component.offset);
+				if (shift) part = LLVMBuildShl(p->builder, part, LLVMConstInt(target, cast(u64)shift, false), "");
+				packed = LLVMBuildOr(p->builder, packed, part, "");
+			}
+		}
+		result = count == 1 ? packed : LLVMBuildInsertValue(p->builder, result, packed, cast(unsigned)i, "");
+	}
+	return result;
+}
+
+gb_internal LLVMValueRef lb_swift_record_unpack(lbProcedure *p, LLVMValueRef value, Type *type) {
+	SwiftABIRecordComponent components[4];
+	isize count = swift_abi_record_components(type, components, gb_count_of(components));
+	GB_ASSERT(count <= gb_count_of(components));
+	lbAddr slot = lb_add_local_generated(p, type, true);
+	auto fields = base_type(type)->Struct.fields;
+	for (isize i = 0; i < count; i++) {
+		auto const &component = components[i];
+		LLVMValueRef packed = count == 1 ? value : LLVMBuildExtractValue(p->builder, value, cast(unsigned)i, "");
+		for (isize j = 0; j < component.count; j++) {
+			isize index = component.first+j;
+			Type *field_type = fields[index]->type;
+			LLVMValueRef part = packed;
+			if (component.count > 1) {
+				i64 shift = 8*(type_offset_of(type, index)-component.offset);
+				if (shift) part = LLVMBuildLShr(p->builder, part, LLVMConstInt(LLVMTypeOf(part), cast(u64)shift, false), "");
+				LLVMTypeRef target = base_type(field_type) == t_bool ? LLVMInt1TypeInContext(p->module->ctx) : lb_type(p->module, field_type);
+				part = LLVMBuildIntCast2(p->builder, part, target, false, "");
+			}
+			if (base_type(field_type) == t_bool) part = LLVMBuildZExt(p->builder, part, lb_type(p->module, field_type), "");
+			lb_emit_store(p, lb_emit_struct_ep(p, slot.addr, cast(i32)index), (lbValue{part, field_type}));
+		}
+	}
+	return lb_addr_load(p, slot).value;
+}
+
+// Swift's indirect value size can exclude tail padding present in Odin's
+// size. Access fields separately on foreign storage in both directions.
+gb_internal LLVMValueRef lb_swift_record_load(lbProcedure *p, LLVMValueRef pointer, Type *type) {
+	lbAddr slot = lb_add_local_generated(p, type, true);
+	lbValue source = {pointer, alloc_type_pointer(type)};
+	auto fields = base_type(type)->Struct.fields;
+	for_array(i, fields) {
+		lbValue field = lb_emit_load(p, lb_emit_struct_ep(p, source, cast(i32)i));
+		lb_emit_store(p, lb_emit_struct_ep(p, slot.addr, cast(i32)i), field);
+	}
+	return lb_addr_load(p, slot).value;
+}
+
+gb_internal void lb_swift_record_store(lbProcedure *p, LLVMValueRef pointer, lbValue value) {
+	lbValue destination = {pointer, alloc_type_pointer(value.type)};
+	auto fields = base_type(value.type)->Struct.fields;
+	for_array(i, fields) {
+		lb_emit_store(p, lb_emit_struct_ep(p, destination, cast(i32)i), lb_emit_struct_ev(p, value, cast(i32)i));
+	}
+}
+
 // Native async imports use a task-owned record for arguments and completion.
 // Imported calls have scalar arguments/results and an optional borrowed
 // receiver. Completion borrows the native task handle from the runtime.

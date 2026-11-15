@@ -4146,9 +4146,55 @@ gb_internal bool is_swift_abi_enum(Type *type) {
 	       raw == t_int || raw == t_uint;
 }
 
+gb_internal bool is_swift_abi_narrow_field(Type *type) {
+	type = base_type(type);
+	return type == t_bool || type == t_u8 || type == t_u16 || type == t_u32;
+}
+
+struct SwiftABIRecordComponent {
+	Type *type;
+	isize first, count;
+	i64 offset;
+};
+
+// Narrow integer fields sharing an eight-byte unit are gathered into one
+// register. Keep field indices so packing never reads padding or beyond size.
+gb_internal isize swift_abi_record_components(Type *type, SwiftABIRecordComponent *components, isize capacity) {
+	auto fields = base_type(type)->Struct.fields;
+	isize count = 0;
+	for (isize i = 0; i < fields.count;) {
+		SwiftABIRecordComponent component = {fields[i]->type, i, 1, type_offset_of(type, i)};
+		if (is_swift_abi_narrow_field(component.type)) {
+			i64 end = component.offset+type_size_of(component.type);
+			while (i+component.count < fields.count) {
+				isize next = i+component.count;
+				i64 offset = type_offset_of(type, next);
+				if (!is_swift_abi_narrow_field(fields[next]->type) || offset/8 != component.offset/8) break;
+				end = offset+type_size_of(fields[next]->type);
+				component.count++;
+			}
+			if (component.count > 1) {
+				i64 bytes = end-component.offset;
+				component.type = bytes <= 2 ? t_u16 : bytes <= 4 ? t_u32 : t_u64;
+			}
+		}
+		if (count < capacity) components[count] = component;
+		count++;
+		i += component.count;
+	}
+	return count;
+}
+
+gb_internal bool swift_abi_record_has_narrow_fields(Type *type) {
+	type = base_type(type);
+	if (!type || type->kind != Type_Struct) return false;
+	for (Entity *field : type->Struct.fields) if (is_swift_abi_narrow_field(field->type)) return true;
+	return false;
+}
+
 gb_internal bool is_type_supported_by_swift_abi(Type *type) {
 	type = base_type(type);
-	if (type == t_bool || type == t_u8 || type == t_u16 || is_swift_abi_scalar(type) || is_swift_abi_enum(type)) {
+	if (type == t_bool || type == t_u8 || type == t_u16 || type == t_u32 || is_swift_abi_scalar(type) || is_swift_abi_enum(type)) {
 		return true;
 	}
 	if (type == nullptr) {
@@ -4169,17 +4215,10 @@ gb_internal bool is_type_supported_by_swift_abi(Type *type) {
 		return false;
 	}
 
-	// Full-width scalars have the same offsets in Swift and Odin. An isolated
-	// trailing narrow integer has its own component (for example, Optional<Int>).
-	// Indirect values must have equal size and stride in both languages.
-	// Other narrow fields require merging; nested records can reuse tail padding.
-	for_array(i, s.fields) {
-		Type *field_type = s.fields[i]->type;
-		bool trailing_integer = i > 0 && i+1 == s.fields.count && s.fields.count <= 4 &&
-		                        (base_type(field_type) == t_u8 || base_type(field_type) == t_u16);
-		if (!is_swift_abi_scalar(field_type) && !trailing_integer) {
-			return false;
-		}
+	// Nested records and custom layout remain excluded. Native Swift calls
+	// gather narrow fields; ordinary Odin/C aggregate handling is unchanged.
+	for (Entity *field : s.fields) {
+		if (!is_swift_abi_scalar(field->type) && !is_swift_abi_narrow_field(field->type)) return false;
 	}
 	return true;
 }

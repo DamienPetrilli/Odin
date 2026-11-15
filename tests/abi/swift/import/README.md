@@ -96,8 +96,7 @@ conversion separately from Swift `throws` and from acceptance of the start.
 `Bool`, `Int` and `UInt` use native Odin `bool`, `int` and `uint`, including
 scalar async completions, getters and optionals. Int and UInt are 64-bit on the
 supported Darwin arm64 target. Int/UInt arrays use `[]int`/`[]uint` with the same
-copy/ownership rules as the other scalar arrays. Bool arrays and Bool fields in
-direct records remain outside this subset. Narrow integer and Float signatures
+copy/ownership rules as the other scalar arrays. Bool arrays remain outside this subset. Narrow integer and Float signatures
 are also unsupported; diagnostics name the rejected parameter or result type.
 
 Copyable, escapable resilient structs use typed addresses backed by Swift
@@ -109,9 +108,9 @@ receivers and arguments are copied before start returns. A mutating receiver is
 borrowed through completion, so its changes reach the original value. Do not
 access or destroy that receiver while the call is outstanding.
 
-Plain frozen structs with public stored `UInt64`, `Int64`, `UInt`, `Int` and `Double` fields
+Plain frozen structs with public stored `Bool`, `UInt64`, `Int64`, `UInt`, `Int` and `Double` fields
 map to ordinary Odin structs. Empty structs are also supported. The importer
-checks every field offset, total size, alignment and native call lowering using
+checks every field offset, value size, array stride, alignment and native call lowering using
 the target Swift compiler. Unsupported or hidden fields retain opaque storage;
 `@frozen` alone does not establish a direct mapping. Field names use snake case,
 and ambiguous field names are diagnosed.
@@ -139,10 +138,14 @@ The native array retains its own copy; changing the Odin result does not change
 Swift storage. Output uses `context.allocator` without redundant zeroing. Runtime
 metadata must also confirm POD, size, stride and alignment before bulk copying.
 Swift's zero-sized record stride is handled independently of Odin's zero size.
+Bool fields use ordinary Odin `bool`. Adjacent Bool fields can share a native
+register; the compiler packs and unpacks their bytes. Swift value size can omit
+trailing padding included in Odin's size. Field access preserves that boundary,
+while arrays use the verified common stride. No extra owner is needed.
 
 Sync and async free functions, supported constructors, optional/enum payloads,
 and direct/indirect record arguments/results are checked. Async inputs are copied
-before start returns. Native record instance methods, nested records, smaller
+before start returns. Native record instance methods, nested records, other smaller
 fields, custom alignment and records with owned fields are outside this direct
 subset. Odin field assignment edits a local value, including fields declared
 `let` in Swift; direct construction does not run a Swift initializer or enforce
@@ -487,7 +490,7 @@ Unicode equality are different operations. A plain Odin string does not gain
 Swift's character semantics.
 
 See `run.sh`, `main.odin`, `values.odin`, `enums.odin`, `strings.odin`,
-`async_strings.odin`, `arrays.odin`, `value_arrays.odin`, `records.odin`,
+`async_strings.odin`, `arrays.odin`, `value_arrays.odin`, `records.odin`, `mixed_records.odin`,
 `scalars.odin` and `tasks.odin` for executable round trips, overlapping tasks, native handle identity,
 preserved context, guarded allocations, ownership, failure paths and rejection
 diagnostics.

@@ -25,6 +25,10 @@ gb_internal GB_COMPARE_PROC(lb_polymorphic_instance_cmp) {
 }
 
 gb_internal LLVMValueRef lb_coerce_fields_load(lbProcedure *p, lbValue x, lbArgType const *arg);
+gb_internal LLVMValueRef lb_swift_record_pack(lbProcedure *p, lbValue value, LLVMTypeRef abi);
+gb_internal LLVMValueRef lb_swift_record_unpack(lbProcedure *p, LLVMValueRef value, Type *type);
+gb_internal LLVMValueRef lb_swift_record_load(lbProcedure *p, LLVMValueRef pointer, Type *type);
+gb_internal void lb_swift_record_store(lbProcedure *p, LLVMValueRef pointer, lbValue value);
 
 // NOTE(bill): @RVO Check if a call expression returns by sret with a return type matching dst_type.
 // Returns the callee's function type if eligible for copy elision, nullptr otherwise.
@@ -105,6 +109,9 @@ gb_internal void lb_scan_for_sret_rvo(lbProcedure *p) {
 	}
 
 	Type *ret_type = reduce_tuple_to_single_type(proc_type->Proc.results);
+	// A Swift destination need not include Odin's trailing padding.
+	if ((proc_type->Proc.calling_convention == ProcCC_Swift || proc_type->Proc.calling_convention == ProcCC_SwiftAsync) &&
+	    swift_abi_record_has_narrow_fields(ret_type)) return;
 	if (ret_type == nullptr || !are_types_identical(ret_entity->type, ret_type)) {
 		return;
 	}
@@ -2876,7 +2883,9 @@ gb_internal void lb_build_return_stmt_internal(lbProcedure *p, lbValue res, Toke
 		if (res.value != nullptr) {
 			LLVMValueRef res_val = res.value;
 			i64 sz = type_size_of(res.type);
-			if (LLVMIsALoadInst(res_val) && sz > build_context.int_size) {
+			if (ft->ret.swift_record) {
+				lb_swift_record_store(p, p->return_ptr.addr.value, res);
+			} else if (LLVMIsALoadInst(res_val) && sz > build_context.int_size) {
 				lbValue ptr = lb_address_from_load_or_generate_local(p, res);
 				lb_mem_copy_non_overlapping(p, p->return_ptr.addr, ptr, lb_const_int(p->module, t_int, sz));
 			} else {
@@ -2900,7 +2909,9 @@ gb_internal void lb_build_return_stmt_internal(lbProcedure *p, lbValue res, Toke
 			ret_type = cast_type;
 		}
 
-		if (ft->ret.coerce_offsets.count > 0) {
+		if (ft->ret.swift_record) {
+			ret_val = lb_swift_record_pack(p, res, ret_type);
+		} else if (ft->ret.coerce_offsets.count > 0) {
 			ret_val = lb_coerce_fields_load(p, res, &ft->ret);
 		} else if (LLVMGetTypeKind(ret_type) == LLVMStructTypeKind) {
 			LLVMTypeRef src_type = LLVMTypeOf(ret_val);
@@ -2956,7 +2967,7 @@ gb_internal void lb_build_return_stmt(lbProcedure *p, Slice<Ast *> const &return
 	if (return_count == 1) {
 		Entity *e = tuple->variables[0];
 
-		if (LB_ENABLE_BASIC_RVO && res_count == 1 && return_by_pointer) {
+		if (LB_ENABLE_BASIC_RVO && res_count == 1 && return_by_pointer && !ft->ret.swift_record) {
 			Ast *ret_expr = unparen_expr(return_results[0]);
 
 			// NOTE(bill): @RVO for `return call()` in a procedure which uses `sret` and has no defers

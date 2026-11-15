@@ -28,7 +28,7 @@ swiftc=(xcrun --sdk "$sdk" swiftc -target "$triple" -swift-version 6 -warnings-a
 	-module-cache-path "${TMPDIR:-/tmp}/odin-swift-module-cache" "${swift_opt[@]}")
 "${swiftc[@]}" -parse-as-library -module-name SwiftReply -emit-object \
 	-o "$build/reply/SwiftReply.o" -emit-module-path "$build/reply/SwiftReply.swiftmodule" "$here/Reply.swift"
-cp "$here/library.odin" "$here/enums.odin" "$build/"
+cp "$here/library.odin" "$here/enums.odin" "$here/records.odin" "$build/"
 "$ODIN" build "$build" -build-mode:static "${odin_target[@]}" "${odin_opt[@]}" \
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/libOdinExportFixture.a"
 # Use the same Apple sanitizer runtime for Swift and Odin. Instrument Odin's

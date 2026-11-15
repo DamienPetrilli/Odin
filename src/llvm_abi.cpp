@@ -17,6 +17,7 @@ struct lbArgType {
 	i64 byval_alignment;
 	bool is_byval;
 	bool no_capture;
+	bool swift_record;
 
 	// For RiscV (Optional for others): A `cast_type` is normally applied by reinterpreting the value's 
 	// bits from offset zero. Only correct when the two layouts agree. When an ABI flattens an aggregate 
@@ -2727,8 +2728,35 @@ gb_internal lbArgType lb_swift_abi_value(LLVMContextRef c, LLVMTypeRef type, boo
 		return lb_arg_type_direct(type);
 	}
 
-	// The checker accepts full-width fields and an optional trailing narrow integer.
-	// On Apple arm64, Swift passes at most four such components directly.
+	if (swift_abi_record_has_narrow_fields(odin_type)) {
+		SwiftABIRecordComponent components[4];
+		isize count = swift_abi_record_components(odin_type, components, gb_count_of(components));
+		lbArgType arg = {};
+		if (count > gb_count_of(components)) {
+			// sret must not promise Odin's tail padding exists in Swift storage.
+			auto fields = base_type(odin_type)->Struct.fields;
+			i64 size = type_offset_of(odin_type, fields.count-1)+type_size_of(fields[fields.count-1]->type);
+			LLVMTypeRef storage = LLVMArrayType(LLVMInt8TypeInContext(c), cast(unsigned)size);
+			LLVMAttributeRef attr = is_result ? lb_create_enum_attribute_with_type(c, "sret", storage) : nullptr;
+			arg = lb_arg_type_indirect(type, attr);
+		} else {
+			LLVMTypeRef fields[4];
+			for (isize i = 0; i < count; i++) {
+				Type *field = base_type(components[i].type);
+				fields[i] = field == t_bool ? LLVMInt1TypeInContext(c) : field == t_f64 ? LLVMDoubleTypeInContext(c) :
+				            is_type_pointer(field) || is_type_multi_pointer(field) ? LLVMPointerType(LLVMInt8TypeInContext(c), 0) :
+				            LLVMIntTypeInContext(c, cast(unsigned)type_size_of(field)*8);
+			}
+			LLVMTypeRef abi = count == 1 ? fields[0] : LLVMStructTypeInContext(c, fields, cast(unsigned)count, false);
+			arg = lb_arg_type_direct(type, abi, nullptr, nullptr);
+			if (!is_result && count > 1) { arg.kind = lbArg_Expand; arg.type = abi; }
+		}
+		arg.swift_record = true;
+		return arg;
+	}
+
+	// The remaining records contain full-width fields only. On Apple arm64,
+	// Swift passes at most four such components directly.
 	LLVMTypeRef fields[4];
 	unsigned count = LLVMCountStructElementTypes(type);
 	GB_ASSERT(count > 0);

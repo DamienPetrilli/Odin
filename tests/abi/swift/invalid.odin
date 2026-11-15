@@ -11,11 +11,11 @@ Packed :: struct #packed {
 }
 
 Empty :: struct {}
-Narrow :: struct {code: u32, flags: u32}
-Byte_First :: struct {tag: u8, value: u64}
-Byte_Pair :: struct {value: u64, a, b: u8}
-Byte :: struct {tag: u8}
-Indirect_Byte :: struct {a, b, c, d: u64, tag: u8}
+Narrow :: struct {code: i32, flags: i32}
+Byte_First :: struct {tag: i8, value: u64}
+Byte_Pair :: struct {value: u64, a, b: i8}
+Byte :: struct {tag: i8}
+Indirect_Byte :: struct {a, b, c, d: u64, tag: i8}
 
 Nested_Arg :: proc "swift" (value: Nested)
 Packed_Arg :: proc "swift" (value: Packed)

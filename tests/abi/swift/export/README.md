@@ -50,11 +50,13 @@ reflection. Application procedures execute in Odin.
 ## Values and memory
 
 This subset supports `proc "swift"` with `i64`, `u64`, `int`, `uint`, `f64`, `bool`, and flat
-named structs containing `i64`, `u64`, `int`, `uint`, and `f64`. A procedure returns at most one
-such value. Struct fields preserve their order; their offsets, size, stride, and Swift register/indirect lowering
-are compatible with this subset. Packed, aligned, nested, or nontrivial structs
+named structs containing `bool`, `i64`, `u64`, `int`, `uint`, and `f64`. A procedure returns at most one
+such value. Struct fields preserve their order and offsets. Swift value size,
+array stride and register/indirect lowering are checked separately. Packed, aligned, nested, or nontrivial structs
 are rejected. Scalar parameters use their corresponding Swift scalar types;
-structs become frozen Swift value types. Values are passed using the native ABI.
+structs become frozen Swift value types. Bool fields may be mixed with the
+supported 64-bit scalars. The Swift compiler verifies field offsets, size, stride
+and native register lowering; indirect results preserve Swift tail padding. Values are passed using the native ABI.
 
 Input slices of `i64`, `u64`, `int`, `uint`, or `f64` become
 `UnsafeMutableBufferPointer<Element>`. Swift owns the storage; Odin borrows it
