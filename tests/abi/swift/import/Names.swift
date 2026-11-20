@@ -41,3 +41,30 @@ public func failWithoutPublicError() async throws -> Swift.UInt64 {
 	await Task.yield()
 	throw PrivateFailure.rejected
 }
+
+public func selectFirst(_ value: Swift.UInt64) -> Swift.UInt64 { value + 1 }
+public func selectFirst(_ value: Swift.Float) -> Swift.Float { value }
+public func selectLast(_ value: Swift.Float) -> Swift.Float { value }
+public func selectLast(_ value: Swift.UInt64) -> Swift.UInt64 { value + 2 }
+
+@available(macOS 99, iOS 99, *)
+public func targetValue(_ value: Swift.Double) -> Swift.UInt64 { 0 }
+public func targetValue(_ value: Swift.UInt64) -> Swift.UInt64 { value }
+
+#if canImport(UIKit)
+import UIKit
+
+public func controllerAddress(options: Set<Swift.UInt64> = []) async -> Swift.UInt { Swift.UInt(options.count) }
+
+@MainActor public func controllerAddress(presenting controller: UIViewController, options: Set<Swift.UInt64> = []) async -> Swift.UInt {
+	await Task.yield()
+	if Task.isCancelled { return 0 }
+	return Swift.UInt(bitPattern: Unmanaged.passUnretained(controller).toOpaque()) + Swift.UInt(options.count)
+}
+
+@MainActor public func controllerRecord(_ controller: UIViewController) async -> UInt64 {
+	UInt64(Swift.UInt64(Swift.UInt(bitPattern: Unmanaged.passUnretained(controller).toOpaque())))
+}
+
+public func controllerAddress(presenting scene: some UIScene, options: Set<Swift.UInt64> = []) async -> Swift.UInt { 0 }
+#endif

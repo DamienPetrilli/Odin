@@ -14,6 +14,22 @@ private_error :: proc(task: swift.Task, value: u64, error: fixture.Async_Error) 
 }
 
 main :: proc() {
+	assert(fixture.select_first(40) == 41)
+	assert(fixture.select_last(40) == 42)
+	assert(fixture.target_value(42) == 42)
+	when ODIN_PLATFORM_SUBTARGET == .iPhone || ODIN_PLATFORM_SUBTARGET == .iPhoneSimulator {
+		missing, ok := fixture.controller_address_presenting_options(nil, controller_received)
+		assert(!ok && missing == nil)
+		default_task := fixture.controller_address(controller_received) or_else panic("Default start")
+		swift.task_release(default_task)
+		start := time.tick_now()
+		for controller_calls == 0 && time.tick_since(start) < 10*time.Second {
+			cf.RunLoopRunInMode(cf.kRunLoopDefaultMode, 0.01, false)
+		}
+		assert(controller_calls == 1 && controller_result == 0)
+		test_controller(false)
+		test_controller(true)
+	}
 	task := fixture.fail_without_public_error(private_error) or_else panic("Private error start")
 	swift.task_release(task)
 	deadline := time.tick_now()

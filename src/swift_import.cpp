@@ -12,7 +12,7 @@
 extern char **environ;
 
 struct SwiftImportRejection {
-	String name, reason;
+	String name, reason, title;
 };
 
 struct SwiftImportPackage {
@@ -92,11 +92,12 @@ struct SwiftImportParameter {
 	String name, label;
 	SwiftImportType type;
 	bool empty_set;
+	bool objc_controller;
 	bool consumed;
 };
 
 struct SwiftImportFunction {
-	String name, title, symbol, odin_name, base_name, rejection;
+	String name, title, signature, symbol, odin_name, base_name, rejection;
 	SwiftImportNominal *owner;
 	Array<SwiftImportParameter> parameters;
 	SwiftImportType result;
@@ -497,15 +498,16 @@ gb_internal bool swift_import_type(Slice<JsonValue *> fragments, bool result, Sw
 	return text == swift_name || text == substring(swift_name, 6, swift_name.len);
 }
 
-gb_internal void swift_import_reject(SwiftImportPackage *pkg, String name, String reason = {}) {
+gb_internal void swift_import_reject(SwiftImportPackage *pkg, String name, String reason = {}, String title = {}) {
 	if (!reason.len) reason = str_lit("declaration is unavailable for this target or outside the supported ABI subset");
 	for (auto &rejection : pkg->unsupported) {
 		if (rejection.name == name) {
-			rejection.reason = str_lit("ambiguous Swift overload or binding name");
+			if (rejection.title != title) rejection.title = {};
+			if (rejection.reason != reason) rejection.reason = concatenate3_strings(permanent_allocator(), rejection.reason, str_lit("\n\t"), reason);
 			return;
 		}
 	}
-	array_add(&pkg->unsupported, SwiftImportRejection{name, reason});
+	array_add(&pkg->unsupported, SwiftImportRejection{name, reason, title});
 }
 
 // Record the source type at the rejected parameter/result rather than exposing
@@ -532,6 +534,7 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 	}
 	String collection_parameter = {};
 	if (auto generics = swift_import_member(symbol, "swiftGenerics")) {
+		fn->rejection = str_lit("unsupported Swift generic constraints");
 		auto parameters = swift_import_array(generics, "parameters");
 		auto constraints = swift_import_array(generics, "constraints");
 		if (parameters.count != 1 || constraints.count != 2) return false;
@@ -548,6 +551,7 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		}
 		if (!collection || !strings) return false;
 		fn->is_collection = true;
+		fn->rejection = {};
 	} else if (swift_import_member(api, "genericSig")) return false;
 	for (auto fragment : swift_import_array(symbol, "declarationFragments")) {
 		fn->is_main_actor |= swift_import_string(fragment, "preciseIdentifier") == "s:ScM" && swift_import_string(fragment, "kind") == "attribute";
@@ -575,6 +579,7 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 			         !(fn->is_initializer && word == "init")) return false;
 		}
 	}
+	fn->signature = make_string_c(declaration);
 	if (fn->is_main_actor && !fn->is_async) return false;
 	if (fn->is_collection && (!fn->is_async || fn->is_initializer || fn->is_property || (fn->owner && !fn->is_static))) return false;
 	if (fn->is_throwing && (!fn->is_async || swift_import_index(make_string_c(declaration), str_lit("throws(")) >= 0 ||
@@ -621,7 +626,18 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		p.name = swift_import_name(name, true);
 		p.label = string_split_iterator(&it, ':');
 		if (!swift_import_identifier(p.label)) return false;
-		if (fn->is_collection) {
+		JsonValue *operand = api_types.count > fn->parameters.count+1 ? api_types[fn->parameters.count+1] : nullptr;
+		auto fragments = swift_import_array(parameter, "declarationFragments");
+		// Accept a nonoptional, unmodified ObjC class operand only. SIL must
+		// also confirm a borrow before an async capture can own its reference.
+		if (fn->is_async && selected_subtarget != Subtarget_Default &&
+		    swift_import_string(operand, "usr") == "c:objc(cs)UIViewController" &&
+		    swift_import_string(operand, "printedName") == "UIKit.UIViewController" &&
+		    fragments.count == 3 && swift_import_string(fragments[1], "spelling") == ": " &&
+		    swift_import_string(fragments[2], "preciseIdentifier") == "c:objc(cs)UIViewController") {
+			p.type = {"UIKit.UIViewController", "^_swift_ui.ViewController", "ptr", nullptr};
+			p.objc_controller = true;
+		} else if (fn->is_collection) {
 			if (api_types.count != 2 || swift_import_string(api_types[1], "name") != "GenericTypeParam" || swift_import_string(api_types[1], "printedName") != collection_parameter) return false;
 			if (!swift_import_container_type(str_lit("s:Sa"), swift_import_nominal_type(swift_import_string_type(types)), &p.type, types)) return false;
 		} else if (!swift_import_type(swift_import_array(parameter, "declarationFragments"), false, &p.type, *types) &&
@@ -631,9 +647,10 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		}
 		if (p.type.nominal && p.type.nominal->kind == SwiftImportValue_Set) {
 			// Preserve the explicit empty default alongside the slice overload.
-			auto default_arg = api_types.count == 2 ? swift_import_member(api_types[1], "hasDefaultArg") : nullptr;
-			p.empty_set = parameters.count == 1 && default_arg && default_arg->kind == Json_Boolean && default_arg->boolean &&
-			              swift_import_index(make_string_c(declaration), str_lit("= []")) >= 0;
+			auto default_arg = swift_import_member(operand, "hasDefaultArg");
+			// Only elide the last parameter and verify its own default expression.
+			p.empty_set = fn->parameters.count+1 == parameters.count && default_arg && default_arg->kind == Json_Boolean && default_arg->boolean &&
+			              swift_import_index(make_string_c(declaration), str_lit("= [])")) >= 0;
 		}
 		for (auto const &previous : fn->parameters) if (previous.name == p.name) return false;
 		array_add(&fn->parameters, p);
@@ -677,6 +694,10 @@ gb_internal bool swift_import_ownership(String sil, SwiftImportFunction *fn) {
 		for (auto &param : fn->parameters) {
 			if (parameters.pos >= parameters.str.len) return false;
 			String argument = string_trim_whitespace(string_split_iterator(&parameters, ','));
+			if (param.objc_controller) {
+				if (argument != "@guaranteed UIViewController") return false;
+				continue;
+			}
 			if (!param.type.nominal) continue;
 			if (!swift_import_native_owns(param.type)) continue;
 			// A fixed-layout value stays loadable in SIL even when its large
@@ -977,7 +998,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	if (converted_result && !fn.is_throwing) source = gb_string_appendc(source, ", bool");
 	source = gb_string_appendc(source, ")) -> (task: swift.Task, ok: bool) #optional_ok {\n\tif completion == nil");
 	if (receiver) source = gb_string_appendc(source, " || receiver == nil");
-	for (auto const &param : fn.parameters) if (param.type.nominal && !param.type.nominal->projected && !param.empty_set && !swift_import_kind(param.type, SwiftImportValue_String) && !swift_import_slice(param.type.nominal) && !swift_import_kind(param.type, SwiftImportValue_Set)) source = gb_string_append_fmt(source, " || %.*s == nil", LIT(param.name));
+	for (auto const &param : fn.parameters) if (param.objc_controller || (param.type.nominal && !param.type.nominal->projected && !param.empty_set && !swift_import_kind(param.type, SwiftImportValue_String) && !swift_import_slice(param.type.nominal) && !swift_import_kind(param.type, SwiftImportValue_Set))) source = gb_string_append_fmt(source, " || %.*s == nil", LIT(param.name));
 	source = gb_string_appendc(source, " { return }\n\tCapture :: struct {\n\t\tcompletion: type_of(completion),\n");
 	if (receiver) source = gb_string_appendc(source, "\t\treceiver: rawptr,\n");
 	for_array(i, fn.parameters) if (!fn.parameters[i].empty_set) source = gb_string_append_fmt(source, "\t\targ%td: %s,\n", i, swift_import_slice(fn.parameters[i].type.nominal) ? "swift.Native_Array" : swift_import_kind(fn.parameters[i].type, SwiftImportValue_Set) ? "swift.Native_Set" : swift_import_native_type(fn.parameters[i].type));
@@ -992,7 +1013,9 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	for_array(i, fn.parameters) {
 		auto const &param = fn.parameters[i];
 		if (param.empty_set) continue;
-		if (swift_import_projected(param.type)) {
+		if (param.objc_controller) {
+			source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = %.*s\n\t_swift_ns.ObjectProtocol_retain(cast(^_swift_ns.ObjectProtocol)%.*s)\n\tdefer if !ok { _swift_ns.ObjectProtocol_release(cast(^_swift_ns.ObjectProtocol)%.*s) }\n", i, LIT(param.name), LIT(param.name), LIT(param.name));
+		} else if (swift_import_projected(param.type)) {
 			auto type = param.type.nominal;
 			if (!type->alignment) source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = swift.value_allocate(_swift_%.*s_metadata(0).type) or_return\n\tdefer if !ok { swift.value_free_uninitialized(_swift_capture.arg%td) }\n", i, LIT(type->name), i);
 			source = gb_string_append_fmt(source, "\tif !_swift_%.*s_initialize(%s_swift_capture.arg%td, %.*s) { return }\n", LIT(type->name), type->alignment ? "&" : "", i, LIT(param.name));
@@ -1028,7 +1051,9 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	for_array(i, fn.parameters) {
 		auto const &param = fn.parameters[i];
 		if (param.empty_set) continue;
-		if (swift_import_projected(param.type)) {
+		if (param.objc_controller) {
+			source = gb_string_append_fmt(source, "\t\t_swift_ns.ObjectProtocol_release(cast(^_swift_ns.ObjectProtocol)capture.arg%td)\n", i);
+		} else if (swift_import_projected(param.type)) {
 			auto type = param.type.nominal;
 			if (!param.consumed && swift_import_native_owns(param.type)) source = gb_string_append_fmt(source, "\t\tswift.value_deinitialize(%scapture.arg%td, _swift_%.*s_metadata(0).type)\n", type->alignment ? "&" : "", i, LIT(type->name));
 			if (!type->alignment) source = gb_string_append_fmt(source, "\t\tswift.value_free_uninitialized(capture.arg%td)\n", i);
@@ -1231,7 +1256,9 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			for (auto type : types) if (type->name == make_string_c(owner_name)) fn.owner = type;
 			name = concatenate3_strings(permanent_allocator(), make_string_c(owner_name), str_lit("_"), name);
 		}
-		bool supported = (components.count == 1 || fn.owner) && swift_import_available(symbol) &&
+		bool available = swift_import_available(symbol);
+		if (!available) fn.rejection = str_lit("unavailable for this deployment target");
+		bool supported = (components.count == 1 || fn.owner) && available &&
 		                 (!fn.owner || !fn.owner->is_template) && swift_import_function(symbol, declaration, &fn, &types);
 		fn.base_name = name;
 		// Keep argument labels in distinct binding names, like Objective-C
@@ -1257,20 +1284,23 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			}
 		}
 		if (!supported) {
-			swift_import_reject(pkg, name, fn.rejection);
+			swift_import_reject(pkg, name, fn.rejection, title);
 			continue;
 		}
 		fn.odin_name = name;
-		bool collision = false;
-		for (auto const &previous : functions) collision |= previous.odin_name == name;
-		if (collision) swift_import_reject(pkg, name, str_lit("ambiguous Swift overload or binding name"));
-		else array_add(&functions, fn);
+		SwiftImportFunction const *collision = nullptr;
+		for (auto const &previous : functions) if (previous.odin_name == name) { collision = &previous; break; }
+		if (collision) {
+			String reason = make_string_c(gb_string_append_fmt(gb_string_make(permanent_allocator(), ""),
+				"ambiguous Swift binding for '%.*s' and '%.*s'", LIT(collision->signature), LIT(fn.signature)));
+			swift_import_reject(pkg, name, reason);
+		} else array_add(&functions, fn);
 	}
-	// A name must identify one supported declaration. Never choose an overload
-	// based on whichever order a tool happens to serialize its symbols.
+	// A skipped sibling with the same Swift title cannot claim the Odin name.
+	// Preserve real collisions, including names that coincide after normalization.
 	for (isize i = functions.count; i-- > 0;) {
 		for (auto const &rejection : pkg->unsupported) {
-			if (functions[i].odin_name == rejection.name) {
+			if (functions[i].odin_name == rejection.name && functions[i].title != rejection.title) {
 				array_ordered_remove(&functions, i);
 				break;
 			}
@@ -1364,6 +1394,9 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	for (auto type : types) if (type->kind == SwiftImportValue_Set && type->argument->is_scalar) inspect_set_storage = true;
 	gbString probe = gb_string_make(permanent_allocator(), "");
 	probe = gb_string_append_fmt(probe, "import %.*s\n", LIT(pkg->module));
+	bool probe_ui = false;
+	for (auto const &fn : functions) for (auto const &param : fn.parameters) probe_ui |= param.objc_controller;
+	if (probe_ui) probe = gb_string_appendc(probe, "import UIKit\n");
 	for (auto type : types) if (type->is_date || type->is_uuid) { probe = gb_string_appendc(probe, "import Foundation\n"); break; }
 	for_array(i, types) {
 		if (types[i]->is_template) continue;
@@ -1660,20 +1693,24 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	flags = gb_string_appendc(flags, "-Wl,-rpath,/usr/lib/swift");
 	gbString source = gb_string_make(permanent_allocator(), "");
 	String identity = pkg->framework ? pkg->module : pkg->library;
-	bool has_values = false, has_scalar_async = false, has_value_async = false, has_set = false;
+	bool has_values = false, has_scalar_async = false, has_value_async = false, has_set = false, has_ui = false;
 	for (auto type : types) {
 		has_values |= type->supported;
 		has_set |= type->supported && type->kind == SwiftImportValue_Set;
 	}
 	for (auto const &fn : functions) {
 		bool values = fn.owner || fn.result.nominal || fn.is_throwing;
-		for (auto const &param : fn.parameters) values |= param.type.nominal != nullptr;
+		for (auto const &param : fn.parameters) {
+			values |= param.type.nominal != nullptr || param.objc_controller;
+			has_ui |= param.objc_controller;
+		}
 		has_values |= values;
 		has_scalar_async |= fn.is_async && !values;
 		has_value_async |= fn.is_async && values;
 	}
 	source = gb_string_append_fmt(source, "package swift_%.*s_%llx\n\n",
 		LIT(pkg->module), cast(unsigned long long)fnv64a(identity.text, identity.len));
+	if (has_ui) source = gb_string_appendc(source, "import _swift_ui \"vendor:darwin/UIKit\"\nimport _swift_ns \"core:sys/darwin/Foundation\"\n");
 	if (has_scalar_async) source = gb_string_appendc(source, "import \"base:intrinsics\"\n");
 	if (has_value_async || has_set) source = gb_string_appendc(source, "import \"base:runtime\"\n");
 	for (auto type : types) if (type->supported && type->is_uuid) { source = gb_string_appendc(source, "import _swift_uuid \"core:encoding/uuid\"\n"); break; }
@@ -1696,7 +1733,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	if (has_throwing) source = swift_import_emit_async_error(source, types);
 	for (auto const &fn : functions) {
 		bool values = fn.owner || fn.result.nominal || fn.is_throwing;
-		for (auto const &param : fn.parameters) values |= param.type.nominal != nullptr;
+		for (auto const &param : fn.parameters) values |= param.type.nominal != nullptr || param.objc_controller;
 		if (values) {
 			source = swift_import_emit_value_declaration(source, fn);
 			bool defaults = false;
@@ -1732,8 +1769,21 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	for (auto const &fn : functions) {
 		if (fn.base_name == fn.odin_name) continue;
 		isize count = 0;
+		SwiftImportFunction const *default_fn = nullptr;
+		isize default_count = 0;
 		for (auto const &other : functions) {
-			if (other.base_name == fn.base_name || other.odin_name == fn.base_name) count++;
+			if (other.base_name != fn.base_name && other.odin_name != fn.base_name) continue;
+			count++;
+			// The only supported default is the trailing empty Set. Preserve
+			// the zero-argument short call when a labeled overload is added.
+			if (other.parameters.count == 1 && other.parameters[0].empty_set) {
+				default_fn = &other;
+				default_count++;
+			}
+		}
+		if (count > 1 && default_count == 1) {
+			if (default_fn != &fn) continue;
+			count = 1;
 		}
 		for (auto name : names) if (name == fn.base_name) count++;
 		for (auto const &rejection : pkg->unsupported) if (rejection.name == fn.base_name) count++;

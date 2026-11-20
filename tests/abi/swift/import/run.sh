@@ -65,6 +65,7 @@ mkdir -p "$build/names/fixture"
 	-emit-object -o "$build/names/fixture/SwiftNamesFixture.o" \
 	-emit-module-path "$build/names/fixture/SwiftNamesFixture.swiftmodule" "$here/Names.swift"
 cp "$here/names.odin" "$build/names/main.odin"
+if [[ "$sdk" != macosx ]]; then cp "$here/controller.odin" "$build/names/"; fi
 "$ODIN" build "$build/names" "${odin_target[@]}" "${odin_opt[@]}" \
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/names-test"
 
@@ -175,6 +176,8 @@ for selection in narrow generic throwing isolated_sync overloaded future inout_v
 done
 
 for diagnostic in \
+	"func overloaded(_ value: UInt64) -> UInt64" \
+	"func overloaded(_ value: Double) -> Double" \
 	"parameter 'value' has unsupported type or modifier 'Swift.Float'" \
 	"unsupported result type 'Swift.Float'" \
 	"unsupported result type '[Swift.Bool]'"; do
