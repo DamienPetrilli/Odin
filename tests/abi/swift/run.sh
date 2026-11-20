@@ -42,6 +42,15 @@ esac
 build=$(mktemp -d "${TMPDIR:-/tmp}/odin-swift-abi.XXXXXXXX")
 trap 'rm -rf -- "$build"' EXIT
 
+if [[ ${2:-debug} == debug ]]; then
+	storekit=(build "$here/storekit.odin" -file -vet -vet-tabs -strict-style -vet-style -warnings-as-errors)
+	"$ODIN" "${storekit[@]}" "${odin_target[@]}" -out:"$build/storekit"
+	if [[ "$sdk" == macosx ]] && xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1; then
+		"$ODIN" "${storekit[@]}" -target:darwin_arm64 -subtarget:iphonesimulator \
+			-minimum-os-version:15.0 -out:"$build/storekit-simulator"
+	fi
+fi
+
 swiftc=(xcrun --sdk "$sdk" swiftc -target "$triple" -swift-version 6 -warnings-as-errors
 	-module-cache-path "${TMPDIR:-/tmp}/odin-swift-module-cache" "${swift_opt[@]}")
 "${swiftc[@]}" -parse-as-library -enable-library-evolution -module-name SwiftABIFixture \

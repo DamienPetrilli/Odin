@@ -1,6 +1,6 @@
 # Apple platform bindings
 
-Bindings to Apple's Objective-C and C frameworks for macOS and iOS, generated from the SDK headers
+Bindings for macOS and iOS. The Objective-C and C packages are generated from the SDK headers
 (see [`_gen/README.md`](_gen/README.md) for how they are produced and regenerated).
 
 Each framework is a single package for both platforms: declarations which only exist on one
@@ -13,7 +13,7 @@ package there.
 | Collection        | Packages |
 |-------------------|----------|
 | `core:sys/darwin` | `ObjectiveC`, `CoreFoundation`, `CoreGraphics`, `CoreText`, `DiskArbitration`, `FSEvents`, `Foundation`, `IOKit`, `Security` |
-| `vendor:darwin`   | `AppKit`, `AudioToolbox`, `AVFoundation`, `CloudKit`, `CoreHaptics`, `CoreLocation`, `CoreMedia`, `CoreVideo`, `EventKit`, `GameController`, `GameKit`, `LocalAuthentication`, `MapKit`, `Metal`, `MetalFX`, `MetalKit`, `ModelIO`, `QuartzCore`, `UIKit` |
+| `vendor:darwin`   | `AppKit`, `AudioToolbox`, `AVFoundation`, `CloudKit`, `CoreHaptics`, `CoreLocation`, `CoreMedia`, `CoreVideo`, `EventKit`, `GameController`, `GameKit`, `LocalAuthentication`, `MapKit`, `Metal`, `MetalFX`, `MetalKit`, `ModelIO`, `QuartzCore`, `StoreKit`, `UIKit` |
 
 The conventional import names follow the Apple prefixes:
 
@@ -38,6 +38,34 @@ import NS "vendor:darwin/AppKit"
 
 The re-exported declarations are aliases, so values pass freely between code which imports
 Foundation and code which imports AppKit.
+
+## StoreKit
+
+`import sk "vendor:darwin/StoreKit"` imports the Swift purchase and transaction APIs
+for non-consumables on arm64 macOS 12+ and iOS 15+. Set `-minimum-os-version` to
+your deployment target. The compiler imports the Swift declarations from the target SDK.
+
+Call `sk.products` with a slice of product IDs. The completion owns the returned slice
+and products (`defer sk.products_destroy(products)`) and its error (`defer sk.Error_destroy(err)`).
+If cleanup runs under a different Odin context, pass the original allocator
+to the destroy procedures. Keep that allocator alive until its values are freed.
+The ID, display name, description and display price getters each return an Odin string.
+Use `delete` on each successful result with the allocator used for the call.
+Inspect a purchase error with `failure, ok := err.(sk.Purchase_Error)`. Its cases,
+such as `sk.Purchase_Error_Product_Unavailable`, are borrowed from `err`. Keep an
+independent error beyond the callback with `sk.Error_copy`.
+
+Start a zero-initialized `sk.Transaction_Listener` with
+`sk.listen(&listener, .Updates, received, closed)` on the main executor.
+Use `.Entitlements` or `.Unfinished` to scan a finite sequence.
+Keep the listener at a stable address until its close callback. The item callback borrows
+its verification. Use `sk.Transaction_copy` to keep a transaction beyond the callback
+and `sk.Transaction_destroy` to release the copy. `sk.stop_listening` drains a pending read
+before closing. A failed start schedules no callbacks.
+
+Use `sk.purchase` with an available presentation window. On iOS 18.2+,
+`sk.purchase_confirm_in` also accepts an explicit UIKit view controller.
+A successful async start returns an owned task. Keep it if you need to cancel and release it with `sk.task_release`. Deliver a verified purchase before calling `sk.finish`.
 
 ## Using the bindings
 
