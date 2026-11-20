@@ -1024,6 +1024,7 @@ public struct SetTracked: Hashable, @unchecked Sendable {
 }
 public func setCount(_ values: Set<UInt64>) -> UInt64 { UInt64(values.count) }
 public func setDefaults(values: Set<UInt64> = []) -> UInt64 { UInt64(values.count) }
+public func setDefaultsLater(values: Set<UInt64> = []) async -> UInt64 { UInt64(values.count) }
 public func setWords(_ values: Set<UInt64>) -> [UInt64] { values.sorted() }
 public func setTextCount(_ values: Set<String>) -> UInt64 { UInt64(values.count) }
 public func setIdentifierCount(_ values: Set<UUID>) -> UInt64 { UInt64(values.count) }

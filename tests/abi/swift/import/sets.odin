@@ -17,6 +17,12 @@ set_completed :: proc(task: swift.Task, count: u64) {
 	swift.task_release(task)
 	set_calls += 1
 }
+empty_set_completed :: proc(task: swift.Task, count: u64) {
+	assert(count == 0)
+	swift.task_release(task)
+	set_calls += 1
+}
+
 set_cancelled :: proc(task: swift.Task, _: u64, err: fixture.Async_Error) {
 	assert(err != nil && swift.task_is_cancelled(task))
 	fixture.Async_Error_destroy(err)
@@ -141,5 +147,9 @@ check_sets :: proc() {
 	_ = fixture.set_words_later(words, set_completed) or_else panic("Async scalar Set")
 	delete(words)
 	wait_for_sets(4)
+	_ = fixture.set_defaults_later(empty_set_completed) or_else panic("Default Set")
+	_ = fixture.set_defaults_later(nil, empty_set_completed) or_else panic("Empty Set")
+	_ = fixture.set_defaults_later([]u64{7, 7, 9}, set_completed) or_else panic("Explicit Set")
+	wait_for_sets(7)
 	assert(state.allocations == state.frees)
 }
