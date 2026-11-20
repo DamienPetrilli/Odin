@@ -96,6 +96,7 @@ check_callback_error :: proc(error: fixture.Async_Error, selection: int) {
 			assert(failure.(fixture.InspectionFailure_Message).value_0 == "UTF-8 failure 📚\x00after")
 		}
 	} else if selection < 7 {
+		#assert(!#defined(fixture.EvolvingFailure_Deferred))
 		failure := error.(fixture.EvolvingFailure)
 		code := fixture.evolving_failure_code(failure) or_else panic("Resilient error round trip")
 		when #config(EVOLVED_VALUE_ENUM, false) {

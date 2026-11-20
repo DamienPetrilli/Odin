@@ -1342,9 +1342,10 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			}
 			String usr = swift_import_string(element, "usr");
 			String labels = {};
+			bool available = false;
 			for (JsonValue *symbol : swift_import_array(graph, "symbols")) {
 				if (swift_import_string(swift_import_member(symbol, "identifier"), "precise") == usr) {
-					c.available &= swift_import_available(symbol);
+					available = swift_import_available(symbol);
 					String title = swift_import_string(swift_import_member(symbol, "names"), "title");
 					isize open = string_index_byte(title, '(');
 					if (open >= 0 && string_ends_with(title, str_lit(")"))) labels = substring(title, open+1, title.len-1);
@@ -1354,6 +1355,10 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 					break;
 				}
 			}
+			// Resilient enums preserve other tags in their owned Unknown variant.
+			// Do not reference a case symbol unavailable on the deployment target.
+			if (!available && !type->is_frozen) continue;
+			c.available &= available;
 			c.symbol = concatenate_strings(permanent_allocator(), swift_import_string(element, "mangledName"), str_lit("WC"));
 			auto children = swift_import_array(element, "children");
 			if (children.count == 1) {

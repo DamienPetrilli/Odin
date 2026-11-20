@@ -923,6 +923,8 @@ public func echoLargeTemporary(_ value: LargeTemporary) -> LargeTemporary { valu
 public enum EvolvingFailure: Error, @unchecked Sendable {
 	case known(String)
 	case wide(UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64, UInt64)
+	@available(macOS 99, iOS 99, *)
+	case deferred
 #if EVOLVED_VALUE_ENUM
 	case future(Value, Value)
 #endif
@@ -939,6 +941,7 @@ public func evolvingFailureCode(_ value: EvolvingFailure) -> UInt64 {
 	switch value {
 	case .known: return 73
 	case .wide(let first, _, _, _, _, _, _, _, _, let last): return first + last
+	case .deferred: return 0
 #if EVOLVED_VALUE_ENUM
 	case .future(let first, let second): return first.value + second.value
 #endif
