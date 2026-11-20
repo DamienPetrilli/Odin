@@ -1466,6 +1466,8 @@ gb_internal void init_universal(void) {
 			{"PreserveNone",  ProcCC_PreserveNone},
 			{"PreserveMost",  ProcCC_PreserveMost},
 			{"PreserveAll",   ProcCC_PreserveAll},
+
+			{"Vector_Call",   ProcCC_VectorCall},
 			{"Swift",         ProcCC_Swift},
 			{"Swift_Async",   ProcCC_SwiftAsync},
 		};

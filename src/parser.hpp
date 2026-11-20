@@ -339,8 +339,10 @@ enum ProcCallingConvention : i32 {
 	ProcCC_PreserveNone = 11,
 	ProcCC_PreserveMost = 12,
 	ProcCC_PreserveAll  = 13,
-	ProcCC_Swift        = 14,
-	ProcCC_SwiftAsync   = 15,
+
+	ProcCC_VectorCall   = 14,
+	ProcCC_Swift        = 15,
+	ProcCC_SwiftAsync   = 16,
 
 	ProcCC_MAX,
 
@@ -363,6 +365,7 @@ gb_global char const *proc_calling_convention_strings[ProcCC_MAX] = {
 	"preserve/none",
 	"preserve/most",
 	"preserve/all",
+	"vectorcall",
 	"swift",
 	"swift/async",
 };

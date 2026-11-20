@@ -382,6 +382,15 @@ struct lbGlobalVariable {
 };
 
 
+struct lbPendingCopy {
+	LLVMValueRef temp;
+	LLVMValueRef copy;
+	LLVMValueRef src;
+	LLVMValueRef local; // the copy is kept if this local's address escapes
+	unsigned     align;
+	i32          call;  // the call an argument copy is for
+};
+
 struct lbProcedure {
 	u32 flags;
 	u16 state_flags;
@@ -458,6 +467,13 @@ struct lbProcedure {
 	lbProcedure *objc_names;
 
 	Type *internal_gen_type; // map_set, map_get, etc.
+
+	// -internal-by-value
+	PtrMap<LLVMValueRef, u64> uncaptured_arg_masks;
+	Array<lbPendingCopy>      pending_copies;
+	PtrMap<LLVMValueRef, i32> any_boxes;  // a boxed pointer -> the call it is an argument of
+	Array<i32>                call_stack; // the calls whose arguments are being built
+	i32                       call_count;
 };
 
 
@@ -805,9 +821,9 @@ lbCallingConventionKind const lb_calling_convention_map[ProcCC_MAX] = {
 	lbCallingConvention_PreserveNone,  // ProcCC_PreserveNone,
 	lbCallingConvention_PreserveMost,  // ProcCC_PreserveMost,
 	lbCallingConvention_PreserveAll,   // ProcCC_PreserveAll,
+	lbCallingConvention_X86_VectorCall, // ProcCC_VectorCall,
 	lbCallingConvention_Swift,         // ProcCC_Swift,
 	lbCallingConvention_SwiftTail,     // ProcCC_SwiftAsync,
-
 };
 
 gb_internal lbCallingConventionKind lb_calling_convention_kind(ProcCallingConvention cc);
