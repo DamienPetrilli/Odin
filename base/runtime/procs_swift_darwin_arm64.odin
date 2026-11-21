@@ -17,6 +17,8 @@ Swift_Async_Descriptor :: struct {
 
 Swift_Async_Task_Frame :: struct {
 	using base: Swift_Async_Frame,
+	// Swift 5.5 writes context flags after the resume pointer on creation.
+	_reserved_flags: uintptr,
 	descriptor: ^Swift_Async_Descriptor,
 	invoke: proc(rawptr),
 	odin_context: Context,
@@ -44,10 +46,22 @@ foreign {
 	swift_async_dealloc :: proc "swift" (frame: ^Swift_Async_Frame) ---
 	@(link_name="swift_task_getMainExecutor")
 	swift_async_main_executor :: proc "swift" () -> Swift_Async_Executor ---
-	@(link_name="swift_task_enqueueTaskOnExecutor")
-	swift_async_enqueue :: proc "swift" (task: rawptr, executor: Swift_Async_Executor) ---
+	@(link_name="swift_task_enqueueTaskOnExecutor", linkage="weak")
+	swift_async_enqueue_task :: proc "swift" (task: rawptr, executor: Swift_Async_Executor) ---
+	@(link_name="swift_task_enqueue")
+	swift_async_enqueue_job :: proc "swift" (task: rawptr, executor: Swift_Async_Executor) ---
 	@(link_name="swift_task_switch")
 	swift_async_switch :: proc "swift/async" (#swift_async frame: ^Swift_Async_Frame, resume: rawptr, identity, implementation: u64) ---
+}
+
+swift_async_enqueue :: proc "contextless" (task: rawptr, executor: Swift_Async_Executor) {
+	// Match task creation in the installed runtime. Swift 5.7 and newer
+	// also update the task state before putting the job on the executor.
+	if rawptr(swift_async_enqueue_task) != nil {
+		swift_async_enqueue_task(task, executor)
+	} else {
+		swift_async_enqueue_job(task, executor)
+	}
 }
 
 swift_async_payload :: proc "contextless" (frame: rawptr) -> rawptr {

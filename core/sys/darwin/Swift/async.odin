@@ -49,6 +49,7 @@ async_call_result :: proc(
 @(private)
 Task_Context :: struct {
 	using base: Async_Context,
+	_reserved_flags: uintptr,
 	method:       rawptr,
 	context_size: u64,
 	receiver:     rawptr,

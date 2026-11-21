@@ -68,6 +68,9 @@ cp "$here/async.odin" "$build/async.odin"
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do \
 	"${odin_target[@]}" "${odin_opt[@]}" -out:"$build/async.o"
 "${swiftc[@]}" -framework CoreFoundation "$build/Fixture.o" "$build/async.o" -o "$build/async"
+xcrun nm -m "$build/async" > "$build/async-symbols"
+grep -Eq 'weak external _swift_task_enqueueTaskOnExecutor ' "$build/async-symbols"
+grep -Eq 'external _swift_task_enqueue ' "$build/async-symbols"
 ODIN="$ODIN" bash "$here/strings/run.sh" "$sdk" "${2:-debug}"
 ODIN="$ODIN" bash "$here/import/run.sh" "$sdk" "${2:-debug}"
 ODIN="$ODIN" bash "$here/export/run.sh" "$sdk" "${2:-debug}"
@@ -80,6 +83,7 @@ fi
 "$build/async"
 if [[ "${2:-debug}" == debug ]]; then
 	ODIN="$ODIN" bash "$here/import/cache.sh"
+	ODIN="$ODIN" bash "$here/export/publication.sh"
 fi
 
 check_invalid() {
