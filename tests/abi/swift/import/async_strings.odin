@@ -29,7 +29,7 @@ Async_String_Request :: struct {
 	calls: int,
 }
 
-async_string_check :: proc(task: swift.Task, text: string, error: fixture.Async_Error, converted: bool) {
+async_string_check :: proc(task: swift.Task, text: string, error: fixture.Call_Error, converted: bool) {
 	request := cast(^Async_String_Request)context.user_ptr
 	assert(task == request.task && request.calls == 0 && pthread_main_np() == 1)
 	assert(context.allocator.data == &request.allocator)
@@ -40,7 +40,7 @@ async_string_check :: proc(task: swift.Task, text: string, error: fixture.Async_
 	expect_error := request.kind == .Error || request.kind == .Error_Failure || request.kind == .Cancel
 	_, result_failed := error.(swift.Result_Conversion_Failed)
 	assert((error != nil && !result_failed) == expect_error)
-	fixture.Async_Error_destroy(error)
+	fixture.Call_Error_destroy(error)
 	failed := request.kind == .Allocation_Failure || request.kind == .Checked_Failure
 	expect_converted := !expect_error && (!failed || len(request.expected) == 0)
 	assert(converted == expect_converted)
@@ -53,7 +53,7 @@ async_string_check :: proc(task: swift.Task, text: string, error: fixture.Async_
 	request.calls += 1
 }
 
-async_string_complete :: proc(task: swift.Task, text: string, error: fixture.Async_Error) {
+async_string_complete :: proc(task: swift.Task, text: string, error: fixture.Call_Error) {
 	async_string_check(task, text, error, error == nil)
 }
 

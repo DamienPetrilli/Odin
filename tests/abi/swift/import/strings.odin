@@ -82,9 +82,9 @@ check_strings :: proc() {
 	check_collections()
 }
 
-texts_received :: proc(task: swift.Task, values: []fixture.TextValue, error: fixture.Async_Error) {
+texts_received :: proc(task: swift.Task, values: []fixture.TextValue, error: fixture.Call_Error) {
 	expected := take_expected(task)
-	defer fixture.Async_Error_destroy(error)
+	defer fixture.Call_Error_destroy(error)
 	if expected == 0 {
 		assert(values == nil && error != nil)
 	} else {
@@ -108,10 +108,10 @@ echo_received :: proc(task: swift.Task, values: []string, ok: bool) {
 	collection_calls += 1
 }
 
-accepted_text :: proc(task: swift.Task, outcome: fixture.ValueOutcome, error: fixture.Async_Error) {
+accepted_text :: proc(task: swift.Task, outcome: fixture.ValueOutcome, error: fixture.Call_Error) {
 	assert(pthread_main_np() == 1)
 	expected := take_expected(task)
-	defer fixture.Async_Error_destroy(error)
+	defer fixture.Call_Error_destroy(error)
 	if expected == 0 {
 		assert(error != nil)
 	} else {

@@ -11,9 +11,9 @@ when AVAILABLE {
 	task_release :: swift.task_release
 	task_cancel  :: swift.task_cancel
 
-	Error                    :: api.Async_Error
-	Error_copy               :: api.Async_Error_copy
-	Error_destroy            :: api.Async_Error_destroy
+	Error                    :: api.Call_Error
+	Error_copy               :: api.Call_Error_copy
+	Error_destroy            :: api.Call_Error_destroy
 	Unknown_Error            :: swift.Unknown_Error
 	Error_Conversion_Failed  :: swift.Error_Conversion_Failed
 	Result_Conversion_Failed :: swift.Result_Conversion_Failed

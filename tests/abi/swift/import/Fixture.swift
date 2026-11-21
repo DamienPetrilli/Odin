@@ -68,10 +68,13 @@ extension TextValue {
 	}
 }
 
-// Unsupported declarations must be diagnosed at the importing source.
+// Exercise imported declarations alongside signatures that require diagnostics.
 public func narrow(_ value: UInt32) -> UInt32 { value }
 public func generic<T>(_ value: T) -> T { value }
-public func throwing(_ value: UInt64) throws -> UInt64 { value }
+@inline(never) public func throwing(_ value: UInt64) throws -> UInt64 {
+	if value == UInt64.max { throw PlainFailure.missing }
+	return value
+}
 @MainActor public func isolated() async -> UInt64 {
 	MainActor.preconditionIsolated()
 	await Task.yield()
@@ -1031,6 +1034,10 @@ public func evolvingFailureCode(_ value: EvolvingFailure) -> UInt64 {
 }
 public func inspectionFailure(_ selection: UInt64) async throws -> UInt64 {
 	await Task.yield()
+	return try checkedFailure(selection)
+}
+
+public func checkedFailure(_ selection: UInt64) throws -> UInt64 {
 	switch selection {
 	case 0: throw PlainFailure.missing
 	case 1: throw PlainFailure.denied
@@ -1326,4 +1333,35 @@ public func editPrefix(_ bytes: UnsafeMutableBufferPointer<UInt8>, _ counter: Un
 	bytes[0] &+= 1
 	counter.pointee &+= 1
 	return (previous, counter.pointee)
+}
+
+public func checkedDescription(_ fail: Bool, _ value: UInt64) throws -> String {
+	if fail { throw PlainFailure.denied }
+	return "A long Swift-owned text with λ, an emoji 🐶, and a NUL\0inside.\(value)"
+}
+public func checkUnknown(_ fail: Bool) throws {
+	if fail { throw ValueFailure() }
+}
+
+public func checkedEdit(_ values: UnsafeMutableBufferPointer<Int16>, _ fail: Bool) throws -> Int {
+	if !values.isEmpty { values[0] &+= 1 }
+	if fail { throw PlainFailure.denied }
+	return values.count
+}
+
+public func checkedRead(_ value: UnsafePointer<UInt32>) throws -> UInt32 { value.pointee }
+public func checkedInput(_ text: String) throws -> Int { text.utf8.count }
+public func checkedOutput() throws -> [UInt64] { [1] }
+public func checkedTyped() throws(TypedFailure) { throw .rejected }
+extension Value {
+	public func checkedMethod() throws {}
+}
+
+// A module can use the former generated name for its own ordinary Swift type.
+@frozen public enum Async_Error { case idle, busy }
+public func oldName(_ value: Async_Error) -> UInt64 {
+	switch value {
+	case .idle: return 17
+	case .busy: return 31
+	}
 }

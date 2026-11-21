@@ -9,11 +9,11 @@ import "core:time"
 import "base:intrinsics"
 
 Error_Request :: struct {
-	error: fixture.Async_Error,
+	error: fixture.Call_Error,
 	result: u64,
 	calls: int,
 }
-error_received :: proc(task: swift.Task, result: u64, error: fixture.Async_Error) {
+error_received :: proc(task: swift.Task, result: u64, error: fixture.Call_Error) {
 	request := cast(^Error_Request)context.user_ptr
 	swift.task_release(task)
 	request.error = error // Transfer the callback's owner beyond the task lifetime.
@@ -49,8 +49,8 @@ check_error_inspection :: proc() {
 		}
 		wait_for_error(&request)
 		// Private and bridged errors survive as owned fallback cases.
-		copy := fixture.Async_Error_copy(request.error) or_else panic("Unknown error copy")
-		fixture.Async_Error_destroy(request.error)
+		copy := fixture.Call_Error_copy(request.error) or_else panic("Unknown error copy")
+		fixture.Call_Error_destroy(request.error)
 		error := copy.(swift.Unknown_Error).error
 		_, err := fixture.PlainFailure_from_error(error)
 		assert(err == .Type_Mismatch)
@@ -74,7 +74,7 @@ check_error_inspection :: proc() {
 		assert(!name_ok && !text_ok)
 		state.remaining = -1
 		text := swift.error_description(error) or_else panic("Retained diagnostic")
-		fixture.Async_Error_destroy(copy)
+		fixture.Call_Error_destroy(copy)
 		assert(len(text) > 0 && fixture.live_value_count() == baseline)
 		delete(text)
 		assert(state.allocations == state.frees)
@@ -82,7 +82,7 @@ check_error_inspection :: proc() {
 }
 
 // Borrow the delivered union. Every concrete case is ordinary Odin data.
-check_callback_error :: proc(error: fixture.Async_Error, selection: int) {
+check_callback_error :: proc(error: fixture.Call_Error, selection: int) {
 	if selection < 2 {
 		plain := error.(fixture.PlainFailure)
 		policies := [fixture.PlainFailure]u64{.Missing = 17, .Denied = 41}
@@ -118,17 +118,81 @@ check_callback_error :: proc(error: fixture.Async_Error, selection: int) {
 	} else { assert(error == nil) }
 }
 
+forward_word :: proc(input: u64) -> (word: u64, err: fixture.Call_Error) {
+	word = fixture.throwing(input) or_return
+	return
+}
+
 check_typed_errors :: proc() {
+	assert(fixture.old_name(.Idle) == 17 && fixture.old_name(.Busy) == 31)
+	before := fixture.live_value_count()
+	for selection in 0..<12 {
+		value, err := fixture.checked_failure(u64(selection))
+		check_callback_error(err, selection)
+		assert(value == (selection == 11 ? 42 : 0))
+		fixture.Call_Error_destroy(err)
+		assert(fixture.live_value_count() == before)
+	}
+	{
+		original := context.allocator
+		context.allocator = mem.nil_allocator()
+		_, conversion := fixture.checked_failure(2)
+		box := conversion.(swift.Error_Conversion_Failed).error
+		context.allocator = original
+		payload, err := fixture.InspectionFailure_from_error(box)
+		assert(err == nil && payload.(fixture.InspectionFailure_Message).value_1 == 73)
+		fixture.InspectionFailure_destroy(payload)
+		fixture.Call_Error_destroy(conversion)
+	}
+	guarded := [4]i16{-7, 1, 2, 9}
+	length, write_err := fixture.checked_edit(guarded[1:3], false)
+	assert(length == 2 && write_err == nil && guarded == [4]i16{-7, 2, 2, 9})
+	length, write_err = fixture.checked_edit(guarded[1:3], true)
+	assert(length == 0 && write_err.(fixture.PlainFailure) == .Denied)
+	assert(guarded == [4]i16{-7, 3, 2, 9})
+	fixture.Call_Error_destroy(write_err)
+	length, write_err = fixture.checked_edit(nil, false)
+	assert(length == 0 && write_err == nil)
+	value: u32 = 0x0123_4567
+	read, read_err := fixture.checked_read(&value)
+	assert(read == value && read_err == nil)
+	for i in 0..<128 {
+		word, err := fixture.throwing(u64(i))
+		assert(word == u64(i) && err == nil)
+		text, text_err := fixture.checked_description(false, u64(i))
+		assert(strings.has_prefix(text, "A long Swift-owned text with λ, an emoji 🐶, and a NUL\x00inside.") && text_err == nil)
+		delete(text)
+		ignored, failed := fixture.checked_description(true, 42)
+		assert(ignored == "" && failed.(fixture.PlainFailure) == .Denied)
+		fixture.Call_Error_destroy(failed)
+		unknown := fixture.check_unknown(true)
+		assert(unknown.(swift.Unknown_Error).error != nil && fixture.live_value_count() == before+1)
+		fixture.Call_Error_destroy(unknown)
+		assert(fixture.live_value_count() == before)
+		assert(fixture.check_unknown(false) == nil)
+	}
+	{
+		context.allocator = mem.nil_allocator()
+		text, failed := fixture.checked_description(false, 42)
+		_, conversion_failed := failed.(swift.Result_Conversion_Failed)
+		assert(text == "" && conversion_failed)
+		fixture.Call_Error_destroy(failed)
+	}
+	word, forwarded := forward_word(123)
+	assert(word == 123 && forwarded == nil)
+	zero, missing := forward_word(max(u64))
+	assert(zero == 0 && missing.(fixture.PlainFailure) == .Missing)
+	fixture.Call_Error_destroy(missing)
 	#assert(intrinsics.type_is_enum(fixture.PlainFailure))
 	#assert(intrinsics.type_is_union(fixture.InspectionFailure))
-	#assert(intrinsics.type_is_union(fixture.Async_Error))
+	#assert(intrinsics.type_is_union(fixture.Call_Error))
 	state := Value_Allocator{backing = context.allocator, remaining = -1}
 	context.allocator = {procedure = value_allocator, data = &state}
 	baseline := fixture.live_value_count()
 	request: Error_Request
 	context.user_ptr = &request
-	fixture.Async_Error_destroy(nil)
-	assert((fixture.Async_Error_copy(nil) or_else panic("Nil error copy")) == nil)
+	fixture.Call_Error_destroy(nil)
+	assert((fixture.Call_Error_copy(nil) or_else panic("Nil error copy")) == nil)
 	// A single payload variant has an extra Odin nil state, never a Swift case.
 	_, nil_accepted := fixture.generic_failure_code(nil)
 	_, nil_copied := fixture.GenericFailure_Value_copy(nil)
@@ -144,16 +208,16 @@ check_typed_errors :: proc() {
 		balance := state.allocations-state.frees
 		for remaining in 0..<4 {
 			state.remaining = remaining
-			copy, ok := fixture.Async_Error_copy(request.error)
-			if ok { fixture.Async_Error_destroy(copy) } else { assert(copy == nil) }
+			copy, ok := fixture.Call_Error_copy(request.error)
+			if ok { fixture.Call_Error_destroy(copy) } else { assert(copy == nil) }
 			if selection < 2 || selection == 7 || selection == 8 || selection >= 10 { assert(ok) }
 			assert(state.allocations-state.frees == balance)
 		}
 		state.remaining = -1
-		copy := fixture.Async_Error_copy(request.error) or_else panic("Independent error copy")
-		fixture.Async_Error_destroy(request.error)
+		copy := fixture.Call_Error_copy(request.error) or_else panic("Independent error copy")
+		fixture.Call_Error_destroy(request.error)
 		check_callback_error(copy, selection)
-		fixture.Async_Error_destroy(copy)
+		fixture.Call_Error_destroy(copy)
 		assert(fixture.live_value_count() == baseline && state.allocations == state.frees)
 	}
 	// Refuse each allocation in the callback projection, not just explicit copies.
@@ -171,16 +235,16 @@ check_typed_errors :: proc() {
 				assert(failed.error != nil && request.result == 0)
 				_, mismatch := fixture.PlainFailure_from_error(failed.error)
 				assert(mismatch == .Type_Mismatch)
-				copy: fixture.Async_Error
+				copy: fixture.Call_Error
 				{
 					context.allocator = mem.nil_allocator()
-					copy = fixture.Async_Error_copy(request.error) or_else panic("Fallback retain")
+					copy = fixture.Call_Error_copy(request.error) or_else panic("Fallback retain")
 				}
-				fixture.Async_Error_destroy(request.error)
+				fixture.Call_Error_destroy(request.error)
 				// Recover using the retained original, after the callback and its
 				// first fallback owner have gone. A later successful copy is usable.
 				original := copy.(swift.Error_Conversion_Failed).error
-				recovered: fixture.Async_Error
+				recovered: fixture.Call_Error
 				if selection < 4 {
 					recovered = fixture.InspectionFailure_from_error(original) or_else panic("Payload retry")
 				} else if selection < 7 {
@@ -188,13 +252,13 @@ check_typed_errors :: proc() {
 				} else {
 					recovered = fixture.GenericFailure_Value_from_error(original) or_else panic("Generic retry")
 				}
-				fixture.Async_Error_destroy(copy)
+				fixture.Call_Error_destroy(copy)
 				check_callback_error(recovered, selection)
-				fixture.Async_Error_destroy(recovered)
+				fixture.Call_Error_destroy(recovered)
 			} else {
 				successes += 1
 				check_callback_error(request.error, selection)
-				fixture.Async_Error_destroy(request.error)
+				fixture.Call_Error_destroy(request.error)
 			}
 			assert(fixture.live_value_count() == baseline && state.allocations == state.frees)
 		}

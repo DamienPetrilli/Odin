@@ -1,12 +1,12 @@
 #+build darwin, arm64
 package darwin_Swift
 
-// An owned Swift error box. Nil means no native error. Imported callbacks
-// project it to their module's Async_Error union. Unknown or unconverted errors
+// An owned Swift error box. Nil means no native error. Imported throwing calls
+// project it to their module's Call_Error union. Unknown or unconverted errors
 // keep this owner; copying the address does not retain another reference.
 Error :: distinct rawptr
 
-// Fallback cases in an imported module's Async_Error union. Its generated
+// Fallback cases in an imported module's Call_Error union. Its generated
 // copy/destroy procedures manage these owners along with concrete payloads.
 Unknown_Error :: struct {
 	error: Error, // Owned error whose concrete type is not mapped by this module.

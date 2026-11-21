@@ -17,7 +17,7 @@ uuid_before_main :: proc "contextless" () -> uuid.Identifier {
 UUID_Request :: struct {
 	expected: uuid.Identifier,
 	value: uuid.Identifier,
-	error: fixture.Async_Error,
+	error: fixture.Call_Error,
 	calls: int,
 	absent: bool,
 }
@@ -41,7 +41,7 @@ uuids_received :: proc(task: swift.Task, values: []uuid.Identifier, ok: bool) {
 	delete(values)
 	request.calls += 1
 }
-checked_identifier_received :: proc(task: swift.Task, value: uuid.Identifier, err: fixture.Async_Error) {
+checked_identifier_received :: proc(task: swift.Task, value: uuid.Identifier, err: fixture.Call_Error) {
 	request := cast(^UUID_Request)context.user_ptr
 	swift.task_release(task)
 	request.error = err
@@ -130,13 +130,13 @@ check_uuids :: proc() {
 		_ = fixture.checked_identifier(request.expected, fail, checked_identifier_received) or_else panic("Throwing UUID")
 		wait_for_uuid(&request)
 		if fail { assert(request.error.(fixture.PlainFailure) == .Denied) } else { assert(request.error == nil) }
-		fixture.Async_Error_destroy(request.error)
+		fixture.Call_Error_destroy(request.error)
 	}
 	request.calls = 0
 	task := fixture.cancellable_identifier(request.expected, checked_identifier_received) or_else panic("Cancel UUID")
 	swift.task_cancel(task)
 	wait_for_uuid(&request)
 	assert(request.error != nil)
-	fixture.Async_Error_destroy(request.error)
+	fixture.Call_Error_destroy(request.error)
 	assert(state.allocations == state.frees)
 }

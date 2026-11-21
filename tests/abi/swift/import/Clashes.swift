@@ -1,12 +1,12 @@
 import Foundation
-#if ASYNC_ERROR_ALIAS
-public typealias Async_Error = UInt64
+#if CALL_ERROR_ALIAS
+public typealias Call_Error = UInt64
+public func checked() throws -> UInt64 { 17 }
+#elseif CALL_ERROR_UNSUPPORTED
+public enum Call_Error { case value(any Error) }
 public func checked() async throws -> UInt64 { 17 }
-#elseif ASYNC_ERROR_UNSUPPORTED
-public enum Async_Error { case value(any Error) }
-public func checked() async throws -> UInt64 { 17 }
-#elseif ASYNC_ERROR_TYPE
-public struct Async_Error { public let value: UInt64 }
+#elseif CALL_ERROR_TYPE
+public struct Call_Error { public let value: UInt64 }
 public func checked() async throws -> UInt64 { 17 }
 #elseif ERROR_HELPER
 @frozen public enum Failure: Error {

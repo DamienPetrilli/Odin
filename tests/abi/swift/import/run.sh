@@ -54,8 +54,10 @@ cp "$here/scalars.odin" "$build/scalars.odin"
 	"${odin_target[@]}" "${odin_opt[@]}" -out:"$build/import" -show-swift-imports > "$build/mappings.txt"
 grep -Fq 'call add_later :: proc(value: u64, delta: u64, completion: proc(swift.Task, u64))' "$build/mappings.txt"
 grep -Fq 'call async_tuple :: proc(count: u64, completion: proc(task: swift.Task, count: u64, ready: bool))' "$build/mappings.txt"
-grep -Fq 'call throwing_tuple :: proc(n: u64, completion: proc(task: swift.Task, count: u64, ready: bool, err: Async_Error))' "$build/mappings.txt"
-grep -Fq 'call throwing_packed_tuple :: proc(n: u8, completion: proc(task: swift.Task, err: u8, err_: bool, value_2: u8, value_3: u8, value_4: u8, _swift_error: Async_Error))' "$build/mappings.txt"
+grep -Fq 'call throwing_tuple :: proc(n: u64, completion: proc(task: swift.Task, count: u64, ready: bool, err: Call_Error))' "$build/mappings.txt"
+grep -Fq 'call throwing_packed_tuple :: proc(n: u8, completion: proc(task: swift.Task, err: u8, err_: bool, value_2: u8, value_3: u8, value_4: u8, _swift_error: Call_Error))' "$build/mappings.txt"
+grep -Fq 'call checked_edit :: proc(values: []i16, fail: bool) -> (int, Call_Error)' "$build/mappings.txt"
+grep -Fq 'error: owned (Call_Error_destroy); nil means success' "$build/mappings.txt"
 grep -Fq 'call bounds :: proc(value: u64) -> (lower: u64, upper: u64)' "$build/mappings.txt"
 grep -Fq 'type SwiftImportFixture.`TextRecord` -> TextRecord (struct, frozen)' "$build/mappings.txt"
 grep -Fq 'call ArrayRecord_advance :: proc(receiver: ^ArrayRecord, amount: u64) -> u64' "$build/mappings.txt"
@@ -88,7 +90,7 @@ if [[ "$sdk" != macosx ]]; then cp "$here/controller.odin" "$build/names/"; fi
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/names-test"
 
 # Check rejections in one invocation on every target, including link-only iOS runs.
-rejected=(text_bounds owned_tuple unsupported_text_tuple tuple_case_collision ArrayRecord_recursive_result TextRecord_clear RawCollision_raw_value RawCode_replace async_buffer returned_buffer generic throwing isolated_sync overloaded future inout_value typed_throwing
+rejected=(text_bounds owned_tuple unsupported_text_tuple tuple_case_collision ArrayRecord_recursive_result TextRecord_clear RawCollision_raw_value RawCode_replace async_buffer returned_buffer generic checked_input checked_output checked_typed Value_checked_method isolated_sync overloaded future inout_value typed_throwing
 	unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields
 	unsupported_scalar_argument unsupported_scalar_result narrow_array unsupported_bool_array unsupported_set_result
 	unsupported_optional_set unsupported_bool_set client_only new_number new_number_for_ NewValue
@@ -117,6 +119,10 @@ for name in "${rejected[@]}"; do expect_diagnostic "Swift import: '$name':"; don
 expect_diagnostic "'owned_tuple': Swift String tuple results currently require an async function"
 expect_diagnostic "'unsupported_text_tuple': tuple results require supported scalar or String elements"
 expect_diagnostic "'text_bounds': tuple results with converted parameters are unsupported"
+expect_diagnostic "'checked_input': synchronous throws with converted arguments is unsupported"
+expect_diagnostic "'checked_output': synchronous throws currently supports scalar, Void and String results"
+expect_diagnostic "'checked_typed': typed throws is unsupported"
+expect_diagnostic "'Value_checked_method': synchronous throws currently requires a non-generic free function"
 expect_diagnostic "'tuple_case_collision': tuple result labels collide after Odin name conversion"
 platform=iOS
 introduced=18.2
@@ -218,7 +224,7 @@ package clashes
 foreign import fixture "swift:fixture/SwiftClashesFixture"
 main :: proc() {}
 ODIN
-for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE FROZEN_ENUM_CASE STRING_TYPE ARRAY_TYPE RECORD_FIELD UUID_TYPE ERROR_HELPER ASYNC_ERROR_TYPE ASYNC_ERROR_ALIAS ASYNC_ERROR_UNSUPPORTED; do
+for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE FROZEN_ENUM_CASE STRING_TYPE ARRAY_TYPE RECORD_FIELD UUID_TYPE ERROR_HELPER CALL_ERROR_TYPE CALL_ERROR_ALIAS CALL_ERROR_UNSUPPORTED; do
 	"${swiftc[@]}" -D "$selection" -parse-as-library -enable-library-evolution -module-name SwiftClashesFixture \
 		-emit-object -o "$build/clashes/fixture/SwiftClashesFixture.o" \
 		-emit-module-path "$build/clashes/fixture/SwiftClashesFixture.swiftmodule" "$here/Clashes.swift"
@@ -230,7 +236,7 @@ for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE FROZEN_EN
 		BUILTIN) diagnostic="type 'f64' conflicts" ;;
 		FLATTENED | STRING_TYPE | ARRAY_TYPE | UUID_TYPE) diagnostic="map to the same Odin name" ;;
 		HELPER | ENUM_CASE | FROZEN_ENUM_CASE | RECORD_FIELD | ERROR_HELPER) diagnostic="is ambiguous" ;;
-		ASYNC_ERROR_TYPE | ASYNC_ERROR_ALIAS | ASYNC_ERROR_UNSUPPORTED) diagnostic="conflicts with generated async error declarations" ;;
+		CALL_ERROR_TYPE | CALL_ERROR_ALIAS | CALL_ERROR_UNSUPPORTED) diagnostic="conflicts with generated error declarations" ;;
 		UNSUPPORTED_HELPER) diagnostic="conflicts with a generated Odin helper" ;;
 	esac
 	if ! grep -F 'Swift import:' "$build/invalid.log" | grep -Fq "$diagnostic"; then

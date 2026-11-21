@@ -126,7 +126,7 @@ check_tuple_borrows :: proc() {
 	assert(old == 0 && counter == 0xffff && count == counter)
 }
 
-throwing_tuple_received :: proc(task: swift.Task, count: u64, ready: bool, err: fixture.Async_Error) {
+throwing_tuple_received :: proc(task: swift.Task, count: u64, ready: bool, err: fixture.Call_Error) {
 	expected := take_expected(task)
 	assert(count == expected && ready == (expected != 0))
 	if expected == 0 {
@@ -134,11 +134,11 @@ throwing_tuple_received :: proc(task: swift.Task, count: u64, ready: bool, err: 
 	} else {
 		assert(err == nil)
 	}
-	fixture.Async_Error_destroy(err)
+	fixture.Call_Error_destroy(err)
 	scalar_calls += 1
 }
 
-throwing_packed_received :: proc(task: swift.Task, n: u8, ready: bool, a, b, c: u8, err: fixture.Async_Error) {
+throwing_packed_received :: proc(task: swift.Task, n: u8, ready: bool, a, b, c: u8, err: fixture.Call_Error) {
 	expected := u8(take_expected(task))
 	assert(n == expected && ready == (expected != 0))
 	if expected == 0 {
@@ -146,11 +146,11 @@ throwing_packed_received :: proc(task: swift.Task, n: u8, ready: bool, a, b, c: 
 	} else {
 		assert(a == 0xfe && b == 0x41 && c == n+1 && err == nil)
 	}
-	fixture.Async_Error_destroy(err)
+	fixture.Call_Error_destroy(err)
 	scalar_calls += 1
 }
 
-throwing_wide_received :: proc(task: swift.Task, n: u64, weight: f64, low: i64, next: u64, ready: bool, err: fixture.Async_Error) {
+throwing_wide_received :: proc(task: swift.Task, n: u64, weight: f64, low: i64, next: u64, ready: bool, err: fixture.Call_Error) {
 	expected := take_expected(task)
 	assert(n == expected && ready == (expected != 0))
 	if expected == 0 {
@@ -160,7 +160,7 @@ throwing_wide_received :: proc(task: swift.Task, n: u64, weight: f64, low: i64, 
 	} else {
 		assert(transmute(u64)weight == 1<<63 && low == min(i64) && next == n+13 && err == nil)
 	}
-	fixture.Async_Error_destroy(err)
+	fixture.Call_Error_destroy(err)
 	scalar_calls += 1
 }
 

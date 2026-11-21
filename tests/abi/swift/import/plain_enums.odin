@@ -32,9 +32,9 @@ single_case_arguments_received :: proc(task: swift.Task, result: f64) {
 	plain_enum_calls += 1
 }
 
-single_case_throwing_received :: proc(task: swift.Task, result: fixture.SingleCase, error: fixture.Async_Error) {
+single_case_throwing_received :: proc(task: swift.Task, result: fixture.SingleCase, error: fixture.Call_Error) {
 	expected := take_expected(task)
-	defer fixture.Async_Error_destroy(error)
+	defer fixture.Call_Error_destroy(error)
 	assert((error == nil) == (expected != 0))
 	if error == nil { assert(result == .Only) }
 	plain_enum_calls += 1

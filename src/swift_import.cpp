@@ -782,8 +782,8 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		return false;
 	}
 	if (fn->is_collection && (!fn->is_async || fn->is_initializer || fn->is_property || (fn->owner && !fn->is_static))) return false;
-	if (fn->is_throwing && !fn->is_async) {
-		fn->rejection = str_lit("synchronous throws is unsupported");
+	if (fn->is_throwing && !fn->is_async && (fn->owner || fn->is_collection)) {
+		fn->rejection = str_lit("synchronous throws currently requires a non-generic free function");
 		return false;
 	}
 	if (fn->is_throwing && (swift_import_index(fn->signature, str_lit("throws(")) >= 0 || swift_import_index(fn->signature, str_lit("throws (")) >= 0)) {
@@ -874,6 +874,18 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 	if (fn->result.nominal && fn->result.nominal->kind == SwiftImportValue_Set) {
 		fn->rejection = str_lit("Set results are not supported; only Set parameters map to Odin slices");
 		return false;
+	}
+	if (fn->is_throwing && !fn->is_async) {
+		for (auto const &p : fn->parameters) {
+			if (p.type.nominal) {
+				fn->rejection = str_lit("synchronous throws with converted arguments is unsupported");
+				return false;
+			}
+		}
+		if (tuple || (fn->result.nominal && fn->result.nominal->kind != SwiftImportValue_String)) {
+			fn->rejection = str_lit("synchronous throws currently supports scalar, Void and String results");
+			return false;
+		}
 	}
 	return it.pos == labels.len && (!tuple || swift_import_tuple_result(api_types[0], fn, types));
 }
@@ -1155,6 +1167,7 @@ gb_internal gbString swift_import_emit_value_declaration(gbString source, SwiftI
 	}
 	if (fn.is_collection) source = gb_string_append_fmt(source, "%scollection_metadata, collection_witness: rawptr", count++ ? ", " : "");
 	if (receiver) source = gb_string_append_fmt(source, "%s#swift_self receiver: rawptr", count ? ", " : "");
+	if (fn.is_throwing && !fn.is_async) source = gb_string_append_fmt(source, "%s#swift_self _swift_context: rawptr, #swift_error _swift_error: ^rawptr", count ? ", " : "");
 	source = gb_string_appendc(source, ")");
 	if (!fn.is_async && fn.result.odin && !indirect_result && !empty_result) source = gb_string_append_fmt(source, " -> %s", swift_import_native_type(fn.result));
 	source = gb_string_appendc(source, " ---\n");
@@ -1200,12 +1213,14 @@ gb_internal void swift_import_report_function(Array<String> *report, SwiftImport
 	}
 	if (fn.is_async) {
 		row = gb_string_appendc(row, "  start: owned task (swift.task_release); false means no callback\n  completion: borrowed task");
-		if (fn.is_throwing) row = gb_string_appendc(row, "; owned err (Async_Error_destroy); nil means success");
+		if (fn.is_throwing) row = gb_string_appendc(row, "; owned err (Call_Error_destroy); nil means success");
 		else if (swift_import_owns(fn.result) && (swift_import_projected(fn.result) || swift_import_slice(fn.result.nominal) || swift_import_kind(fn.result, SwiftImportValue_String))) {
 			row = gb_string_appendc(row, "; final bool reports result conversion");
 		}
 		if (fn.result.nominal && fn.result.nominal->is_optional) row = gb_string_appendc(row, "; nil is an absent value on success");
 		row = gb_string_appendc(row, "\n");
+	} else if (fn.is_throwing) {
+		row = gb_string_appendc(row, "  error: owned (Call_Error_destroy); nil means success\n");
 	}
 	if (fn.tuple_fields.len) {
 		row = gb_string_appendc(row, "  owned result: delete each returned string with the result allocator\n");
@@ -1309,10 +1324,28 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 
 	if (!fn.is_async) {
 		if (string_starts_with(name, str_lit("_swift_"))) source = gb_string_appendc(source, "@(private)\n");
-		if (fallible) source = gb_string_appendc(source, "@(require_results)\n");
+		if (fallible || fn.is_throwing) source = gb_string_appendc(source, "@(require_results)\n");
 		source = gb_string_append_fmt(source, "%.*s :: proc", LIT(name));
 		isize signature_start = gb_string_length(source);
 		source = gb_string_append_fmt(source, "(%s)", params);
+		if (fn.is_throwing) {
+			if (fn.result.odin) source = gb_string_append_fmt(source, " -> (%s, Call_Error)", fn.result.odin);
+			else source = gb_string_appendc(source, " -> Call_Error");
+			swift_import_report_function(report, fn, native_name, source, signature_start);
+			// A non-generic free function has no receiver. Swift passes undef
+			// for swiftself here and an initialized, writable error slot.
+			source = gb_string_append_fmt(source, " {\n\t_swift_error: rawptr\n\t_swift_context: rawptr = ---\n\t%s_swift_%.*s_native(%s%s_swift_context, &_swift_error)\n",
+				fn.result.odin ? "_swift_value := " : "", LIT(native_name), arguments, gb_string_length(arguments) ? ", " : "");
+			if (!fn.result.odin) return gb_string_appendc(source,
+				"\tif intrinsics.unlikely(_swift_error != nil) { return _swift_call_error_take(swift.Error(_swift_error)) }\n\treturn nil\n}\n\n");
+			// Swift leaves the ordinary result uninitialized on throw. Only
+			// read or destroy an owned result on the successful branch.
+			source = gb_string_append_fmt(source, "\tif intrinsics.unlikely(_swift_error != nil) {\n\t\t_swift_zero: %s\n\t\treturn _swift_zero, _swift_call_error_take(swift.Error(_swift_error))\n\t}\n", fn.result.odin);
+			if (string_result) {
+				return gb_string_appendc(source, "\tdefer swift.string_destroy(&_swift_value)\n\t_swift_text, _swift_ok := swift.string_to_odin(_swift_value)\n\tif !_swift_ok { return \"\", swift.Result_Conversion_Failed{} }\n\treturn _swift_text, nil\n}\n\n");
+			}
+			return gb_string_appendc(source, "\treturn _swift_value, nil\n}\n\n");
+		}
 		if (fallible && fn.result.odin) source = gb_string_append_fmt(source, " -> (_swift_result: %s, ok: bool) #optional_ok", fn.result.odin);
 		else if (fallible) source = gb_string_appendc(source, " -> (ok: bool)");
 		else if (fn.result.odin) source = gb_string_append_fmt(source, " -> %s", fn.result.odin);
@@ -1400,13 +1433,13 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		bool collision = fn.is_throwing
 			? string_starts_with(fields, str_lit("err: ")) || swift_import_index(fields, str_lit(", err: ")) >= 0
 			: string_starts_with(fields, str_lit("converted: ")) || swift_import_index(fields, str_lit(", converted: ")) >= 0;
-		char const *status = fn.is_throwing ? (collision ? "_swift_error: Async_Error" : "err: Async_Error")
+		char const *status = fn.is_throwing ? (collision ? "_swift_error: Call_Error" : "err: Call_Error")
 		                                   : (collision ? "_swift_converted: bool" : "converted: bool");
 		source = gb_string_append_fmt(source, "(%s%scompletion: proc(task: swift.Task, %.*s, %s", params, gb_string_length(params) ? ", " : "", LIT(fields), status);
 	} else {
 		source = gb_string_append_fmt(source, "(%s%scompletion: proc(swift.Task", params, gb_string_length(params) ? ", " : "");
 		if (fn.result.odin) source = gb_string_append_fmt(source, ", %s", fn.result.odin);
-		if (fn.is_throwing) source = gb_string_appendc(source, ", Async_Error");
+		if (fn.is_throwing) source = gb_string_appendc(source, ", Call_Error");
 		if (converted_result && !fn.is_throwing) source = gb_string_appendc(source, ", bool");
 	}
 	source = gb_string_appendc(source, ")) -> (task: swift.Task, ok: bool) #optional_ok");
@@ -1500,7 +1533,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		if (fn.is_throwing) source = gb_string_appendc(source, "\t\t}\n");
 	}
 	if (fn.is_throwing) {
-		source = gb_string_appendc(source, "\t\terror := _swift_async_error_take(capture.error)\n");
+		source = gb_string_appendc(source, "\t\terror := _swift_call_error_take(capture.error)\n");
 		if (converted_result) source = gb_string_appendc(source, "\t\tif error == nil && !converted { error = swift.Result_Conversion_Failed{} }\n");
 	}
 	source = gb_string_appendc(source, "\t\tcapture.completion(swift.Task(runtime.swift_async_current())");
@@ -2129,6 +2162,19 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			if (!reason.len && !swift_import_struct_parameter(native, native_index, fn.owner, false)) reason = str_lit("unsupported mutable Swift record receiver layout");
 		}
 		if (receiver) declaration = gb_string_append_fmt(declaration, "%s%s", count ? ", " : "", fn.is_mutating ? "ptr swiftself" : "ptr noalias swiftself");
+		if (fn.is_throwing && !fn.is_async) {
+			// Swift receives a writable pointer-sized error slot. Verify its extent
+			// before normalizing optional optimizer attributes for the exact match.
+			if (!native || LLVMCountParams(native) != native_index+2 ||
+			    !swift_import_storage_parameter(native, native_index+1, 8, 8, true)) {
+				reason = str_lit("unsupported native Swift error slot");
+			} else {
+				unsigned noalias = LLVMGetEnumAttributeKindForName("noalias", 7);
+				LLVMRemoveEnumAttributeAtIndex(native, native_index+2, noalias);
+			}
+			record_parameters = true;
+			declaration = gb_string_append_fmt(declaration, "%sptr swiftself, ptr swifterror", count ? ", " : "");
+		}
 		declaration = gb_string_appendc(declaration, ")");
 		if (!reason.len && fn.is_async && (fn.tuple_result || fn.tuple_fields.len) &&
 		    !swift_abi_async_tuple(native, layout, fn.tuple_result, fn.is_throwing, fn.tuple_fields.len ? fn.result.nominal->tuple_load : nullptr))
@@ -2154,7 +2200,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	for (auto const &fn : functions) has_throwing |= fn.is_throwing;
 	auto names = array_make<String>(permanent_allocator());
 	if (has_throwing) {
-		char const *error_names[] = {"Async_Error", "Async_Error_copy", "Async_Error_destroy"};
+		char const *error_names[] = {"Call_Error", "Call_Error_copy", "Call_Error_destroy"};
 		for (char const *name : error_names) array_add(&names, make_string_c(name));
 		// Unsupported nominal declarations must not silently become our helpers.
 		for (JsonValue *symbol : swift_import_array(graph, "symbols")) {
@@ -2168,7 +2214,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			}
 			for (String reserved : names) {
 				if (make_string_c(name) == reserved) {
-					syntax_error(node, "Swift import: declaration '%.*s' conflicts with generated async error declarations", LIT(reserved));
+					syntax_error(node, "Swift import: declaration '%.*s' conflicts with generated error declarations", LIT(reserved));
 					return false;
 				}
 			}
@@ -2255,7 +2301,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	flags = gb_string_appendc(flags, "-Wl,-rpath,/usr/lib/swift");
 	gbString source = gb_string_make(permanent_allocator(), "");
 	String identity = pkg->framework ? pkg->module : pkg->library;
-	bool has_values = false, has_scalar_async = false, has_value_async = false, has_set = false, has_ui = false;
+	bool has_values = false, has_scalar_async = false, has_sync_throwing = false, has_value_async = false, has_set = false, has_ui = false;
 	for (auto type : types) {
 		has_values |= type->supported;
 		has_set |= type->supported && type->kind == SwiftImportValue_Set;
@@ -2269,11 +2315,12 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		has_values |= values;
 		has_scalar_async |= fn.is_async && !values;
 		has_value_async |= fn.is_async && values;
+		has_sync_throwing |= !fn.is_async && fn.is_throwing;
 	}
 	source = gb_string_append_fmt(source, "package swift_%.*s_%llx\n\n",
 		LIT(pkg->module), cast(unsigned long long)fnv64a(identity.text, identity.len));
 	if (has_ui) source = gb_string_appendc(source, "import _swift_ui \"vendor:darwin/UIKit\"\nimport _swift_ns \"core:sys/darwin/Foundation\"\n");
-	if (has_scalar_async) source = gb_string_appendc(source, "import \"base:intrinsics\"\n");
+	if (has_scalar_async || has_sync_throwing) source = gb_string_appendc(source, "import \"base:intrinsics\"\n");
 	if (has_value_async || has_set) source = gb_string_appendc(source, "import \"base:runtime\"\n");
 	for (auto type : types) if (type->supported && type->is_uuid) { source = gb_string_appendc(source, "import _swift_uuid \"core:encoding/uuid\"\n"); break; }
 	if (has_values) source = gb_string_appendc(source, "@(require)\nimport \"core:mem\"\n@(require)\nimport \"core:strings\"\n");
@@ -2301,7 +2348,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			if (type->is_error && type->projected) source = swift_import_emit_error(source, type);
 		}
 	}
-	if (has_throwing) source = swift_import_emit_async_error(source, types);
+	if (has_throwing) source = swift_import_emit_call_error(source, types);
 	for (auto const &fn : functions) {
 		bool values = fn.owner || fn.result.nominal || (fn.is_throwing && !fn.tuple_result);
 		for (auto const &param : fn.parameters) values |= param.type.nominal != nullptr || param.objc_controller;
@@ -2342,7 +2389,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			source = gb_string_append_fmt(source, "task: swift.Task, %.*s", LIT(results));
 			if (fn.is_throwing) {
 				bool has_err = string_starts_with(results, str_lit("err: ")) || swift_import_index(results, str_lit(", err: ")) >= 0;
-				source = gb_string_append_fmt(source, ", %s: Async_Error", has_err ? "_swift_error" : "err");
+				source = gb_string_append_fmt(source, ", %s: Call_Error", has_err ? "_swift_error" : "err");
 			}
 		} else {
 			source = gb_string_appendc(source, "swift.Task");
@@ -2353,7 +2400,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		source = gb_string_appendc(source, " {\n");
 		source = gb_string_append_fmt(source, "\ttask = swift.Task(intrinsics.%s(\"%.*s\", completion",
 			fn.is_throwing ? "swift_async_throwing_call" : "swift_async_call", LIT(fn.symbol));
-		if (fn.is_throwing) source = gb_string_appendc(source, ", _swift_async_error_take");
+		if (fn.is_throwing) source = gb_string_appendc(source, ", _swift_call_error_take");
 		for (auto const &param : fn.parameters) source = gb_string_append_fmt(source, ", %.*s", LIT(param.name));
 		source = gb_string_appendc(source, "))\n\treturn task, task != nil\n}\n\n");
 	}

@@ -25,14 +25,14 @@ gb_internal gbString swift_import_emit_error(gbString source, SwiftImportNominal
 
 // The thrown type is not part of an untyped throws signature. Keep the imported
 // concrete alternatives together, and preserve every other error as an owner.
-gb_internal gbString swift_import_emit_async_error(gbString source, Array<SwiftImportNominal *> const &types) {
-	source = gb_string_appendc(source, "// Nil means success. The callback owns this value; assignment does not copy its owners.\nAsync_Error :: union {\n");
+gb_internal gbString swift_import_emit_call_error(gbString source, Array<SwiftImportNominal *> const &types) {
+	source = gb_string_appendc(source, "// Nil means success. The caller owns each error received by return or callback.\nCall_Error :: union {\n");
 	for (auto type : types) {
 		if (type->supported && type->is_error && type->projected) source = gb_string_append_fmt(source, "\t%.*s,\n", LIT(type->name));
 	}
 	source = gb_string_appendc(source,
 		"\tswift.Unknown_Error,\n\tswift.Error_Conversion_Failed,\n\tswift.Result_Conversion_Failed,\n}\n\n"
-		"Async_Error_destroy :: proc(error: Async_Error, allocator := context.allocator) {\n\tswitch item in error {\n\tcase nil:\n");
+		"Call_Error_destroy :: proc(error: Call_Error, allocator := context.allocator) {\n\tswitch item in error {\n\tcase nil:\n");
 	for (auto type : types) {
 		if (!type->supported || !type->is_error || !type->projected) continue;
 		source = gb_string_append_fmt(source, "\tcase %.*s:\n", LIT(type->name));
@@ -42,7 +42,7 @@ gb_internal gbString swift_import_emit_async_error(gbString source, Array<SwiftI
 		"\tcase swift.Unknown_Error:\n\t\tswift.error_release(item.error)\n"
 		"\tcase swift.Error_Conversion_Failed:\n\t\tswift.error_release(item.error)\n"
 		"\tcase swift.Result_Conversion_Failed:\n\t}\n}\n\n"
-		"@(require_results)\nAsync_Error_copy :: proc(error: Async_Error, allocator := context.allocator) -> (value: Async_Error, ok: bool) #optional_ok {\n"
+		"@(require_results)\nCall_Error_copy :: proc(error: Call_Error, allocator := context.allocator) -> (value: Call_Error, ok: bool) #optional_ok {\n"
 		"\tcontext.allocator = allocator\n\tswitch item in error {\n\tcase nil:\n\t\treturn nil, true\n");
 	for (auto type : types) {
 		if (!type->supported || !type->is_error || !type->projected) continue;
@@ -54,8 +54,8 @@ gb_internal gbString swift_import_emit_async_error(gbString source, Array<SwiftI
 		"\tcase swift.Unknown_Error:\n\t\tif item.error == nil { return }\n\t\treturn swift.Unknown_Error{swift.error_retain(item.error)}, true\n"
 		"\tcase swift.Error_Conversion_Failed:\n\t\tif item.error == nil { return }\n\t\treturn swift.Error_Conversion_Failed{swift.error_retain(item.error)}, true\n"
 		"\tcase swift.Result_Conversion_Failed:\n\t\treturn item, true\n\t}\n\treturn\n}\n\n"
-		"// Consumes the native owner. Projection failure transfers it intact to the callback.\n"
-		"@(private)\n_swift_async_error_take :: proc(error: swift.Error) -> Async_Error {\n\tif error == nil { return nil }\n");
+		"// Consumes the native owner. Projection failure preserves it in the returned union.\n"
+		"@(private)\n_swift_call_error_take :: proc(error: swift.Error) -> Call_Error {\n\tif error == nil { return nil }\n");
 	bool has_concrete = false;
 	for (auto type : types) has_concrete |= type->supported && type->is_error && type->projected;
 	if (has_concrete) {

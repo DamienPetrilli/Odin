@@ -41,9 +41,9 @@ suspended :: proc(task: swift.Task, result: u64) {
 	lifetime_calls += 1
 }
 
-cancel_error :: proc(task: swift.Task, value: fixture.Value, error: fixture.Async_Error) {
+cancel_error :: proc(task: swift.Task, value: fixture.Value, error: fixture.Call_Error) {
 	assert(swift.task_is_cancelled(task) && value == nil && error != nil)
-	fixture.Async_Error_destroy(error)
+	fixture.Call_Error_destroy(error)
 	assert(fixture.live_value_count() == 0)
 	lifetime_calls += 1
 }

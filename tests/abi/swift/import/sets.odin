@@ -23,9 +23,9 @@ empty_set_completed :: proc(task: swift.Task, count: u64) {
 	set_calls += 1
 }
 
-set_cancelled :: proc(task: swift.Task, _: u64, err: fixture.Async_Error) {
+set_cancelled :: proc(task: swift.Task, _: u64, err: fixture.Call_Error) {
 	assert(err != nil && swift.task_is_cancelled(task))
-	fixture.Async_Error_destroy(err)
+	fixture.Call_Error_destroy(err)
 	assert(fixture.live_value_count() == 0)
 	// Release the owned reference returned by the successful start.
 	swift.task_release(task)

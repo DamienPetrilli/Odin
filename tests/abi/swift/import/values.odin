@@ -131,18 +131,18 @@ check_enums :: proc() {
 	assert(fixture.live_value_count() == 0)
 }
 
-check_error :: proc(task: swift.Task, error: fixture.Async_Error) {
+check_error :: proc(task: swift.Task, error: fixture.Call_Error) {
 	expected := take_expected(task)
 	assert((error == nil) == (expected != 0))
 	if error != nil {
-		copy := fixture.Async_Error_copy(error) or_else panic("Error copy")
-		fixture.Async_Error_destroy(error)
-		fixture.Async_Error_destroy(copy)
+		copy := fixture.Call_Error_copy(error) or_else panic("Error copy")
+		fixture.Call_Error_destroy(error)
+		fixture.Call_Error_destroy(copy)
 	}
 	error_calls += 1
 }
 
-checked_value :: proc(task: swift.Task, value: fixture.Value, error: fixture.Async_Error) {
+checked_value :: proc(task: swift.Task, value: fixture.Value, error: fixture.Call_Error) {
 	if error == nil {
 		assert(fixture.Value_value(value) == expected_values[task])
 		fixture.Value_destroy(value)
@@ -152,7 +152,7 @@ checked_value :: proc(task: swift.Task, value: fixture.Value, error: fixture.Asy
 	check_error(task, error)
 }
 
-checked_scalar :: proc(task: swift.Task, value: u64, error: fixture.Async_Error) {
+checked_scalar :: proc(task: swift.Task, value: u64, error: fixture.Call_Error) {
 	assert(value == expected_values[task])
 	check_error(task, error)
 }

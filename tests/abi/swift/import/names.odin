@@ -6,8 +6,8 @@ import cf "core:sys/darwin/CoreFoundation"
 import "core:time"
 
 error_calls: int
-private_error :: proc(task: swift.Task, value: u64, error: fixture.Async_Error) {
-	defer fixture.Async_Error_destroy(error)
+private_error :: proc(task: swift.Task, value: u64, error: fixture.Call_Error) {
+	defer fixture.Call_Error_destroy(error)
 	unknown := error.(swift.Unknown_Error)
 	assert(unknown.error != nil && value == 0)
 	error_calls += 1

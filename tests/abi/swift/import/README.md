@@ -43,16 +43,28 @@ as separate callback parameters. For `asyncTuple(_:) async -> (count: UInt64, re
 the callback is `proc(task: swift.Task, count: u64, ready: bool)`. The task owns
 the result storage through completion. A callback can copy each scalar directly.
 For an untyped throwing function, the callback takes one additional argument,
-`err: Async_Error`. On success it is nil. On failure the scalar arguments
-are zero and the callback owns the error. Use `Async_Error_destroy(err)` after
+`err: Call_Error`. On success it is nil. On failure the scalar arguments
+are zero and the callback owns the error. Use `Call_Error_destroy(err)` after
 inspecting it or transfer ownership to the caller’s state.
 
 A flat async tuple can also contain Swift strings alongside Bool, Int, UInt,
 Int64, UInt64 or Double. The callback owns each Odin string and can keep it
 after releasing the task. Use ordinary `delete` with the captured allocator.
 A nonthrowing callback receives a final `converted: bool`. A throwing callback
-receives `err: Async_Error`. A failed conversion delivers zeroed fields and
+receives `err: Call_Error`. A failed conversion delivers zeroed fields and
 releases any strings already copied.
+
+A synchronous throwing free function returns `value, err`, or just `err` for
+Swift Void. Use `or_return` to forward the owned error. Both a throwing async
+callback and a synchronous caller receive the module's `Call_Error`. A nil
+error makes the result usable. Release a non-nil error with
+`Call_Error_destroy`, or transfer it to the caller. A successful String result
+is an independently owned Odin string. A borrowed scalar buffer remains valid
+for the call, and writes performed before a throw remain visible afterward.
+Direct importers using the former `Async_Error` name must update explicit type
+annotations and copy/destroy calls to `Call_Error`, `Call_Error_copy` and
+`Call_Error_destroy`. StoreKit exposes the same union as `store.Error` when
+imported under the alias `store`.
 
 Swift names become snake case, so `addLater` becomes `add_later`:
 
@@ -309,7 +321,7 @@ remain present. A nested optional preserves each level of absence.
 
 Async allocating enum/optional results add a conversion boolean to completion,
 just like arrays: `proc(task: swift.Task, result: example.Lookup, ok: bool)`.
-With untyped Swift throws, an owned module `Async_Error` replaces the boolean;
+With untyped Swift throws, an owned module `Call_Error` replaces the boolean;
 only a nil error makes the result usable.
 Only a successful conversion transfers an owned result to the callback. Failed
 conversions clean all partially constructed fields; a thrown error leaves no
@@ -341,7 +353,7 @@ defer delete(values)
 
 An async array result adds a final conversion `ok` to its callback:
 `proc(task: swift.Task, values: []u64, ok: bool)`. With Swift `throws`, the signature
-is `proc(task: swift.Task, values: []u64, err: example.Async_Error)`.
+is `proc(task: swift.Task, values: []u64, err: example.Call_Error)`.
 Conversion failure gives an empty slice and `swift.Result_Conversion_Failed`;
 partial copies are cleaned up. A thrown Swift error becomes a concrete or
 fallback union case. Only `err == nil` transfers a usable result. A successful
@@ -407,13 +419,12 @@ conformances or general Swift generics. An explicit empty `Set` default on a
 single-parameter function may be omitted; a second overload accepts an explicit
 slice of candidates. See Set inputs below.
 
-Asynchronous untyped `throws` adds the module's native `Async_Error` union to the
+Asynchronous untyped `throws` adds the module's native `Call_Error` union to the
 completion. Nil means success with a usable result; non-nil means no result to
 destroy. The union includes supported concrete Error enums and explicit fallbacks
 for unknown errors or conversion failures. The callback owns it: use
-`Async_Error_destroy` once, transfer it, or use `Async_Error_copy` for another owner.
-Start rejection still means no callback. Synchronous and typed throws remain
-unsupported. Async MainActor procedures execute on the main executor; this does
+`Call_Error_destroy` once, transfer it, or use `Call_Error_copy` for another owner.
+Start rejection still means no callback. Typed throws remain unsupported. Async MainActor procedures execute on the main executor; this does
 not add an actor or async/await system to Odin.
 
 Full argument-label names distinguish declarations, and a unique supported
@@ -542,7 +553,7 @@ this subset. They are not accepted by assuming equal byte sizes.
 
 ## Callback errors
 
-An untyped throwing callback receives the generated module's `Async_Error`, an
+An untyped throwing callback receives the generated module's `Call_Error`, an
 ordinary nil-capable Odin union. It contains the module's supported concrete Error
 enums, using their existing enum/union representations, and three fallback types:
 
@@ -555,8 +566,8 @@ enums, using their existing enum/union representations, and three fallback types
 | `swift.Result_Conversion_Failed` | Swift returned successfully, but copying the result failed; no error box or result owner. |
 
 Only use/destroy the result when the error is nil. The callback owns the error
-union independently of the task. `defer example.Async_Error_destroy(err)` releases
-its active payload; `Async_Error_copy` creates an independent owner. Assignment
+union independently of the task. `defer example.Call_Error_destroy(err)` releases
+its active payload; `Call_Error_copy` creates an independent owner. Assignment
 only aliases owners. Copy/destroy accept the allocator used for Odin strings/slices;
 opaque native owners remember their allocator. Unknown and failed-projection
 fallbacks retain the original box when copied, without allocating Odin storage.
@@ -567,8 +578,8 @@ public func lookup() async throws -> UInt64 { throw Failure.missing }
 ```
 
 ```odin
-lookup_received :: proc(task: swift.Task, value: u64, err: example.Async_Error) {
-	defer example.Async_Error_destroy(err)
+lookup_received :: proc(task: swift.Task, value: u64, err: example.Call_Error) {
+	defer example.Call_Error_destroy(err)
 	if err == nil {
 		// Use value.
 		return
@@ -591,7 +602,7 @@ lookup_received :: proc(task: swift.Task, value: u64, err: example.Async_Error) 
 }
 ```
 
-Payload errors select their native Odin union within `Async_Error`; switch on that
+Payload errors select their native Odin union within `Call_Error`; switch on that
 value to access associated strings or other data. Destroying the outer union cleans
 those payloads. Frozen payload-free errors are native enums, suitable for ordinary
 enumerated arrays. Nonfrozen errors preserve unknown future cases in their existing
@@ -599,8 +610,8 @@ owned `Type_Unknown` alternative. A future error type not known at build time be
 `swift.Unknown_Error`, so untyped throws never assumes a closed set of types.
 
 The union contains all supported Error enums in the imported module, not a guessed
-per-function throw list. Its names (`Async_Error`, `Async_Error_copy`,
-`Async_Error_destroy`) must not collide with Swift declarations. No Swift shim,
+per-function throw list. Its names (`Call_Error`, `Call_Error_copy`,
+`Call_Error_destroy`) must not collide with Swift declarations. No Swift shim,
 new attribute or application-written ABI declaration is required.
 
 ## Low-level error inspection
@@ -621,8 +632,8 @@ type, and `.Conversion_Failed` means matching data could not be copied. Use/dest
 its output only on nil status. Normal callbacks already perform this projection;
 application code need not call the helper to handle a supported error type.
 It is not Swift's broader bridging cast behavior. Error structs, unsupported
-payloads, synchronous throws and typed throws remain outside the projection subset;
-thrown values with those unsupported representations survive as owned fallbacks.
+payloads and bridging casts remain outside the projection subset. An untyped
+throw preserves an unsupported error value as an owned fallback.
 
 ## Strings
 
@@ -677,7 +688,7 @@ the callback, including when Odin allocation fails. An empty result succeeds wit
 `converted = true` and needs no Odin allocation.
 
 For `async throws -> String`, the callback is
-`proc(task: swift.Task, text: string, err: example.Async_Error)`.
+`proc(task: swift.Task, text: string, err: example.Call_Error)`.
 A thrown Swift error produces empty text and an owned error-union case. A successful
 Swift return followed by output conversion failure produces empty text and
 `swift.Result_Conversion_Failed`. Only nil err transfers an owned string. Neither failure

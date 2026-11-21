@@ -23,8 +23,8 @@ text_pair_received :: proc(task: swift.Task, first, second: string, converted: b
 	request.calls += 1
 }
 
-checked_text_pair_received :: proc(task: swift.Task, first: string, size: int, second: string, ready: bool, err: fixture.Async_Error) {
-	defer fixture.Async_Error_destroy(err)
+checked_text_pair_received :: proc(task: swift.Task, first: string, size: int, second: string, ready: bool, err: fixture.Call_Error) {
+	defer fixture.Call_Error_destroy(err)
 	request := cast(^Text_Pair_Request)context.user_ptr
 	assert(ready == (err == nil) && size == len(first))
 	if request.threw {

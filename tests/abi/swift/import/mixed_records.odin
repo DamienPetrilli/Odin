@@ -34,7 +34,7 @@ bool_tails_received :: proc(task: swift.Task, values: []fixture.BoolTail, conver
 	mixed_record_calls += 1
 }
 
-bool_mixed_checked :: proc(task: swift.Task, value: fixture.BoolMixed, error: fixture.Async_Error) {
+bool_mixed_checked :: proc(task: swift.Task, value: fixture.BoolMixed, error: fixture.Call_Error) {
 	failed := take_expected(task) == 1
 	assert((error != nil) == failed)
 	if failed {
@@ -42,7 +42,7 @@ bool_mixed_checked :: proc(task: swift.Task, value: fixture.BoolMixed, error: fi
 	} else {
 		assert(value == fixture.BoolMixed{true, false, -73, 0.5, true})
 	}
-	fixture.Async_Error_destroy(error)
+	fixture.Call_Error_destroy(error)
 	mixed_record_calls += 1
 }
 

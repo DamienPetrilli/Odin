@@ -9,9 +9,9 @@ foreign import fixture "swift:fixture/SwiftImportFixture"
 
 value_array_calls: int
 
-value_array_received :: proc(task: swift.Task, values: []fixture.Value, error: fixture.Async_Error) {
+value_array_received :: proc(task: swift.Task, values: []fixture.Value, error: fixture.Call_Error) {
 	expected := take_expected(task)
-	defer fixture.Async_Error_destroy(error)
+	defer fixture.Call_Error_destroy(error)
 	if expected == 0 {
 		assert(error != nil && values == nil)
 	} else if expected == 1 {
