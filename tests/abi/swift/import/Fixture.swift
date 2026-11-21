@@ -1383,3 +1383,16 @@ public func oldName(_ value: Async_Error) -> UInt64 {
 	case .busy: return 31
 	}
 }
+
+extension BoolTail {
+	@inline(never) public static func checkedLimit(_ n: Int) throws -> (limit: Int, ready: Bool) {
+		if n < 0 { throw PlainFailure.denied }
+		return (n, true)
+	}
+}
+extension Namespace {
+	public static func checkedLabel(_ index: UInt64) throws -> String {
+		if index == 0 { throw InspectionFailure.message("static lookup failed", 71) }
+		return "label " + String(index)
+	}
+}

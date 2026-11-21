@@ -56,6 +56,7 @@ grep -Fq 'call add_later :: proc(value: u64, delta: u64, completion: proc(swift.
 grep -Fq 'call async_tuple :: proc(count: u64, completion: proc(task: swift.Task, count: u64, ready: bool))' "$build/mappings.txt"
 grep -Fq 'call throwing_tuple :: proc(n: u64, completion: proc(task: swift.Task, count: u64, ready: bool, err: Call_Error))' "$build/mappings.txt"
 grep -Fq 'call throwing_packed_tuple :: proc(n: u8, completion: proc(task: swift.Task, err: u8, err_: bool, value_2: u8, value_3: u8, value_4: u8, _swift_error: Call_Error))' "$build/mappings.txt"
+grep -Fq 'call BoolTail_checked_limit :: proc(n: int) -> (limit: int, ready: bool, err: Call_Error)' "$build/mappings.txt"
 grep -Fq 'call checked_bounds :: proc(n: u64) -> (count: u64, ready: bool, err: Call_Error)' "$build/mappings.txt"
 grep -Fq 'call checked_packed :: proc(err: u8) -> (arg0: u8, value_1: bool, value_2: u16, _swift_error: Call_Error)' "$build/mappings.txt"
 grep -Fq 'call checked_unnamed :: proc(value_0: u8) -> (_swift_value_0: u8, value_2: bool, _swift_value_2: u16, err: Call_Error)' "$build/mappings.txt"
@@ -125,7 +126,7 @@ expect_diagnostic "'text_bounds': tuple results with converted parameters are un
 expect_diagnostic "'checked_input': synchronous throws with converted arguments is unsupported"
 expect_diagnostic "'checked_output': synchronous throws currently supports scalar, scalar tuple, Void and String results"
 expect_diagnostic "'checked_typed': typed throws is unsupported"
-expect_diagnostic "'Value_checked_method': synchronous throws currently requires a non-generic free function"
+expect_diagnostic "'Value_checked_method': synchronous throws requires a non-generic free function or static method"
 expect_diagnostic "'tuple_case_collision': tuple result labels collide after Odin name conversion"
 platform=iOS
 introduced=18.2

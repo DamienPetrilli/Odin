@@ -157,6 +157,7 @@ check_throwing_tuples :: proc() {
 
 check_typed_errors :: proc() {
 	check_throwing_tuples()
+	check_throwing_static()
 	assert(fixture.old_name(.Idle) == 17 && fixture.old_name(.Busy) == 31)
 	before := fixture.live_value_count()
 	for selection in 0..<12 {
@@ -297,4 +298,23 @@ check_typed_errors :: proc() {
 		}
 		assert(failures != 0 && successes != 0)
 	}
+}
+
+check_throwing_static :: proc() {
+	limit, ready, err := fixture.BoolTail_checked_limit(79)
+	assert(err == nil && limit == 79 && ready)
+	limit, ready, err = fixture.BoolTail_checked_limit(-1)
+	assert(limit == 0 && !ready && err.(fixture.PlainFailure) == .Denied)
+	fixture.Call_Error_destroy(err)
+
+	label, text_err := fixture.Namespace_checked_label(17)
+	assert(text_err == nil && label == "label 17")
+	delete(label)
+	label, text_err = fixture.Namespace_checked_label(0)
+	assert(label == "")
+	duplicate := fixture.Call_Error_copy(text_err) or_else panic("Error copy failed")
+	fixture.Call_Error_destroy(text_err)
+	message := duplicate.(fixture.InspectionFailure).(fixture.InspectionFailure_Message)
+	assert(message.value_0 == "static lookup failed" && message.value_1 == 71)
+	fixture.Call_Error_destroy(duplicate)
 }

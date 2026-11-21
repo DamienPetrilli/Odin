@@ -48,6 +48,12 @@ Tuple labels describe the results in the import report. All results can be
 assigned positionally, including a Swift field that itself is named `err`.
 Tuples with String fields currently require an async call.
 
+A static method takes no receiver at the Odin call site. For example,
+`limit, ready, err := fixture.BoolTail_checked_limit(79)` calls the
+Swift type's `static func checkedLimit(_:) throws` directly. The importer
+checks that Swift itself supplies an unused context argument. A method
+requiring a metatype there is skipped with a diagnostic.
+
 A nonthrowing async free function returning numeric or Bool scalars delivers them
 as separate callback parameters. For `asyncTuple(_:) async -> (count: UInt64, ready: Bool)`,
 the callback is `proc(task: swift.Task, count: u64, ready: bool)`. The task owns
@@ -64,7 +70,7 @@ A nonthrowing callback receives a final `converted: bool`. A throwing callback
 receives `err: Call_Error`. A failed conversion delivers zeroed fields and
 releases any strings already copied.
 
-A synchronous throwing free function returns `value, err`, or just `err` for
+A synchronous throwing free function or static method returns `value, err`, or just `err` for
 Swift Void. Use `or_return` to forward the owned error. Both a throwing async
 callback and a synchronous caller receive the module's `Call_Error`. A nil
 error makes the result usable. Release a non-nil error with

@@ -595,8 +595,8 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 	auto elements = swift_import_array(api, "children");
 	fn->rejection = str_lit("tuple results require supported scalar or String elements");
 	if (elements.count < 2) return false;
-	if (fn->owner) {
-		fn->rejection = str_lit("tuple results currently require a free function");
+	if (fn->owner && !(fn->is_static && fn->is_throwing && !fn->is_async)) {
+		fn->rejection = str_lit("tuple results currently require a free function or a synchronous throwing static method");
 		return false;
 	}
 	bool managed = false;
@@ -793,8 +793,8 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		return false;
 	}
 	if (fn->is_collection && (!fn->is_async || fn->is_initializer || fn->is_property || (fn->owner && !fn->is_static))) return false;
-	if (fn->is_throwing && !fn->is_async && (fn->owner || fn->is_collection)) {
-		fn->rejection = str_lit("synchronous throws currently requires a non-generic free function");
+	if (fn->is_throwing && !fn->is_async && ((fn->owner && (!fn->is_static || fn->is_property)) || fn->is_collection)) {
+		fn->rejection = str_lit("synchronous throws requires a non-generic free function or static method");
 		return false;
 	}
 	if (fn->is_throwing && (swift_import_index(fn->signature, str_lit("throws(")) >= 0 || swift_import_index(fn->signature, str_lit("throws (")) >= 0)) {
@@ -1098,6 +1098,18 @@ gb_internal bool swift_import_has_receiver(SwiftImportFunction const &fn) {
 	return fn.owner && !fn.is_static && !fn.is_initializer && !fn.value_receiver;
 }
 
+// A static member may need a metatype in swiftself. Only synthesize undef
+// when the Swift compiler's own calls use it in exactly that position.
+gb_internal bool swift_import_unused_context(LLVMValueRef fn, unsigned index) {
+	if (!fn || !LLVMGetFirstUse(fn)) return false;
+	for (auto use = LLVMGetFirstUse(fn); use; use = LLVMGetNextUse(use)) {
+		LLVMValueRef call = LLVMGetUser(use);
+		if (!(LLVMIsACallInst(call) || LLVMIsAInvokeInst(call)) || LLVMGetCalledValue(call) != fn ||
+		    index >= LLVMGetNumArgOperands(call) || !LLVMIsUndef(LLVMGetOperand(call, index))) return false;
+	}
+	return true;
+}
+
 gb_internal bool swift_import_kind(SwiftImportType const &type, SwiftImportValueKind kind) {
 	return type.nominal && type.nominal->kind == kind;
 }
@@ -1363,7 +1375,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 			if (fn.result.odin) source = gb_string_append_fmt(source, " -> (%s, Call_Error)", fn.result.odin);
 			else source = gb_string_appendc(source, " -> Call_Error");
 			swift_import_report_function(report, fn, native_name, source, signature_start);
-			// A non-generic free function has no receiver. Swift passes undef
+			// These calls have no receiver. Swift passes undef
 			// for swiftself here and an initialized, writable error slot.
 			source = gb_string_append_fmt(source, " {\n\t_swift_error: rawptr\n\t_swift_context: rawptr = ---\n\t%s_swift_%.*s_native(%s%s_swift_context, &_swift_error)\n",
 				fn.result.odin ? "_swift_value := " : "", LIT(native_name), arguments, gb_string_length(arguments) ? ", " : "");
@@ -2194,6 +2206,9 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		}
 		if (receiver) declaration = gb_string_append_fmt(declaration, "%s%s", count ? ", " : "", fn.is_mutating ? "ptr swiftself" : "ptr noalias swiftself");
 		if (fn.is_throwing && !fn.is_async) {
+			if (!reason.len && fn.is_static && !swift_import_unused_context(native, native_index)) {
+				reason = str_lit("Swift static method requires a native context value");
+			}
 			// Swift receives a writable pointer-sized error slot. Verify its extent
 			// before normalizing optional optimizer attributes for the exact match.
 			if (!native || LLVMCountParams(native) != native_index+2 ||
