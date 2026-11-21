@@ -1119,6 +1119,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		else if (fn.result.odin) source = gb_string_append_fmt(source, " -> %s", fn.result.odin);
 		swift_import_report_function(report, fn, native_name, source, signature_start);
 		source = gb_string_appendc(source, " {\n");
+		gbString release_inputs = nullptr;
 		bool consumes = false;
 		for (auto const &param : fn.parameters) consumes |= param.consumed && !param.empty_set;
 		if (consumes) source = gb_string_appendc(source, "\t_swift_called := false\n");
@@ -1152,7 +1153,15 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 				source = gb_string_append_fmt(source, "\tdefer %sswift.set_destroy(_swift_arg%td)%s\n", param.consumed ? "if !_swift_called { " : "", i, param.consumed ? " }" : "");
 			} else if (swift_import_slice(param.type.nominal)) {
 				source = gb_string_append_fmt(source, "\t_swift_arg%td := %.*s or_return\n", i, LIT(swift_import_array_from(param.type.nominal, param.name)));
-				source = gb_string_append_fmt(source, "\tdefer %sswift.array_destroy(_swift_arg%td)%s\n", param.consumed ? "if !_swift_called { " : "", i, param.consumed ? " }" : "");
+				// An owned result may share the input array. Drop the temporary
+				// reference before checking whether its elements can be taken.
+				if (param.type.nominal == fn.result.nominal && !param.consumed && swift_import_native_owns(swift_import_nominal_type(param.type.nominal->argument))) {
+					source = gb_string_append_fmt(source, "\tdefer if _swift_arg%td.storage != nil { swift.array_destroy(_swift_arg%td) }\n", i, i);
+					if (!release_inputs) release_inputs = gb_string_make(temporary_allocator(), "");
+					release_inputs = gb_string_append_fmt(release_inputs, "\tswift.array_destroy(_swift_arg%td)\n\t_swift_arg%td = {}\n", i, i);
+				} else {
+					source = gb_string_append_fmt(source, "\tdefer %sswift.array_destroy(_swift_arg%td)%s\n", param.consumed ? "if !_swift_called { " : "", i, param.consumed ? " }" : "");
+				}
 			} else if (param.type.nominal) {
 				source = gb_string_append_fmt(source, "\tassert(%.*s != nil, \"Cannot borrow a nil Swift value\")\n", LIT(param.name));
 				if (param.consumed) source = gb_string_append_fmt(source, "\t_swift_arg%td := swift.value_copy(rawptr(%.*s), _swift_%.*s_metadata(0).type) or_return\n", i, LIT(param.name), LIT(param.type.nominal->name));
@@ -1169,6 +1178,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		char const *assignment = !fn.result.odin || indirect_result || empty_result ? "" : projected_result ? "_swift_storage = " : owned_result ? "(cast(^rawptr)_swift_storage)^ = " : "_swift_value := ";
 		source = gb_string_append_fmt(source, "\t%s_swift_%.*s_native(%s%s%s)\n", assignment, LIT(native_name), indirect_result ? (fixed_result ? "&_swift_storage" : "_swift_storage") : "", indirect_result && gb_string_length(arguments) ? ", " : "", arguments);
 		if (consumes) source = gb_string_appendc(source, "\t_swift_called = true\n");
+		if (release_inputs) source = gb_string_appendc(source, release_inputs);
 		if (projected_result) {
 			source = gb_string_append_fmt(source, "\t_swift_result_value, _swift_converted := _swift_%.*s_take(%s_swift_storage%s)\n", LIT(fn.result.nominal->name), fixed_result ? "&" : "", fn.result.nominal->is_date ? ", _swift_date_layout" : fn.result.nominal->is_uuid ? ", _swift_uuid_layout" : "");
 			if (fallible) source = gb_string_appendc(source, "\treturn _swift_result_value, _swift_converted\n");

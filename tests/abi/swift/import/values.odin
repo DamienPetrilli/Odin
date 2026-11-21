@@ -10,6 +10,7 @@ Value_Allocator :: struct {
 	backing: mem.Allocator,
 	allocations, frees: int,
 	remaining: int,
+	unique_input: fixture.Value,
 }
 
 Allocation_Header :: struct {
@@ -27,6 +28,7 @@ value_allocator :: proc(
 	state := cast(^Value_Allocator)data
 	#partial switch mode {
 	case .Alloc, .Alloc_Non_Zeroed:
+		if state.unique_input != nil { assert(fixture.Value_unique_lifetime(state.unique_input)) }
 		if state.remaining == 0 { return nil, .Out_Of_Memory }
 		if state.remaining > 0 { state.remaining -= 1 }
 		align := max(alignment, align_of(Allocation_Header))

@@ -56,6 +56,24 @@ check_value_arrays :: proc() {
 		fixture.Array_Value_destroy(copy)
 		assert(fixture.live_value_count() == 0 && state.allocations == state.frees)
 	}
+	// The input array temporarily retains the value. Its last use is the
+	// Swift call. The Odin output allocator should see the sole owner again.
+	item := fixture.Value_init(17) or_else panic("Input lifetime")
+	assert(fixture.Value_unique_lifetime(item))
+	_, valid_label := fixture.summarize_values([]fixture.Value{item}, "\xff")
+	assert(!valid_label && fixture.Value_unique_lifetime(item))
+	state.unique_input = item
+	counts := fixture.summarize_values([]fixture.Value{item}, "count") or_else panic("Counts")
+	assert(len(counts) == 1 && fixture.Value_value(counts[0]) == 1)
+	fixture.Array_Value_destroy(counts)
+	state.remaining = 0
+	failed_counts, counts_ok := fixture.summarize_values([]fixture.Value{item}, "count")
+	assert(!counts_ok && failed_counts == nil)
+	state.remaining = -1
+	state.unique_input = nil
+	fixture.Value_destroy(item)
+	assert(fixture.live_value_count() == 0 && state.allocations == state.frees)
+
 	// Single-element output keeps a standalone owner after deleting its slice.
 	single := fixture.make_values(1) or_else panic("Single owner")
 	single_value := single[0]

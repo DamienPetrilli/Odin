@@ -166,7 +166,8 @@ public func liveValueCount() -> UInt64 {
 // Resilient, nontrivial values must use metadata and value witnesses. The
 // array checks copy-on-write while Lifetime checks retain/destroy balance.
 public struct Value {
-	private let lifetime = Lifetime()
+	private var lifetime = Lifetime()
+	public mutating func uniqueLifetime() -> Bool { isKnownUniquelyReferenced(&lifetime) }
 	private var storage: [UInt64]
 	public init(_ value: UInt64) { storage = [value, 0x123456789abcdef0] }
 	public var value: UInt64 { storage[0] }
@@ -481,6 +482,10 @@ public func incrementValues(_ values: [Value], _ amount: UInt64) -> [Value] {
 	var result = values
 	for index in result.indices { result[index].increment(amount) }
 	return result
+}
+public func summarizeValues(_ values: [Value], _ label: String) -> [Value] {
+	precondition(label == "count")
+	return [Value(UInt64(values.count))]
 }
 public func sumValues(_ values: [Value]) -> UInt64 {
 	values.reduce(0) { $0 &+ $1.value }
