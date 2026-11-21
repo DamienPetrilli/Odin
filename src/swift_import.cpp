@@ -92,6 +92,8 @@ struct SwiftImportNominal {
 	Array<SwiftImportType> components;
 	u64 size, alignment, stride;
 	bool projected, owns, resolving, resolved, static_metadata;
+	LLVMValueRef tuple_load; // Valid only while inspecting this module.
+	bool is_tuple; // Structural storage used only by a managed tuple result.
 	SwiftImportValueKind kind;
 	bool supported, is_enum, is_frozen, is_template, is_optional, is_scalar, is_record, is_date, is_uuid, is_error;
 };
@@ -121,6 +123,7 @@ struct SwiftImportFunction {
 	Array<SwiftImportParameter> parameters;
 	SwiftImportType result;
 	Type *tuple_result;
+	String tuple_fields; // Named Odin results for a tuple requiring conversion.
 	bool is_async;
 	bool is_throwing;
 	bool is_mutating;
@@ -586,17 +589,23 @@ gb_internal bool swift_import_borrowed_parameter(JsonValue *api, Slice<JsonValue
 gb_internal Type *swift_abi_scalar_tuple(char const **odin_names, isize count);
 gb_internal char const *swift_abi_tuple_result_llvm(Type *tuple);
 gb_internal LLVMTypeRef swift_abi_tuple_storage(LLVMValueRef fn, LLVMTargetDataRef layout, Type *tuple);
-gb_internal bool swift_abi_async_tuple(LLVMValueRef fn, LLVMTargetDataRef layout, Type *tuple, bool throwing);
-gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *fn) {
+gb_internal bool swift_abi_async_tuple(LLVMValueRef fn, LLVMTargetDataRef layout, Type *tuple, bool throwing, LLVMValueRef load);
+gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *fn, Array<SwiftImportNominal *> *nominals) {
 	auto elements = swift_import_array(api, "children");
-	fn->rejection = str_lit("tuple results require numeric or Bool scalars");
+	fn->rejection = str_lit("tuple results require supported scalar or String elements");
 	if (elements.count < 2) return false;
 	if (fn->owner) {
 		fn->rejection = str_lit("tuple results currently require a free function");
 		return false;
 	}
+	bool managed = false;
+	for (auto element : elements) managed |= swift_import_string(element, "usr") == "s:SS";
+	if (managed && !fn->is_async) {
+		fn->rejection = str_lit("Swift String tuple results currently require an async function");
+		return false;
+	}
 	for (auto const &p : fn->parameters) {
-		if (p.type.nominal || p.objc_controller) {
+		if (!managed && (p.type.nominal || p.objc_controller)) {
 			fn->rejection = str_lit("tuple results with converted parameters are unsupported");
 			return false;
 		}
@@ -612,7 +621,13 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 	bool named = fn->is_async;
 	for_array(i, elements) {
 		SwiftImportType &type = types[i];
-		if (!swift_import_scalar(swift_import_string(elements[i], "usr"), &type)) return false;
+		if (swift_import_string(elements[i], "usr") == "s:SS") {
+			if (!swift_import_api_type(elements[i], &type, nominals)) return false;
+		} else if (!swift_import_scalar(swift_import_string(elements[i], "usr"), &type)) return false;
+		if (managed && type.scalar_only) {
+			fn->rejection = str_lit("narrow scalar fields in a Swift String tuple require verified aggregate layout");
+			return false;
+		}
 		String item = string_trim_whitespace(string_split_iterator(&it, ','));
 		isize colon = swift_import_index(item, str_lit(":"));
 		if (colon >= 0) {
@@ -651,6 +666,32 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 		}
 		odin = gb_string_appendc(odin, types[i].odin);
 		fields[i] = types[i].odin;
+	}
+	if (managed) {
+		String spelling = make_string_c(gb_string_appendc(swift, ")"));
+		SwiftImportNominal *tuple = nullptr;
+		for (auto type : *nominals) {
+			if (type->is_tuple && type->swift_name == spelling) { tuple = type; break; }
+		}
+		if (!tuple) {
+			tuple = gb_alloc_item(permanent_allocator(), SwiftImportNominal);
+			*tuple = {};
+			tuple->name = make_string_c(gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "_swift_tuple_%td", nominals->count));
+			tuple->swift_name = spelling;
+			tuple->kind = SwiftImportValue_Opaque;
+			tuple->owns = tuple->is_record = tuple->is_tuple = true;
+			array_init(&tuple->fields, permanent_allocator());
+			for_array(i, types) {
+				String position = make_string_c(gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "%td", i));
+				String member = concatenate_strings(permanent_allocator(), str_lit("v"), position);
+				array_add(&tuple->fields, SwiftImportField{member, types[i]});
+			}
+			array_add(nominals, tuple);
+		}
+		fn->result = swift_import_nominal_type(tuple);
+		fn->tuple_fields = make_string(cast(u8 *)odin+1, gb_string_length(odin)-1);
+		fn->rejection = {};
+		return true;
 	}
 	fn->tuple_result = swift_abi_scalar_tuple(fields.data, fields.count);
 	if (!fn->tuple_result) return false;
@@ -834,7 +875,7 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		fn->rejection = str_lit("Set results are not supported; only Set parameters map to Odin slices");
 		return false;
 	}
-	return it.pos == labels.len && (!tuple || swift_import_tuple_result(api_types[0], fn));
+	return it.pos == labels.len && (!tuple || swift_import_tuple_result(api_types[0], fn, types));
 }
 
 gb_internal bool swift_import_has_line(String text, String wanted, bool prefix) {
@@ -887,6 +928,19 @@ gb_internal bool swift_import_ownership(String sil, SwiftImportFunction *fn) {
 		if (fn->record_inout) {
 			String self = string_trim_whitespace(string_split_iterator(&parameters, ','));
 			if (!string_starts_with(self, str_lit("@inout ")) || parameters.pos != parameters.str.len) return false;
+		}
+		if (fn->tuple_fields.len) {
+			// SIL flattens a tuple. Each String must transfer an owner independently.
+			gbString expected = gb_string_make(temporary_allocator(), "-> (");
+			for_array(i, fn->result.nominal->fields) {
+				auto const &field = fn->result.nominal->fields[i];
+				String swift = make_string_c(field.type.swift);
+				if (!string_starts_with(swift, str_lit("Swift."))) return false;
+				expected = gb_string_append_fmt(expected, "%s%s%.*s", i ? ", " : "",
+					swift_import_native_owns(field.type) ? "@owned " : "", LIT(substring(swift, 6, swift.len)));
+			}
+			expected = gb_string_appendc(expected, fn->is_throwing ? ", @error any Error)" : ")");
+			return string_trim_whitespace(substring(line, end+1, line.len)) == make_string_c(expected);
 		}
 		if (swift_import_native_owns(fn->result)) {
 			String result = string_trim_whitespace(substring(line, end+1, line.len));
@@ -1153,7 +1207,9 @@ gb_internal void swift_import_report_function(Array<String> *report, SwiftImport
 		if (fn.result.nominal && fn.result.nominal->is_optional) row = gb_string_appendc(row, "; nil is an absent value on success");
 		row = gb_string_appendc(row, "\n");
 	}
-	if (swift_import_owns(fn.result)) {
+	if (fn.tuple_fields.len) {
+		row = gb_string_appendc(row, "  owned result: delete each returned string with the result allocator\n");
+	} else if (swift_import_owns(fn.result)) {
 		row = gb_string_appendc(row, "  owned result: ");
 		row = swift_import_emit_destroy(row, fn.result, str_lit("result"));
 	}
@@ -1339,10 +1395,20 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	if (string_starts_with(name, str_lit("_swift_"))) source = gb_string_appendc(source, "@(private)\n");
 	source = gb_string_append_fmt(source, "@(require_results)\n%.*s :: proc", LIT(name));
 	isize signature_start = gb_string_length(source);
-	source = gb_string_append_fmt(source, "(%s%scompletion: proc(swift.Task", params, gb_string_length(params) ? ", " : "");
-	if (fn.result.odin) source = gb_string_append_fmt(source, ", %s", fn.result.odin);
-	if (fn.is_throwing) source = gb_string_appendc(source, ", Async_Error");
-	if (converted_result && !fn.is_throwing) source = gb_string_appendc(source, ", bool");
+	if (fn.tuple_fields.len) {
+		String fields = fn.tuple_fields;
+		bool collision = fn.is_throwing
+			? string_starts_with(fields, str_lit("err: ")) || swift_import_index(fields, str_lit(", err: ")) >= 0
+			: string_starts_with(fields, str_lit("converted: ")) || swift_import_index(fields, str_lit(", converted: ")) >= 0;
+		char const *status = fn.is_throwing ? (collision ? "_swift_error: Async_Error" : "err: Async_Error")
+		                                   : (collision ? "_swift_converted: bool" : "converted: bool");
+		source = gb_string_append_fmt(source, "(%s%scompletion: proc(task: swift.Task, %.*s, %s", params, gb_string_length(params) ? ", " : "", LIT(fields), status);
+	} else {
+		source = gb_string_append_fmt(source, "(%s%scompletion: proc(swift.Task", params, gb_string_length(params) ? ", " : "");
+		if (fn.result.odin) source = gb_string_append_fmt(source, ", %s", fn.result.odin);
+		if (fn.is_throwing) source = gb_string_appendc(source, ", Async_Error");
+		if (converted_result && !fn.is_throwing) source = gb_string_appendc(source, ", bool");
+	}
 	source = gb_string_appendc(source, ")) -> (task: swift.Task, ok: bool) #optional_ok");
 	swift_import_report_function(report, fn, native_name, source, signature_start);
 	source = gb_string_appendc(source, " {\n\tif completion == nil");
@@ -1438,7 +1504,9 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		if (converted_result) source = gb_string_appendc(source, "\t\tif error == nil && !converted { error = swift.Result_Conversion_Failed{} }\n");
 	}
 	source = gb_string_appendc(source, "\t\tcapture.completion(swift.Task(runtime.swift_async_current())");
-	if (string_result || slice_result || projected_result) source = gb_string_appendc(source, ", result");
+	if (fn.tuple_fields.len) {
+		for (auto const &field : fn.result.nominal->fields) source = gb_string_append_fmt(source, ", result.%.*s", LIT(field.name));
+	} else if (string_result || slice_result || projected_result) source = gb_string_appendc(source, ", result");
 	else if (fn.result.odin) source = gb_string_append_fmt(source, ", %s(capture.result)", fn.result.odin);
 	if (fn.is_throwing) source = gb_string_appendc(source, ", error");
 	if (converted_result && !fn.is_throwing) source = gb_string_appendc(source, ", converted");
@@ -1449,7 +1517,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 gb_internal bool swift_import_check_type_names(Ast *node, Array<SwiftImportNominal *> const &types) {
 	for_array(i, types) {
 		auto type = types[i];
-		if (type->is_scalar) continue;
+		if (type->is_scalar || type->is_tuple) continue;
 		if (swift_import_reserved_name(type->name)) {
 			syntax_error(node, "Swift import: type '%.*s' conflicts with a name used by generated Odin declarations", LIT(type->name));
 			return false;
@@ -1826,7 +1894,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		if (types[i]->is_date) probe = swift_import_date_probe(probe, types[i], i);
 		if (types[i]->is_uuid) probe = swift_import_uuid_probe(probe, types[i], i);
 		if (types[i]->kind == SwiftImportValue_Set) probe = swift_import_set_probe(probe, types[i], i);
-		probe = gb_string_append_fmt(probe, "@_silgen_name(\"odin_swift_import_metadata_%td\")\npublic func metadata_%td() -> Any.Type { %.*s.self }\n", i, i, LIT(types[i]->swift_name));
+		if (!types[i]->is_tuple) probe = gb_string_append_fmt(probe, "@_silgen_name(\"odin_swift_import_metadata_%td\")\npublic func metadata_%td() -> Any.Type { %.*s.self }\n", i, i, LIT(types[i]->swift_name));
 		if ((types[i]->is_enum && types[i]->cases.count) || types[i]->is_record) {
 			probe = gb_string_append_fmt(probe,
 				"@_silgen_name(\"odin_swift_import_load_%td\")\npublic func load_%td(_ value: Swift.UnsafePointer<%.*s>) -> %.*s { value.pointee }\n"
@@ -1912,7 +1980,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	for_array(i, types) {
 		auto type = types[i];
 		if (type->is_template) continue;
-		if (type->is_scalar) {
+		if (type->is_tuple || type->is_scalar) {
 			type->supported = true;
 		} else if (type->kind == SwiftImportValue_String) {
 			type->supported = swift_import_has_line(ir, str_lit("@\"$sSSN\" = external global %swift.type"), true);
@@ -1939,6 +2007,12 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		if (type->kind == SwiftImportValue_Set) type->supported &= swift_import_set_layout(inspection, layout, sil, type, i);
 		if (type->is_enum) type->supported &= swift_import_enum_layout(inspection, layout, type, i);
 		if (type->is_record) swift_import_struct_layout(inspection, layout, type, i);
+		if (type->is_tuple) {
+			type->supported = type->projected;
+			for (auto const &field : type->fields) {
+				if (field.type.nominal) type->supported &= field.type.nominal->supported;
+			}
+		}
 		if (type->is_enum && !type->is_frozen) {
 			for (auto const &c : type->cases) {
 				if (!c.available) continue;
@@ -1985,7 +2059,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			reason = str_lit("unsupported Swift receiver representation");
 		}
 		if (!reason.len && fn.result.nominal && !fn.result.nominal->supported) {
-			reason = swift_import_type_rejection(api_types.count ? api_types[0] : nullptr);
+			reason = fn.tuple_fields.len ? str_lit("Swift String tuple field offsets or native result registers could not be verified") : swift_import_type_rejection(api_types.count ? api_types[0] : nullptr);
 		}
 		for_array(i, fn.parameters) {
 			auto const &param = fn.parameters[i];
@@ -2056,7 +2130,8 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		}
 		if (receiver) declaration = gb_string_append_fmt(declaration, "%s%s", count ? ", " : "", fn.is_mutating ? "ptr swiftself" : "ptr noalias swiftself");
 		declaration = gb_string_appendc(declaration, ")");
-		if (!reason.len && fn.is_async && fn.tuple_result && !swift_abi_async_tuple(native, layout, fn.tuple_result, fn.is_throwing))
+		if (!reason.len && fn.is_async && (fn.tuple_result || fn.tuple_fields.len) &&
+		    !swift_abi_async_tuple(native, layout, fn.tuple_result, fn.is_throwing, fn.tuple_fields.len ? fn.result.nominal->tuple_load : nullptr))
 			reason = str_lit("unsupported native Swift async tuple continuation or result layout");
 		String exported = concatenate_strings(permanent_allocator(), str_lit(" _"), fn.symbol);
 		char *native_declaration = record_parameters && native ? LLVMPrintValueToString(native) : nullptr;
@@ -2100,7 +2175,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		}
 	}
 	for (auto type : types) {
-		if (!type->supported || type->is_scalar || type->kind == SwiftImportValue_Set || type->kind == SwiftImportValue_String || (swift_import_slice(type) && !swift_import_value_slice(type))) continue;
+		if (!type->supported || type->is_scalar || type->is_tuple || type->kind == SwiftImportValue_Set || type->kind == SwiftImportValue_String || (swift_import_slice(type) && !swift_import_value_slice(type))) continue;
 		if (!swift_import_add_name(node, &names, type->name)) return false;
 		if (type->is_date || type->is_uuid) continue;
 		if (type->is_error && type->projected && !swift_import_add_name(node, &names, concatenate_strings(permanent_allocator(), type->name, str_lit("_from_error")))) return false;
@@ -2218,7 +2293,9 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	}
 	source = swift_import_emit_enum_tags(source, types);
 	for (auto type : types) {
-		if (type->supported) {
+		if (type->supported && type->is_tuple) {
+			source = swift_import_emit_owned_struct(source, type);
+		} else if (type->supported) {
 			source = swift_import_emit_type(source, type);
 			if (report && !type->is_scalar && !type->is_template) swift_import_report_type(report, type);
 			if (type->is_error && type->projected) source = swift_import_emit_error(source, type);

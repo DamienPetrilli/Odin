@@ -37,9 +37,14 @@ gb_internal void swift_import_struct_fields(SwiftImportNominal *type, JsonValue 
 gb_internal gbString swift_import_struct_probe(gbString source, SwiftImportNominal *type, isize index) {
 	for_array(i, type->fields) {
 		auto const &field = type->fields[i];
-		source = gb_string_append_fmt(source,
-			"@_silgen_name(\"odin_swift_import_field_%td_%td\")\npublic func field_%td_%td(_ value: Swift.UnsafePointer<%.*s>) -> %s { value.pointee.`%.*s` }\n",
-			index, i, index, i, LIT(type->swift_name), field.type.swift, LIT(field.swift_name));
+		source = gb_string_append_fmt(source, "@_silgen_name(\"odin_swift_import_field_%td_%td\")\npublic func field_%td_%td(", index, i, index, i);
+		if (type->is_tuple) {
+			// inout lets the field probe project the original storage. Loading the
+			// entire tuple can introduce outlined copies of every String owner.
+			source = gb_string_append_fmt(source, "_ value: inout %.*s) -> %s { value.%td }\n", LIT(type->swift_name), field.type.swift, i);
+		} else {
+			source = gb_string_append_fmt(source, "_ value: Swift.UnsafePointer<%.*s>) -> %s { value.pointee.`%.*s` }\n", LIT(type->swift_name), field.type.swift, LIT(field.swift_name));
+		}
 	}
 	return gb_string_append_fmt(source,
 		"@_silgen_name(\"odin_swift_import_stride_%td\")\npublic func stride_%td() -> Swift.Int { Swift.MemoryLayout<%.*s>.stride }\n",
@@ -182,6 +187,7 @@ gb_internal String swift_import_struct_address(SwiftImportField const &field) {
 
 gb_internal gbString swift_import_emit_owned_struct(gbString source, SwiftImportNominal *type) {
 	String name = type->name;
+	if (type->is_tuple) source = gb_string_appendc(source, "@(private)\n");
 	source = gb_string_append_fmt(source, "%.*s :: struct {\n", LIT(name));
 	for (auto const &field : type->fields) source = gb_string_append_fmt(source, "\t%.*s: %s,\n", LIT(field.name), field.type.odin);
 	source = gb_string_append_fmt(source, "}\n@(private)\n_swift_native_%.*s :: struct ", LIT(name));
@@ -189,14 +195,17 @@ gb_internal gbString swift_import_emit_owned_struct(gbString source, SwiftImport
 		source = gb_string_appendc(source, "{\n");
 		for_array(i, type->components) source = gb_string_append_fmt(source, "\tr%td: %s,\n", i, type->components[i].odin);
 	} else source = gb_string_append_fmt(source, "#align(%llu) {\n\tbytes: [%llu]u8,\n", cast(unsigned long long)type->alignment, cast(unsigned long long)type->size);
-	source = gb_string_append_fmt(source, "}\n@(private)\n_swift_%.*s_initialize :: proc(storage: rawptr, value: %.*s) -> (ok: bool) {\n", LIT(name), LIT(name));
-	for (auto const &field : type->fields) {
-		String address = swift_import_struct_address(field);
-		String value = concatenate_strings(permanent_allocator(), str_lit("value."), field.name);
-		source = swift_import_emit_initialize_field(source, field.type, value, address);
-		if (swift_import_native_owns(field.type)) source = gb_string_append_fmt(source, "defer if !ok { swift.value_deinitialize(%.*s, %.*s) }\n", LIT(address), LIT(swift_import_metadata(field.type)));
+	if (!type->is_tuple) {
+		source = gb_string_append_fmt(source, "}\n@(private)\n_swift_%.*s_initialize :: proc(storage: rawptr, value: %.*s) -> (ok: bool) {\n", LIT(name), LIT(name));
+		for (auto const &field : type->fields) {
+			String address = swift_import_struct_address(field);
+			String value = concatenate_strings(permanent_allocator(), str_lit("value."), field.name);
+			source = swift_import_emit_initialize_field(source, field.type, value, address);
+			if (swift_import_native_owns(field.type)) source = gb_string_append_fmt(source, "defer if !ok { swift.value_deinitialize(%.*s, %.*s) }\n", LIT(address), LIT(swift_import_metadata(field.type)));
+		}
+		source = gb_string_appendc(source, "return true\n");
 	}
-	source = gb_string_append_fmt(source, "return true\n}\n@(private)\n_swift_%.*s_take :: proc(storage: rawptr) -> (result: %.*s, ok: bool) #optional_ok {\n", LIT(name), LIT(name));
+	source = gb_string_append_fmt(source, "}\n@(private)\n_swift_%.*s_take :: proc(storage: rawptr) -> (result: %.*s, ok: bool) #optional_ok {\n", LIT(name), LIT(name));
 	source = gb_string_appendc(source, "allocator := context.allocator\n");
 	for_array(i, type->fields) {
 		auto const &field = type->fields[i];
@@ -218,7 +227,9 @@ gb_internal gbString swift_import_emit_owned_struct(gbString source, SwiftImport
 	}
 	source = gb_string_append_fmt(source, "return %.*s{", LIT(name));
 	for_array(i, type->fields) source = gb_string_append_fmt(source, "%s_value%td", i ? ", " : "", i);
-	source = gb_string_append_fmt(source, "}, true\n}\n%.*s_destroy :: proc(value: %.*s, allocator := context.allocator) {\n", LIT(name), LIT(name));
+	source = gb_string_appendc(source, "}, true\n}\n");
+	if (type->is_tuple) return source;
+	source = gb_string_append_fmt(source, "%.*s_destroy :: proc(value: %.*s, allocator := context.allocator) {\n", LIT(name), LIT(name));
 	for (auto const &field : type->fields) source = swift_import_emit_destroy(source, field.type, concatenate_strings(permanent_allocator(), str_lit("value."), field.name));
 	source = gb_string_append_fmt(source, "}\n@(require_results)\n%.*s_copy :: proc(value: %.*s, allocator := context.allocator) -> (result: %.*s, ok: bool) #optional_ok {\ncontext.allocator = allocator\n", LIT(name), LIT(name), LIT(name));
 	for_array(i, type->fields) {

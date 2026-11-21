@@ -47,6 +47,13 @@ For an untyped throwing function, the callback takes one additional argument,
 are zero and the callback owns the error. Use `Async_Error_destroy(err)` after
 inspecting it or transfer ownership to the caller’s state.
 
+A flat async tuple can also contain Swift strings alongside Bool, Int, UInt,
+Int64, UInt64 or Double. The callback owns each Odin string and can keep it
+after releasing the task. Use ordinary `delete` with the captured allocator.
+A nonthrowing callback receives a final `converted: bool`. A throwing callback
+receives `err: Async_Error`. A failed conversion delivers zeroed fields and
+releases any strings already copied.
+
 Swift names become snake case, so `addLater` becomes `add_later`:
 
 ```odin

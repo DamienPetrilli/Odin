@@ -44,6 +44,7 @@ cp "$here/dates.odin" "$build/dates.odin"
 cp "$here/uuids.odin" "$build/uuids.odin"
 cp "$here/sets.odin" "$build/sets.odin"
 cp "$here/owned_records.odin" "$build/owned_records.odin"
+cp "$here/owned_tuples.odin" "$build/owned_tuples.odin"
 cp "$here/errors.odin" "$build/errors.odin"
 cp "$here/scalars.odin" "$build/scalars.odin"
 
@@ -87,7 +88,7 @@ if [[ "$sdk" != macosx ]]; then cp "$here/controller.odin" "$build/names/"; fi
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/names-test"
 
 # Check rejections in one invocation on every target, including link-only iOS runs.
-rejected=(text_bounds owned_tuple tuple_case_collision ArrayRecord_recursive_result TextRecord_clear RawCollision_raw_value RawCode_replace async_buffer returned_buffer generic throwing isolated_sync overloaded future inout_value typed_throwing
+rejected=(text_bounds owned_tuple unsupported_text_tuple tuple_case_collision ArrayRecord_recursive_result TextRecord_clear RawCollision_raw_value RawCode_replace async_buffer returned_buffer generic throwing isolated_sync overloaded future inout_value typed_throwing
 	unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields
 	unsupported_scalar_argument unsupported_scalar_result narrow_array unsupported_bool_array unsupported_set_result
 	unsupported_optional_set unsupported_bool_set client_only new_number new_number_for_ NewValue
@@ -113,7 +114,8 @@ expect_diagnostic() {
 	fi
 }
 for name in "${rejected[@]}"; do expect_diagnostic "Swift import: '$name':"; done
-expect_diagnostic "'owned_tuple': tuple results require numeric or Bool scalars"
+expect_diagnostic "'owned_tuple': Swift String tuple results currently require an async function"
+expect_diagnostic "'unsupported_text_tuple': tuple results require supported scalar or String elements"
 expect_diagnostic "'text_bounds': tuple results with converted parameters are unsupported"
 expect_diagnostic "'tuple_case_collision': tuple result labels collide after Odin name conversion"
 platform=iOS

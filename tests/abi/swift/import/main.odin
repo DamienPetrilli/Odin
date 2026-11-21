@@ -100,6 +100,7 @@ main :: proc() {
 	check_uuids()
 	check_sets()
 	check_owned_records()
+	check_owned_tuples()
 	check_error_inspection()
 	check_typed_errors()
 	check_scalars()

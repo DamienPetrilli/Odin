@@ -214,6 +214,7 @@ gb_internal bool swift_import_enum_layout(LLVMModuleRef module, LLVMTargetDataRe
 	name = gb_string_append_fmt(gb_string_make(temporary_allocator(), ""), "odin_swift_import_load_%td", index);
 	LLVMValueRef load = LLVMGetNamedFunction(module, name);
 	if (!load) return false;
+	if (type->is_tuple) type->tuple_load = load;
 	LLVMTypeRef ret = LLVMGetReturnType(LLVMGlobalGetValueType(load));
 	if (type->alignment && type->size == 0) return LLVMGetTypeKind(ret) == LLVMVoidTypeKind && LLVMCountParams(load) == 1;
 	if (LLVMGetTypeKind(ret) == LLVMVoidTypeKind) {
@@ -221,9 +222,10 @@ gb_internal bool swift_import_enum_layout(LLVMModuleRef module, LLVMTargetDataRe
 		LLVMAttributeRef attribute = LLVMGetEnumAttributeAtIndex(load, 1, sret);
 		if (!attribute || !LLVMIsTypeAttribute(attribute) || LLVMCountParams(load) != 2) return false;
 		LLVMTypeRef result_type = LLVMGetTypeAttributeValue(attribute);
+		if (type->is_tuple) return LLVMGetTypeKind(result_type) == LLVMStructTypeKind;
 		char const *name = LLVMGetTypeKind(result_type) == LLVMStructTypeKind ? LLVMGetStructName(result_type) : nullptr;
 		if (!name) return false;
-		type->indirect_llvm = copy_string(permanent_allocator(), make_string_c(name));
+		type->indirect_llvm = make_string_c(name);
 		return true;
 	}
 	if (!type->alignment || LLVMCountParams(load) != 1) return false;

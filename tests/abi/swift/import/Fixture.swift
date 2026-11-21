@@ -1275,6 +1275,17 @@ public func packedBytes(_ value: UInt8) -> (UInt8, Bool, UInt8, UInt8, UInt8) {
 }
 public func textBounds(_ text: String) -> (UInt8, UInt16) { (0, 0) }
 public func ownedTuple() -> (String, UInt64) { ("text", 0) }
+private func sameTextPair(_ text: String) -> (first: String, second: String) { (text, text) }
+public func textPairLater(_ text: String) async -> (first: String, second: String) {
+	await Task.yield()
+	return sameTextPair(text)
+}
+public func checkedTextPair(_ text: String, _ fail: Bool) async throws -> (first: String, size: Int, second: String, ready: Bool) {
+	await Task.yield()
+	if fail { throw PlainFailure.denied }
+	return (text, text.utf8.count, text, true)
+}
+public func unsupportedTextTuple() async -> (String, [UInt64]) { ("", []) }
 public func tupleCaseCollision() -> (pageID: UInt64, page_id: UInt64) { (0, 1) }
 public func asyncTuple(_ count: UInt64) async -> (count: UInt64, ready: Bool) {
 	await Task.yield()

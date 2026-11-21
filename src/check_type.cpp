@@ -4278,14 +4278,37 @@ gb_internal bool swift_abi_frame_field(LLVMValueRef pointer, LLVMTypeRef *frame,
 
 // Inspect the continuation stored into the actual child frame at the probe call.
 // Swift places its resume address in the second pointer-sized field.
-gb_internal bool swift_abi_async_tuple(LLVMValueRef fn, LLVMTargetDataRef layout, Type *tuple, bool throwing) {
+gb_internal bool swift_abi_async_tuple(LLVMValueRef fn, LLVMTargetDataRef layout, Type *tuple, bool throwing, LLVMValueRef load) {
 	if (!fn || LLVMCountBasicBlocks(fn)) return false;
-	SwiftABIRecordComponent components[4];
-	isize count = swift_abi_record_components(tuple, components, gb_count_of(components));
-	bool indirect = count > gb_count_of(components);
-	unsigned n = indirect ? 0 : cast(unsigned)count;
-	unsigned async_attr = LLVMGetEnumAttributeKindForName("swiftasync", 10);
 	LLVMContextRef ctx = LLVMGetTypeContext(LLVMGlobalGetValueType(fn));
+	LLVMTypeRef results[4], storage = nullptr;
+	unsigned n = 0;
+	bool indirect = false;
+	if (load) {
+		// Compare the compiler's async continuation to its verified synchronous
+		// load of the same managed tuple, including the indirect frame slot.
+		LLVMTypeRef value = LLVMGetReturnType(LLVMGlobalGetValueType(load));
+		indirect = LLVMGetTypeKind(value) == LLVMVoidTypeKind;
+		if (indirect) {
+			unsigned sret = LLVMGetEnumAttributeKindForName("sret", 4);
+			LLVMAttributeRef attr = LLVMGetEnumAttributeAtIndex(load, 1, sret);
+			if (!attr || !LLVMIsTypeAttribute(attr)) return false;
+			storage = LLVMGetTypeAttributeValue(attr);
+		} else {
+			if (LLVMGetTypeKind(value) != LLVMStructTypeKind) return false;
+			n = LLVMCountStructElementTypes(value);
+			if (!n || n > gb_count_of(results)) return false;
+			LLVMGetStructElementTypes(value, results);
+		}
+	} else {
+		if (!tuple) return false;
+		SwiftABIRecordComponent components[4];
+		isize count = swift_abi_record_components(tuple, components, gb_count_of(components));
+		indirect = count > gb_count_of(components);
+		n = indirect ? 0 : cast(unsigned)count;
+		for (unsigned i = 0; i < n; i++) results[i] = swift_abi_scalar_llvm_type(ctx, components[i].type);
+	}
+	unsigned async_attr = LLVMGetEnumAttributeKindForName("swiftasync", 10);
 	bool verified = false;
 	for (LLVMUseRef use = LLVMGetFirstUse(fn); use; use = LLVMGetNextUse(use)) {
 		LLVMValueRef call = LLVMGetUser(use);
@@ -4296,7 +4319,9 @@ gb_internal bool swift_abi_async_tuple(LLVMValueRef fn, LLVMTargetDataRef layout
 			LLVMValueRef dest = LLVMGetOperand(call, 0);
 			LLVMTypeRef frame;
 			unsigned field;
-			if (!swift_abi_frame_field(dest, &frame, &field) || !swift_abi_tuple_layout(LLVMStructGetTypeAtIndex(frame, field), layout, tuple)) return false;
+			if (!swift_abi_frame_field(dest, &frame, &field)) return false;
+			LLVMTypeRef slot = LLVMStructGetTypeAtIndex(frame, field);
+			if (storage ? slot != storage : !swift_abi_tuple_layout(slot, layout, tuple)) return false;
 		}
 		LLVMValueRef child = LLVMGetOperand(call, frame_index);
 		LLVMValueRef resume = nullptr;
@@ -4314,7 +4339,7 @@ gb_internal bool swift_abi_async_tuple(LLVMValueRef fn, LLVMTargetDataRef layout
 		    LLVMGetReturnType(LLVMGlobalGetValueType(resume)) != LLVMVoidTypeInContext(ctx) || LLVMCountParams(resume) != 1+n+throwing ||
 		    !LLVMGetEnumAttributeAtIndex(resume, 1, async_attr)) return false;
 		for (unsigned i = 0; i < n; i++) {
-			if (LLVMTypeOf(LLVMGetParam(resume, i+1)) != swift_abi_scalar_llvm_type(ctx, components[i].type) ||
+			if (LLVMTypeOf(LLVMGetParam(resume, i+1)) != results[i] ||
 			    LLVMGetAttributeCountAtIndex(resume, i+2) != 0) return false;
 		}
 		if (throwing) {
@@ -4324,7 +4349,7 @@ gb_internal bool swift_abi_async_tuple(LLVMValueRef fn, LLVMTargetDataRef layout
 		}
 		verified = true;
 	}
-	if (verified && indirect) {
+	if (verified && indirect && tuple) {
 		auto fields = tuple->Tuple.variables;
 		u64 size = cast(u64)(type_offset_of(tuple, fields.count-1)+type_size_of(fields[fields.count-1]->type));
 		return swift_import_storage_parameter(fn, 0, size, type_align_of(tuple), true);
