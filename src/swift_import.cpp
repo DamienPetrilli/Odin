@@ -1018,12 +1018,12 @@ gb_internal String swift_import_relative(String directory, String path) {
 	return make_string_c(text);
 }
 
-gb_internal JsonValue *swift_import_find_api(JsonValue *api, String usr) {
-	if (swift_import_member(api, "declKind") && swift_import_string(api, "usr") == usr) return api;
-	for (JsonValue *child : swift_import_array(api, "children")) {
-		if (JsonValue *found = swift_import_find_api(child, usr)) return found;
+gb_internal void swift_import_index_api(JsonValue *api, StringMap<JsonValue *> *declarations) {
+	String usr = swift_import_string(api, "usr");
+	if (usr.len && swift_import_member(api, "declKind") && !string_map_get(declarations, usr)) {
+		string_map_set(declarations, usr, api);
 	}
-	return nullptr;
+	for (auto child : swift_import_array(api, "children")) swift_import_index_api(child, declarations);
 }
 
 gb_internal int swift_import_version_part(JsonValue *version, int index) {
@@ -1767,7 +1767,13 @@ gb_internal bool swift_import_external_records(Ast *node, SwiftImportPackage *pk
 	return true;
 }
 
-gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
+// An Odin invocation has one target and one selected Xcode toolchain. Share
+// only their paths across imports. Each module is still inspected afresh.
+gb_global String swift_import_sdk;
+gb_global String swift_import_linker_flags;
+
+gb_internal bool swift_import_target_paths(Ast *node, String directory) {
+	if (swift_import_sdk.len) return true;
 	char const *sdk_name = "macosx";
 	if (selected_subtarget == Subtarget_iPhone) sdk_name = "iphoneos";
 	if (selected_subtarget == Subtarget_iPhoneSimulator) sdk_name = "iphonesimulator";
@@ -1776,11 +1782,48 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	array_add(&args, make_string_c(sdk_name));
 	array_add(&args, str_lit("--show-sdk-path"));
 	String sdk = {};
-	if (!swift_import_exec(node, pkg->directory, args, &sdk)) return false;
+	if (!swift_import_exec(node, directory, args, &sdk)) return false;
 	sdk = string_trim_whitespace(sdk);
+	// The target's Swift driver identifies its runtime search paths. Let the
+	// normal Odin linker link the original object/archive and its autolinks.
+	array_clear(&args);
+	array_add(&args, str_lit("swiftc"));
+	array_add(&args, str_lit("-sdk"));
+	array_add(&args, sdk);
+	array_add(&args, str_lit("-target"));
+	array_add(&args, build_context.metrics.target_triplet);
+	array_add(&args, str_lit("-print-target-info"));
+	String target_info;
+	if (!swift_import_exec(node, directory, args, &target_info)) return false;
+	JsonValue *target = swift_import_json(node, target_info);
+	if (!target) return false;
+	gbString flags = gb_string_make(permanent_allocator(), "");
+	auto paths = swift_import_array(swift_import_member(target, "paths"), "runtimeLibraryPaths");
+	if (paths.count == 0) {
+		syntax_error(node, "Swift import: missing runtime library paths");
+		return false;
+	}
+	for (JsonValue *path : paths) {
+		if (path->kind != Json_String || string_contains_char(path->string, '\0') || string_contains_char(path->string, '"')) {
+			syntax_error(node, "Swift import: invalid runtime library path");
+			return false;
+		}
+		// Preserve UTF-8 here. These are linker arguments; source escaping is
+		// applied to the complete attribute below, not to individual paths.
+		flags = gb_string_append_fmt(flags, "-L\"%.*s\" ", LIT(path->string));
+	}
+	flags = gb_string_appendc(flags, "-Wl,-rpath,/usr/lib/swift");
+	swift_import_sdk = sdk;
+	swift_import_linker_flags = make_string_c(flags);
+	return true;
+}
+
+gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
+	if (!swift_import_target_paths(node, pkg->directory)) return false;
+	auto args = array_make<String>(permanent_allocator());
 	auto common = array_make<String>(permanent_allocator());
 	array_add(&common, str_lit("-sdk"));
-	array_add(&common, sdk);
+	array_add(&common, swift_import_sdk);
 	array_add(&common, str_lit("-target"));
 	array_add(&common, build_context.metrics.target_triplet);
 	array_add(&common, str_lit("-I"));
@@ -1818,6 +1861,16 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		syntax_error(node, "Swift import: unsupported API digester format");
 		return false;
 	}
+	StringMap<JsonValue *> declarations = {}, symbols = {};
+	string_map_init(&declarations);
+	string_map_init(&symbols);
+	defer (string_map_destroy(&declarations));
+	defer (string_map_destroy(&symbols));
+	swift_import_index_api(api, &declarations);
+	for (auto symbol : swift_import_array(graph, "symbols")) {
+		String usr = swift_import_string(swift_import_member(symbol, "identifier"), "precise");
+		if (usr.len && !string_map_get(&symbols, usr)) string_map_set(&symbols, usr, symbol);
+	}
 	auto types = array_make<SwiftImportNominal *>(permanent_allocator());
 	Array<String> rows = {};
 	Array<String> *report = nullptr;
@@ -1831,7 +1884,8 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		String kind = swift_import_string(swift_import_member(symbol, "kind"), "identifier");
 		if (kind != "swift.struct" && kind != "swift.enum") continue;
 		String usr = swift_import_string(swift_import_member(symbol, "identifier"), "precise");
-		JsonValue *declaration = swift_import_find_api(api, usr);
+		auto found = string_map_get(&declarations, usr);
+		JsonValue *declaration = found ? *found : nullptr;
 		if (!declaration) continue;
 		bool generic = swift_import_member(symbol, "swiftGenerics") || swift_import_member(declaration, "genericSig");
 		if (generic) {
@@ -1907,7 +1961,8 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		bool implicit_raw = kind == "swift.enum";
 		if (!(kind == "swift.func" && components.count == 1) && !method && !property && !initializer && !implicit_raw) continue;
 		String usr = swift_import_string(swift_import_member(symbol, "identifier"), "precise");
-		JsonValue *declaration = swift_import_find_api(api, usr);
+		auto found = string_map_get(&declarations, usr);
+		JsonValue *declaration = found ? *found : nullptr;
 		if (implicit_raw) {
 			declaration = swift_import_implicit_raw_value(declaration, &published_raw_values);
 			property = true;
@@ -2102,7 +2157,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 
 	if (!swift_import_check_type_names(node, types)) return false;
 
-	for_array(i, types) swift_import_struct_fields(types[i], graph, &types);
+	for_array(i, types) swift_import_struct_fields(types[i], &symbols, &types);
 	if (!swift_import_check_type_names(node, types)) return false;
 
 	bool inspect_set_storage = false;
@@ -2468,32 +2523,6 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		if (!swift_import_add_name(node, &names, fn.odin_name)) return false;
 	}
 
-	// The target's Swift driver identifies its runtime search paths. Let the
-	// normal Odin linker link the original object/archive and its autolinks.
-	array_clear(&args);
-	array_add(&args, str_lit("swiftc"));
-	for (String arg : common) array_add(&args, arg);
-	array_add(&args, str_lit("-print-target-info"));
-	String target_info;
-	if (!swift_import_exec(node, pkg->directory, args, &target_info)) return false;
-	JsonValue *target = swift_import_json(node, target_info);
-	if (!target) return false;
-	gbString flags = gb_string_make(permanent_allocator(), "");
-	auto paths = swift_import_array(swift_import_member(target, "paths"), "runtimeLibraryPaths");
-	if (paths.count == 0) {
-		syntax_error(node, "Swift import: missing runtime library paths");
-		return false;
-	}
-	for (JsonValue *path : paths) {
-		if (path->kind != Json_String || string_contains_char(path->string, '\0') || string_contains_char(path->string, '"')) {
-			syntax_error(node, "Swift import: invalid runtime library path");
-			return false;
-		}
-		// Preserve UTF-8 here. These are linker arguments; source escaping is
-		// applied to the complete attribute below, not to individual paths.
-		flags = gb_string_append_fmt(flags, "-L\"%.*s\" ", LIT(path->string));
-	}
-	flags = gb_string_appendc(flags, "-Wl,-rpath,/usr/lib/swift");
 	gbString source = gb_string_make(permanent_allocator(), "");
 	String identity = pkg->framework ? pkg->module : pkg->library;
 	bool has_values = false, has_scalar_async = false, has_sync_throwing = false, has_value_async = false, has_set = false, has_ui = false;
@@ -2522,7 +2551,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	if (has_values) source = gb_string_appendc(source, "@(require)\nimport \"core:mem\"\n@(require)\nimport \"core:strings\"\n");
 	if (has_values || has_scalar_async || has_value_async) source = gb_string_appendc(source, "import swift \"core:sys/darwin/Swift\"\n");
 	source = gb_string_appendc(source, "\n");
-	String quoted_flags = quote_to_ascii(permanent_allocator(), make_string_c(flags));
+	String quoted_flags = quote_to_ascii(permanent_allocator(), swift_import_linker_flags);
 	String quoted_library = quote_to_ascii(permanent_allocator(), pkg->framework ? pkg->library : swift_import_relative(pkg->directory, pkg->library));
 	source = gb_string_append_fmt(source,
 		"@(require, extra_linker_flags=%.*s)\n"

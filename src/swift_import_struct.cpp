@@ -2,7 +2,7 @@
 // every field's offset, total size, alignment and direct ABI components.
 // Other records keep their metadata-driven, explicitly owned representation.
 
-gb_internal void swift_import_struct_fields(SwiftImportNominal *type, JsonValue *graph, Array<SwiftImportNominal *> *types) {
+gb_internal void swift_import_struct_fields(SwiftImportNominal *type, StringMap<JsonValue *> *symbols, Array<SwiftImportNominal *> *types) {
 	if (type->external_name.len || !type->is_frozen || type->is_enum || type->is_template || type->argument || type->is_scalar || !type->declaration) return;
 	for (auto attribute : swift_import_array(type->declaration, "declAttributes")) {
 		if (attribute->kind != Json_String || (attribute->string != "Frozen" && attribute->string != "Available")) return;
@@ -13,10 +13,8 @@ gb_internal void swift_import_struct_fields(SwiftImportNominal *type, JsonValue 
 		auto stored = swift_import_member(field, "hasStorage");
 		if (!stored || stored->kind != Json_Boolean || !stored->boolean) continue;
 		String usr = swift_import_string(field, "usr");
-		JsonValue *symbol = nullptr;
-		for (auto candidate : swift_import_array(graph, "symbols")) {
-			if (swift_import_string(swift_import_member(candidate, "identifier"), "precise") == usr) { symbol = candidate; break; }
-		}
+		auto found = string_map_get(symbols, usr);
+		JsonValue *symbol = found ? *found : nullptr;
 		if (!symbol || swift_import_availability_rejection(symbol).len) return;
 		for (auto attribute : swift_import_array(field, "declAttributes")) {
 			if (attribute->kind != Json_String || (attribute->string != "HasStorage" && attribute->string != "Available")) return;

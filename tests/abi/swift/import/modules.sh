@@ -66,7 +66,9 @@ main :: proc() {
 	assert(Left.identity(Drawing.swap(Right.identity(right), left)).x == 42)
 }
 ODIN
-	"$ODIN" build main.odin -file -minimum-os-version:15.0 -out:"$build/client"
+	"$ODIN" build main.odin -file -minimum-os-version:15.0 -show-more-timings -out:"$build/client" > compile.log 2>&1
+	test "$(grep -c 'Swift inspection --sdk:' compile.log)" -eq 1
+	test "$(grep -c 'Swift inspection swift-symbolgraph-extract:' compile.log)" -eq 3
 	"$build/client"
 done
 sed 's/Drawing.width(Left.identity(left))/Drawing.width(right)/' main.odin > invalid.odin
