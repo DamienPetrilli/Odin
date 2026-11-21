@@ -34,8 +34,7 @@ when AVAILABLE {
 	products :: api.Product_products
 
 	products_destroy :: proc(items: []Product, allocator := context.allocator) {
-		for item in items { Product_destroy(item) }
-		delete(items, allocator)
+		api.Array_Product_destroy(items, allocator)
 	}
 
 	Purchase_Option         :: api.Product_PurchaseOption

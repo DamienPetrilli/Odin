@@ -12,7 +12,7 @@ package there.
 
 | Collection        | Packages |
 |-------------------|----------|
-| `core:sys/darwin` | `ObjectiveC`, `CoreFoundation`, `CoreGraphics`, `CoreText`, `DiskArbitration`, `FSEvents`, `Foundation`, `IOKit`, `Security` |
+| `core:sys/darwin` | `ObjectiveC`, `Swift`, `CoreFoundation`, `CoreGraphics`, `CoreText`, `DiskArbitration`, `FSEvents`, `Foundation`, `IOKit`, `Security` |
 | `vendor:darwin`   | `AppKit`, `AudioToolbox`, `AVFoundation`, `CloudKit`, `CoreHaptics`, `CoreLocation`, `CoreMedia`, `CoreVideo`, `EventKit`, `GameController`, `GameKit`, `LocalAuthentication`, `MapKit`, `Metal`, `MetalFX`, `MetalKit`, `ModelIO`, `QuartzCore`, `StoreKit`, `UIKit` |
 
 The conventional import names follow the Apple prefixes:
