@@ -301,3 +301,6 @@ for raw in UInt8.min...UInt8.max {
 }
 let bytes = packedBytes(0xff)
 precondition(bytes == (0xff, true, 0xfe, 0x41, 0))
+
+precondition(readChecked(41) == (41, 42, 43, 44, true))
+precondition(readChecked(0) == (0, 0, 0, 0, false))

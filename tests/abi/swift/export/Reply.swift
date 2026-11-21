@@ -28,3 +28,10 @@ public func identityFloat(_ value: Float) -> Float { value }
 @inline(never) public func wideReply(_ x: Int16) -> (UInt16, Double, Int64, Bool, UInt64, Int16) {
 	(UInt16(bitPattern: x), -0.0, Int64.min, x != 0, UInt64.max, x)
 }
+
+@frozen public enum ReadingError: Error { case missing }
+
+public func checkedReading(_ n: UInt64) throws -> (UInt64, UInt64, UInt64, UInt64, Bool) {
+	if n == 0 { throw ReadingError.missing }
+	return (n, n &+ 1, n &+ 2, n &+ 3, true)
+}

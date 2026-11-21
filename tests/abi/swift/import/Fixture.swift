@@ -1322,6 +1322,24 @@ public func throwingWideTuple(_ n: UInt64) async throws -> (UInt64, Double, Int6
 	return (n, -0.0, .min, n &+ 13, true)
 }
 
+public func checkedBounds(_ n: UInt64) throws -> (count: UInt64, ready: Bool) {
+	if n == 0 { throw PlainFailure.missing }
+	return (n, true)
+}
+public func checkedPacked(_ err: UInt8) throws -> (arg0: UInt8, Bool, UInt16) {
+	if err == 0 { throw PlainFailure.denied }
+	return (err, true, 0xfedc)
+}
+public func checkedUnnamed(_ value_0: UInt8) throws -> (UInt8, value_2: Bool, UInt16) {
+	if value_0 == 0 { throw PlainFailure.denied }
+	return (value_0, true, 0x1234)
+}
+public func checkedWide(_ words: UnsafeMutableBufferPointer<UInt64>, _ fail: Bool) throws -> (err: UInt64, Double, Int64, UInt64, Bool) {
+	if !words.isEmpty { words[0] &+= 1 }
+	if fail { throw InspectionFailure.message("wide result", 37) }
+	return (words.first ?? 0, -0.0, .min, .max, true)
+}
+
 public func inspectPrefix(_ bytes: UnsafeBufferPointer<UInt8>, _ needle: UnsafePointer<UInt8>) -> (index: Int, found: Bool) {
 	guard let index = bytes.firstIndex(of: needle.pointee) else { return (bytes.count, false) }
 	return (index, true)

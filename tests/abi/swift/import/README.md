@@ -38,6 +38,16 @@ more than four register components, the caller supplies result storage. Neither
 form requires heap allocation or cleanup. Synchronous pointer and buffer parameters use the same typed
 pointers and borrowed slices with these results. Run with `-show-swift-imports` to see the result names.
 
+A synchronous untyped throwing tuple adds an owned error as the final return.
+For Swift `checkedBounds(_:) throws -> (count: UInt64, ready: Bool)`, Odin can
+write `count, ready, err := example.checked_bounds(n)`. On a throw both
+scalars are zero and the caller owns `err`. Release it with
+`example.Call_Error_destroy(err)` or propagate it with `or_return`.
+Borrowed pointers and slices keep mutations Swift performed before throwing.
+Tuple labels describe the results in the import report. All results can be
+assigned positionally, including a Swift field that itself is named `err`.
+Tuples with String fields currently require an async call.
+
 A nonthrowing async free function returning numeric or Bool scalars delivers them
 as separate callback parameters. For `asyncTuple(_:) async -> (count: UInt64, ready: Bool)`,
 the callback is `proc(task: swift.Task, count: u64, ready: bool)`. The task owns

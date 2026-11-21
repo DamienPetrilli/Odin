@@ -123,7 +123,40 @@ forward_word :: proc(input: u64) -> (word: u64, err: fixture.Call_Error) {
 	return
 }
 
+forward_bounds :: proc(n: u64) -> (count: u64, ready: bool, err: fixture.Call_Error) {
+	count, ready = fixture.checked_bounds(n) or_return
+	return
+}
+
+check_throwing_tuples :: proc() {
+	count, ready, err := forward_bounds(max(u64))
+	assert(count == max(u64) && ready && err == nil)
+	count, ready, err = forward_bounds(0)
+	assert(count == 0 && !ready && err.(fixture.PlainFailure) == .Missing)
+	fixture.Call_Error_destroy(err)
+
+	byte, flag, half, packed_err := fixture.checked_packed(0xab)
+	assert(byte == 0xab && flag && half == 0xfedc && packed_err == nil)
+	byte, flag, half, packed_err = fixture.checked_packed(0)
+	assert(byte == 0 && !flag && half == 0 && packed_err.(fixture.PlainFailure) == .Denied)
+	fixture.Call_Error_destroy(packed_err)
+
+	byte, flag, half, packed_err = fixture.checked_unnamed(0xed)
+	assert(byte == 0xed && flag && half == 0x1234 && packed_err == nil)
+
+	words := [3]u64{17, 31, 59}
+	first, floating, signed, last, active, wide_err := fixture.checked_wide(words[1:2], false)
+	assert(first == 32 && transmute(u64)floating == 1<<63 && signed == min(i64) && last == max(u64) && active && wide_err == nil)
+	first, floating, signed, last, active, wide_err = fixture.checked_wide(words[1:2], true)
+	assert(first == 0 && transmute(u64)floating == 0 && signed == 0 && last == 0 && !active)
+	assert(words == [3]u64{17, 33, 59})
+	message := wide_err.(fixture.InspectionFailure).(fixture.InspectionFailure_Message)
+	assert(message.value_0 == "wide result" && message.value_1 == 37)
+	fixture.Call_Error_destroy(wide_err)
+}
+
 check_typed_errors :: proc() {
+	check_throwing_tuples()
 	assert(fixture.old_name(.Idle) == 17 && fixture.old_name(.Busy) == 31)
 	before := fixture.live_value_count()
 	for selection in 0..<12 {

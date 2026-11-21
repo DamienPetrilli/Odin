@@ -182,3 +182,12 @@ wide_reply :: proc "swift" (x: i16, raw: u8) -> (bits: u16, weight: f64, low: i6
 packed_bytes :: proc "swift" (value: u8) -> (u8, bool, u8, u8, u8) {
 	return value, value != 0, 0xfe, 0x41, value+1
 }
+
+@(export)
+read_checked :: proc "swift" (n: u64) -> (u64, u64, u64, u64, bool) {
+	context = runtime.default_context()
+	a, b, c, d, ready, err := reply.checked_reading(n)
+	defer reply.Call_Error_destroy(err)
+	if err != nil { assert(err.(reply.ReadingError) == .Missing) }
+	return a, b, c, d, ready
+}

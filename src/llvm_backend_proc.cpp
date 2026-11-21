@@ -1445,9 +1445,26 @@ gb_internal lbValue lb_emit_call_internal(lbProcedure *p, lbValue value, lbValue
 			LLVMBuildStore(p->builder, LLVMConstNull(lb_type(p->module, t_rawptr)), p->swift_error_slot);
 		}
 		LLVMValueRef ret = LLVMBuildCall2(p->builder, fnp, fn, args, arg_count, "");
+		LLVMValueRef call_result = ret;
 		if (error_out) {
 			LLVMValueRef thrown = LLVMBuildLoad2(p->builder, lb_type(p->module, t_rawptr), p->swift_error_slot, "");
 			LLVMBuildStore(p->builder, thrown, error_out);
+			// Swift initializes neither the tuple registers nor indirect result
+			// storage on throw. Give Odin zero values before unpacking or loading.
+			if (proc_type->Proc.result_count > 1) {
+				LLVMValueRef failed = LLVMBuildIsNotNull(p->builder, thrown, "");
+				if (return_ptr.value) {
+					lbBlock *clear = lb_create_block(p, "swift.tuple.error");
+					lbBlock *done = lb_create_block(p, "swift.tuple.done");
+					lb_emit_if(p, lbValue{failed, t_llvm_bool}, clear, done);
+					lb_start_block(p, clear);
+					lb_emit_store(p, return_ptr, lb_const_nil(p->module, type_deref(return_ptr.type)));
+					lb_emit_jump(p, done);
+					lb_start_block(p, done);
+				} else {
+					call_result = LLVMBuildSelect(p->builder, failed, LLVMConstNull(LLVMTypeOf(ret)), ret, "");
+				}
+			}
 		}
 
 		LLVMSetInstructionCallConv(ret, lb_calling_convention_kind(proc_type->Proc.calling_convention));
@@ -1526,7 +1543,7 @@ gb_internal lbValue lb_emit_call_internal(lbProcedure *p, lbValue value, lbValue
 		}
 
 		lbValue res = {};
-		res.value = ret;
+		res.value = call_result;
 		res.type = abi_rt;
 		return res;
 	}

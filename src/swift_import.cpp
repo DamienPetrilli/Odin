@@ -123,6 +123,7 @@ struct SwiftImportFunction {
 	Array<SwiftImportParameter> parameters;
 	SwiftImportType result;
 	Type *tuple_result;
+	Slice<String> sync_throwing_labels;
 	String tuple_fields; // Named Odin results for a tuple requiring conversion.
 	bool is_async;
 	bool is_throwing;
@@ -616,9 +617,10 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 	String spelling = swift_import_string(api, "printedName");
 	if (spelling.len < 2 || spelling[0] != '(' || spelling[spelling.len-1] != ')') return false;
 	String_Iterator it = {substring(spelling, 1, spelling.len-1)};
-	auto labels = slice_make<String>(temporary_allocator(), elements.count);
+	bool sync_throwing = fn->is_throwing && !fn->is_async;
+	auto labels = slice_make<String>(sync_throwing ? permanent_allocator() : temporary_allocator(), elements.count);
 	auto types = slice_make<SwiftImportType>(temporary_allocator(), elements.count);
-	bool named = fn->is_async;
+	bool named = fn->is_async || sync_throwing;
 	for_array(i, elements) {
 		SwiftImportType &type = types[i];
 		if (swift_import_string(elements[i], "usr") == "s:SS") {
@@ -649,7 +651,15 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 		swift = gb_string_append_fmt(swift, "%s%s", separator, types[i].swift);
 		odin = gb_string_appendc(odin, separator);
 		if (named) {
-			if (!labels[i].len) labels[i] = make_string_c(gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "value_%td", i));
+			if (!labels[i].len) {
+				String positional = make_string_c(gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "value_%td", i));
+				bool taken = false;
+				for (String label : labels) taken |= label == positional;
+				if (!fn->is_async) {
+					for (auto const &p : fn->parameters) taken |= p.name == positional;
+				}
+				labels[i] = taken ? concatenate_strings(permanent_allocator(), str_lit("_swift_"), positional) : positional;
+			}
 			for (isize j = 0; j < i; j++) {
 				if (labels[j] == labels[i]) {
 					fn->rejection = str_lit("tuple result labels collide after Odin name conversion");
@@ -695,6 +705,7 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 	}
 	fn->tuple_result = swift_abi_scalar_tuple(fields.data, fields.count);
 	if (!fn->tuple_result) return false;
+	if (sync_throwing) fn->sync_throwing_labels = labels;
 	fn->result = {gb_string_appendc(swift, ")"), gb_string_appendc(odin, ")"), swift_abi_tuple_result_llvm(fn->tuple_result), nullptr};
 	fn->rejection = {};
 	return true;
@@ -882,8 +893,8 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 				return false;
 			}
 		}
-		if (tuple || (fn->result.nominal && fn->result.nominal->kind != SwiftImportValue_String)) {
-			fn->rejection = str_lit("synchronous throws currently supports scalar, Void and String results");
+		if (fn->result.nominal && fn->result.nominal->kind != SwiftImportValue_String) {
+			fn->rejection = str_lit("synchronous throws currently supports scalar, scalar tuple, Void and String results");
 			return false;
 		}
 	}
@@ -1163,7 +1174,7 @@ gb_internal gbString swift_import_emit_value_declaration(gbString source, SwiftI
 		if (swift_import_empty(param.type)) continue;
 		if (swift_import_kind(param.type, SwiftImportValue_String)) {
 			source = gb_string_append_fmt(source, "%sarg%td_bits: u64, arg%td_object: rawptr", count++ ? ", " : "", i, i);
-		} else source = gb_string_append_fmt(source, "%s%sarg%td: %s", count++ ? ", " : "", param.self_register ? "#swift_self " : "", i, swift_import_indirect(param.type) ? "rawptr" : swift_import_native_type(param.type));
+		} else source = gb_string_append_fmt(source, "%s%s_swift_arg%td: %s", count++ ? ", " : "", param.self_register ? "#swift_self " : "", i, swift_import_indirect(param.type) ? "rawptr" : swift_import_native_type(param.type));
 	}
 	if (fn.is_collection) source = gb_string_append_fmt(source, "%scollection_metadata, collection_witness: rawptr", count++ ? ", " : "");
 	if (receiver) source = gb_string_append_fmt(source, "%s#swift_self receiver: rawptr", count ? ", " : "");
@@ -1329,6 +1340,26 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		isize signature_start = gb_string_length(source);
 		source = gb_string_append_fmt(source, "(%s)", params);
 		if (fn.is_throwing) {
+			if (fn.tuple_result) {
+				char const *error_name = "err";
+				gbString names = gb_string_make(temporary_allocator(), "");
+				for (String label : fn.sync_throwing_labels) {
+					if (label == "err") error_name = "_swift_error";
+					names = gb_string_append_fmt(names, "%s%.*s", gb_string_length(names) ? ", " : "", LIT(label));
+				}
+				for (auto const &param : fn.parameters) {
+					if (param.name == "err") error_name = "_swift_error";
+				}
+				String results = make_string_c(fn.result.odin);
+				source = gb_string_append_fmt(source, " -> %.*s, %s: Call_Error)", LIT(substring(results, 0, results.len-1)), error_name);
+				swift_import_report_function(report, fn, native_name, source, signature_start);
+				source = gb_string_append_fmt(source,
+					" {\n\t_swift_box: rawptr\n\t_swift_context: rawptr = ---\n"
+					"\t%s = _swift_%.*s_native(%s%s_swift_context, &_swift_box)\n"
+					"\tif intrinsics.unlikely(_swift_box != nil) { %s = _swift_call_error_take(swift.Error(_swift_box)) }\n\treturn\n}\n\n",
+					names, LIT(native_name), arguments, gb_string_length(arguments) ? ", " : "", error_name);
+				return source;
+			}
 			if (fn.result.odin) source = gb_string_append_fmt(source, " -> (%s, Call_Error)", fn.result.odin);
 			else source = gb_string_appendc(source, " -> Call_Error");
 			swift_import_report_function(report, fn, native_name, source, signature_start);
@@ -2307,7 +2338,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		has_set |= type->supported && type->kind == SwiftImportValue_Set;
 	}
 	for (auto const &fn : functions) {
-		bool values = fn.owner || fn.result.nominal || (fn.is_throwing && !fn.tuple_result);
+		bool values = fn.owner || fn.result.nominal || (fn.is_throwing && (!fn.is_async || !fn.tuple_result));
 		for (auto const &param : fn.parameters) {
 			values |= param.type.nominal != nullptr || param.objc_controller;
 			has_ui |= param.objc_controller;
@@ -2350,7 +2381,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	}
 	if (has_throwing) source = swift_import_emit_call_error(source, types);
 	for (auto const &fn : functions) {
-		bool values = fn.owner || fn.result.nominal || (fn.is_throwing && !fn.tuple_result);
+		bool values = fn.owner || fn.result.nominal || (fn.is_throwing && (!fn.is_async || !fn.tuple_result));
 		for (auto const &param : fn.parameters) values |= param.type.nominal != nullptr || param.objc_controller;
 		if (values) {
 			source = swift_import_emit_value_declaration(source, fn);
