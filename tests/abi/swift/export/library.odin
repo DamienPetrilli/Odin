@@ -170,3 +170,15 @@ packed_reply :: proc "swift" (x: i8, y: u16, truth: u8, w: f32) -> (code: i8, qu
 	enabled = transmute(bool)truth
 	return
 }
+
+@(export)
+wide_reply :: proc "swift" (x: i16, raw: u8) -> (bits: u16, weight: f64, low: i64, active: bool, high: u64, tail: i16) {
+	bits, weight, low, _, high, tail = reply.wide_reply(x)
+	active = transmute(bool)raw
+	return
+}
+
+@(export)
+packed_bytes :: proc "swift" (value: u8) -> (u8, bool, u8, u8, u8) {
+	return value, value != 0, 0xfe, 0x41, value+1
+}

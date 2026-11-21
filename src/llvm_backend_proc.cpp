@@ -1747,7 +1747,9 @@ gb_internal lbValue lb_emit_call(lbProcedure *p, lbValue value, Array<lbValue> c
 			if (sret_dst != nullptr) {
 				return_ptr = *sret_dst;
 			} else {
-				return_ptr = lb_add_local_generated(p, rt, true).addr;
+				// A native Swift scalar tuple initializes every result field.
+				bool zero = !(ft->ret.swift_record && is_type_tuple(rt));
+				return_ptr = lb_add_local_generated(p, rt, zero).addr;
 			}
 			lb_emit_call_internal(p, value, return_ptr, processed_args, nullptr, context_ptr, inlining, tailing);
 			result = lb_emit_load(p, return_ptr);

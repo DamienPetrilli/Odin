@@ -118,7 +118,7 @@ gb_internal void swift_import_struct_layout(LLVMModuleRef module, LLVMTargetData
 // Capture spelling and attribute order differ between LLVM versions. Check
 // indirect record promises through LLVM, then omit only those checked attributes
 // from the inspection declaration. ABI attributes such as sret remain intact.
-gb_internal bool swift_import_struct_parameter(LLVMValueRef function, unsigned index, SwiftImportNominal *type, bool result) {
+gb_internal bool swift_import_storage_parameter(LLVMValueRef function, unsigned index, u64 bytes, u64 align, bool result) {
 	if (!function || index >= LLVMCountParams(function)) return false;
 	unsigned position = index+1;
 	unsigned capture = LLVMGetEnumAttributeKindForName("captures", 8);
@@ -130,16 +130,20 @@ gb_internal bool swift_import_struct_parameter(LLVMValueRef function, unsigned i
 	if (!attribute || LLVMGetEnumAttributeValue(attribute) != 0) return false;
 	unsigned alignment = LLVMGetEnumAttributeKindForName("align", 5);
 	attribute = LLVMGetEnumAttributeAtIndex(function, position, alignment);
-	if (attribute && LLVMGetEnumAttributeValue(attribute) > type->alignment) return false;
+	if (attribute && LLVMGetEnumAttributeValue(attribute) > align) return false;
 	unsigned size = LLVMGetEnumAttributeKindForName("dereferenceable", 15);
 	attribute = LLVMGetEnumAttributeAtIndex(function, position, size);
 	if (result) {
-		if (attribute && LLVMGetEnumAttributeValue(attribute) > type->size) return false;
-	} else if (!attribute || LLVMGetEnumAttributeValue(attribute) != type->size) return false;
+		if (attribute && LLVMGetEnumAttributeValue(attribute) > bytes) return false;
+	} else if (!attribute || LLVMGetEnumAttributeValue(attribute) != bytes) return false;
 	LLVMRemoveEnumAttributeAtIndex(function, position, capture);
 	LLVMRemoveEnumAttributeAtIndex(function, position, alignment);
 	LLVMRemoveEnumAttributeAtIndex(function, position, size);
 	return true;
+}
+
+gb_internal bool swift_import_struct_parameter(LLVMValueRef function, unsigned index, SwiftImportNominal *type, bool result) {
+	return swift_import_storage_parameter(function, index, type->size, type->alignment, result);
 }
 
 gb_internal gbString swift_import_emit_owned_struct(gbString source, SwiftImportNominal *type);

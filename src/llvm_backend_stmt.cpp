@@ -3109,7 +3109,8 @@ gb_internal void lb_build_return_stmt(lbProcedure *p, Slice<Ast *> const &return
 				result_values[i] = lb_emit_conv(p, results[i], tuple->variables[i]->type);
 			}
 
-			if (return_by_pointer) {
+			// Swift aggregate results need native Bool bytes and exact-size stores.
+			if (return_by_pointer && !ft->ret.swift_record) {
 				res = p->return_ptr.addr;
 				auto result_eps = slice_make<lbValue>(temporary_allocator(), results.count);
 				for_array(i, results) {

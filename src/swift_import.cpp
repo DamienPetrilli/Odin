@@ -120,6 +120,7 @@ struct SwiftImportFunction {
 	SwiftImportNominal *owner;
 	Array<SwiftImportParameter> parameters;
 	SwiftImportType result;
+	Type *tuple_result;
 	bool is_async;
 	bool is_throwing;
 	bool is_mutating;
@@ -582,11 +583,13 @@ gb_internal bool swift_import_borrowed_parameter(JsonValue *api, Slice<JsonValue
 	return true;
 }
 
-gb_internal char const *swift_abi_tuple_result_llvm(char const **elements, isize count);
+gb_internal Type *swift_abi_scalar_tuple(char const **odin_names, isize count);
+gb_internal char const *swift_abi_tuple_result_llvm(Type *tuple);
+gb_internal LLVMTypeRef swift_abi_tuple_storage(LLVMValueRef fn, LLVMTargetDataRef layout, Type *tuple);
 gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *fn) {
 	auto elements = swift_import_array(api, "children");
-	fn->rejection = str_lit("tuple results require two to four numeric or Bool scalars");
-	if (elements.count < 2 || elements.count > 4) return false;
+	fn->rejection = str_lit("tuple results require numeric or Bool scalars");
+	if (elements.count < 2) return false;
 	if (fn->is_async || fn->owner) {
 		fn->rejection = str_lit("tuple results currently require a synchronous free function");
 		return false;
@@ -603,8 +606,8 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 	String spelling = swift_import_string(api, "printedName");
 	if (spelling.len < 2 || spelling[0] != '(' || spelling[spelling.len-1] != ')') return false;
 	String_Iterator it = {substring(spelling, 1, spelling.len-1)};
-	String labels[4] = {};
-	SwiftImportType types[4] = {};
+	auto labels = slice_make<String>(temporary_allocator(), elements.count);
+	auto types = slice_make<SwiftImportType>(temporary_allocator(), elements.count);
 	bool named = false;
 	for_array(i, elements) {
 		SwiftImportType &type = types[i];
@@ -624,7 +627,7 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 
 	gbString swift = gb_string_make(permanent_allocator(), "(");
 	gbString odin = gb_string_make(permanent_allocator(), "(");
-	char const *fields[4];
+	auto fields = slice_make<char const *>(temporary_allocator(), elements.count);
 	for_array(i, elements) {
 		char const *separator = i ? ", " : "";
 		swift = gb_string_append_fmt(swift, "%s%s", separator, types[i].swift);
@@ -648,8 +651,9 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 		odin = gb_string_appendc(odin, types[i].odin);
 		fields[i] = types[i].odin;
 	}
-	fn->result = {gb_string_appendc(swift, ")"), gb_string_appendc(odin, ")"), swift_abi_tuple_result_llvm(fields, elements.count), nullptr};
-	if (!fn->result.llvm) return false;
+	fn->tuple_result = swift_abi_scalar_tuple(fields.data, fields.count);
+	if (!fn->tuple_result) return false;
+	fn->result = {gb_string_appendc(swift, ")"), gb_string_appendc(odin, ")"), swift_abi_tuple_result_llvm(fn->tuple_result), nullptr};
 	fn->rejection = {};
 	return true;
 }
@@ -1980,7 +1984,18 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		declaration = gb_string_append_fmt(declaration, "declare %s %s @\"%.*s\"(", fn.is_async ? "swifttailcc" : "swiftcc",
 			fn.is_async || indirect_result || swift_import_empty(fn.result) || !fn.result.llvm ? "void" : swift_import_projected(fn.result) ? alloc_cstring(permanent_allocator(), swift_import_enum_llvm(fn.result.nominal, true)) : fn.result.llvm, LIT(fn.symbol));
 		isize count = 0;
-		if (indirect_result) {
+		if (fn.tuple_result && make_string_c(fn.result.llvm) == "void") {
+			LLVMTypeRef storage = swift_abi_tuple_storage(native, layout, fn.tuple_result);
+			if (!storage) reason = str_lit("unsupported indirect Swift tuple result layout");
+			else {
+				char *spelling = LLVMPrintTypeToString(storage);
+				declaration = gb_string_append_fmt(declaration, "ptr noalias sret(%s)", spelling);
+				LLVMDisposeMessage(spelling);
+			}
+			record_parameters = true;
+			count++;
+			native_index++;
+		} else if (indirect_result) {
 			if (fn.result.nominal->projected && fn.result.nominal->alignment) {
 				record_parameters = true;
 				if (!reason.len && !swift_import_struct_parameter(native, native_index, fn.result.nominal, true)) reason = str_lit("unsupported indirect Swift result layout");

@@ -3331,13 +3331,14 @@ gb_internal lbArgType lb_swift_abi_value(LLVMContextRef c, LLVMTypeRef type, boo
 		return lb_arg_type_direct(type);
 	}
 
-	if ((is_result && swift_abi_tuple_has_narrow_fields(odin_type)) || swift_abi_record_has_narrow_fields(odin_type)) {
+	if ((is_result && swift_abi_tuple_needs_layout(odin_type)) || swift_abi_record_has_narrow_fields(odin_type)) {
 		SwiftABIRecordComponent components[4];
 		isize count = swift_abi_record_components(odin_type, components, gb_count_of(components));
 		lbArgType arg = {};
 		if (count > gb_count_of(components)) {
 			// sret must not promise Odin's tail padding exists in Swift storage.
-			auto fields = base_type(odin_type)->Struct.fields;
+			Type *bt = base_type(odin_type);
+			auto fields = bt->kind == Type_Tuple ? bt->Tuple.variables : bt->Struct.fields;
 			i64 size = type_offset_of(odin_type, fields.count-1)+type_size_of(fields[fields.count-1]->type);
 			LLVMTypeRef storage = LLVMArrayType(LLVMInt8TypeInContext(c), cast(unsigned)size);
 			LLVMAttributeRef attr = is_result ? lb_create_enum_attribute_with_type(c, "sret", storage) : nullptr;

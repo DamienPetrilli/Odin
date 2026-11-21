@@ -4209,22 +4209,59 @@ gb_internal bool swift_abi_record_has_narrow_fields(Type *type) {
 	return false;
 }
 
-gb_internal bool swift_abi_tuple_has_narrow_fields(Type *type) {
+gb_internal bool swift_abi_tuple_needs_layout(Type *type) {
 	type = base_type(type);
-	if (!type || type->kind != Type_Tuple || type->Tuple.variables.count > 4) return false;
+	if (!type || type->kind != Type_Tuple) return false;
+	if (type->Tuple.variables.count > 4) return true;
 	for (Entity *field : type->Tuple.variables) {
 		if (is_swift_abi_numeric_scalar(field->type) && type_size_of(field->type) < 8) return true;
 	}
 	return false;
 }
 
+// Swift names the storage behind an indirect result in the sret attribute.
+// Match each scalar and its byte offset, including explicit interior padding.
+#if defined(GB_SYSTEM_OSX)
+gb_internal LLVMTypeRef swift_abi_tuple_storage(LLVMValueRef fn, LLVMTargetDataRef layout, Type *tuple) {
+	if (!fn || !LLVMCountParams(fn) || LLVMGetFunctionCallConv(fn) != LLVMSwiftCallConv ||
+	    LLVMGetTypeKind(LLVMGetReturnType(LLVMGlobalGetValueType(fn))) != LLVMVoidTypeKind) return nullptr;
+	unsigned noalias = LLVMGetEnumAttributeKindForName("noalias", 7);
+	if (!LLVMGetEnumAttributeAtIndex(fn, 1, noalias)) return nullptr;
+	unsigned sret = LLVMGetEnumAttributeKindForName("sret", 4);
+	LLVMAttributeRef attr = LLVMGetEnumAttributeAtIndex(fn, 1, sret);
+	if (!attr || !LLVMIsTypeAttribute(attr)) return nullptr;
+	LLVMTypeRef storage = LLVMGetTypeAttributeValue(attr);
+	if (LLVMGetTypeKind(storage) != LLVMStructTypeKind || LLVMIsOpaqueStruct(storage)) return nullptr;
+	LLVMContextRef ctx = LLVMGetTypeContext(storage);
+	auto fields = tuple->Tuple.variables;
+	isize index = 0;
+	for (unsigned i = 0; i < LLVMCountStructElementTypes(storage); i++) {
+		LLVMTypeRef field = LLVMStructGetTypeAtIndex(storage, i);
+		if (LLVMGetTypeKind(field) == LLVMArrayTypeKind) {
+			if (LLVMGetElementType(field) != LLVMInt8TypeInContext(ctx)) return nullptr;
+			continue;
+		}
+		if (index >= fields.count || LLVMOffsetOfElement(layout, storage, i) != cast(u64)type_offset_of(tuple, index) ||
+		    LLVMGetTypeKind(field) != LLVMStructTypeKind || LLVMIsOpaqueStruct(field) || LLVMCountStructElementTypes(field) != 1) return nullptr;
+		Type *type = base_type(fields[index++]->type);
+		LLVMTypeRef scalar = LLVMStructGetTypeAtIndex(field, 0);
+		LLVMTypeRef expected = type == t_bool ? LLVMInt1TypeInContext(ctx) : type == t_f32 ? LLVMFloatTypeInContext(ctx) :
+		                       type == t_f64 ? LLVMDoubleTypeInContext(ctx) : LLVMIntTypeInContext(ctx, cast(unsigned)type_size_of(type)*8);
+		if (scalar != expected || LLVMABISizeOfType(layout, field) != cast(u64)type_size_of(type)) return nullptr;
+	}
+	if (index != fields.count) return nullptr;
+	u64 size = cast(u64)(type_offset_of(tuple, index-1)+type_size_of(fields[index-1]->type));
+	if (LLVMABISizeOfType(layout, storage) != size || !swift_import_storage_parameter(fn, 0, size, type_align_of(tuple), true)) return nullptr;
+	return storage;
+}
+
 // Only Darwin module inspection needs textual LLVM types. Both probes and
 // code generation derive the result registers from the same Odin tuple.
-#if defined(GB_SYSTEM_OSX)
 gb_internal char const *swift_abi_tuple_result_llvm(Type *tuple) {
 	SwiftABIRecordComponent components[4];
 	isize n = swift_abi_record_components(tuple, components, gb_count_of(components));
-	GB_ASSERT(n >= 1 && n <= gb_count_of(components));
+	if (n > gb_count_of(components)) return "void";
+	GB_ASSERT(n >= 1);
 	gbString result = gb_string_make(permanent_allocator(), n == 1 ? "" : "{ ");
 	for (isize i = 0; i < n; i++) {
 		Type *type = base_type(components[i].type);
@@ -4237,9 +4274,8 @@ gb_internal char const *swift_abi_tuple_result_llvm(Type *tuple) {
 	return n == 1 ? result : gb_string_appendc(result, " }");
 }
 
-gb_internal char const *swift_abi_tuple_result_llvm(char const **odin_names, isize count) {
-	Type *fields[4] = {};
-	GB_ASSERT(count >= 2 && count <= gb_count_of(fields));
+gb_internal Type *swift_abi_scalar_tuple(char const **odin_names, isize count) {
+	auto fields = slice_make<Type *>(temporary_allocator(), count);
 	for (isize i = 0; i < count; i++) {
 		for (auto &type : basic_types) {
 			if (type.Basic.name != make_string_c(odin_names[i])) continue;
@@ -4248,7 +4284,7 @@ gb_internal char const *swift_abi_tuple_result_llvm(char const **odin_names, isi
 		}
 		if (!fields[i]) return nullptr;
 	}
-	return swift_abi_tuple_result_llvm(alloc_type_tuple_from_field_types(fields, count, false, true));
+	return alloc_type_tuple_from_field_types(fields.data, count, false, true);
 }
 #endif
 
@@ -4460,12 +4496,12 @@ gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc
 				}
 			}
 			if (result_count > 1) {
-				bool direct = result_count <= 4;
+				bool scalar_results = true;
 				for (Entity *result : results->Tuple.variables) {
-					direct &= is_swift_abi_numeric_scalar(result->type);
+					scalar_results &= is_swift_abi_numeric_scalar(result->type);
 				}
-				if (!direct) {
-					error(proc_type_node, "Multiple Swift results require two to four numeric or Bool scalars");
+				if (!scalar_results) {
+					error(proc_type_node, "Multiple Swift results require numeric or Bool scalars");
 					success = false;
 				}
 			}

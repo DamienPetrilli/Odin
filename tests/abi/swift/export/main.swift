@@ -279,3 +279,25 @@ for truth in UInt8.min...UInt8.max {
 	precondition(value.code == .min && value.quantity == 0xffba && value.enabled == (truth != 0))
 	precondition(value.weight.bitPattern == weight.bitPattern)
 }
+
+typealias WideReply = (bits: UInt16, weight: Double, low: Int64, active: Bool, high: UInt64, tail: Int16)
+@_silgen_name("wide_reply")
+private func rawWideReply(_ x: Int16, _ raw: UInt8) -> WideReply
+let wideStorage = UnsafeMutableRawPointer.allocate(byteCount: MemoryLayout<WideReply>.stride + 8, alignment: MemoryLayout<WideReply>.alignment)
+defer { wideStorage.deallocate() }
+wideStorage.initializeMemory(as: UInt8.self, repeating: 0xa5, count: MemoryLayout<WideReply>.stride + 8)
+let wideDestination = wideStorage.bindMemory(to: WideReply.self, capacity: 1)
+for raw in UInt8.min...UInt8.max {
+	wideDestination.initialize(to: wideReply(-32767, raw))
+	let rawResult = rawWideReply(-32767, raw)
+	precondition(rawResult.active == (raw != 0))
+	let v = wideDestination.pointee
+	precondition(v.bits == 0x8001 && v.weight.bitPattern == (-0.0 as Double).bitPattern && v.low == .min)
+	precondition(v.active == (raw != 0) && v.high == .max && v.tail == -32767)
+	for i in MemoryLayout<WideReply>.size..<MemoryLayout<WideReply>.stride + 8 {
+		precondition(wideStorage.load(fromByteOffset: i, as: UInt8.self) == 0xa5)
+	}
+	wideDestination.deinitialize(count: 1)
+}
+let bytes = packedBytes(0xff)
+precondition(bytes == (0xff, true, 0xfe, 0x41, 0))

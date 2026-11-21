@@ -24,3 +24,7 @@ public func identityFloat(_ value: Float) -> Float { value }
 @inline(never) public func packedReply(_ x: Int8, _ y: UInt16, _ z: Bool, _ w: Float) -> (Int8, UInt16, Bool, Float) {
 	(x, y, z, w)
 }
+
+@inline(never) public func wideReply(_ x: Int16) -> (UInt16, Double, Int64, Bool, UInt64, Int16) {
+	(UInt16(bitPattern: x), -0.0, Int64.min, x != 0, UInt64.max, x)
+}

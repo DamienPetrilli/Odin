@@ -84,6 +84,16 @@ check_optional_width :: proc(values: []$T, $echo: $Echo, $later: $Later) -> int 
 	return 1+len(values)
 }
 
+check_large_tuples :: proc() {
+	bytes := [3]u8{11, 23, 47}
+	a, b, c, d, e := fixture.indirect_tuple(min(int), bytes[1:])
+	assert(a == min(int) && b == 2 && c == -2 && d == 23 && e == -4)
+	a, b, c, d, e = fixture.indirect_tuple(17, nil)
+	assert(a == 17 && b == 0 && c == -2 && d == 0 && e == -4)
+	first, truth, third, fourth, fifth := fixture.packed_bytes(0xff)
+	assert(first == 0xff && truth && third == 0xfe && fourth == 0x41 && fifth == 0)
+}
+
 check_tuple_borrows :: proc() {
 	bytes := [4]u8{19, 23, 41, 47}
 	needle: u8 = 41
@@ -100,6 +110,7 @@ check_tuple_borrows :: proc() {
 }
 
 check_scalars :: proc() {
+	check_large_tuples()
 	check_tuple_borrows()
 	lo, hi := fixture.packed_tuple(0xfe, 0xfcba)
 	assert(lo == 0xfe && hi == 0xfcba)

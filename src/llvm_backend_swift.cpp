@@ -70,9 +70,15 @@ gb_internal LLVMValueRef lb_swift_record_load(lbProcedure *p, LLVMValueRef point
 
 gb_internal void lb_swift_record_store(lbProcedure *p, LLVMValueRef pointer, lbValue value) {
 	lbValue destination = {pointer, alloc_type_pointer(value.type)};
-	auto fields = base_type(value.type)->Struct.fields;
+	Type *bt = base_type(value.type);
+	auto fields = bt->kind == Type_Tuple ? bt->Tuple.variables : bt->Struct.fields;
 	for_array(i, fields) {
-		lb_emit_store(p, lb_emit_struct_ep(p, destination, cast(i32)i), lb_emit_struct_ev(p, value, cast(i32)i));
+		lbValue field = lb_emit_struct_ev(p, value, cast(i32)i);
+		if (base_type(field.type) == t_bool) {
+			LLVMValueRef truth = LLVMBuildICmp(p->builder, LLVMIntNE, field.value, LLVMConstNull(LLVMTypeOf(field.value)), "");
+			field.value = LLVMBuildZExt(p->builder, truth, LLVMTypeOf(field.value), "");
+		}
+		lb_emit_store(p, lb_emit_struct_ep(p, destination, cast(i32)i), field);
 	}
 }
 

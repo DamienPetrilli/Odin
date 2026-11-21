@@ -31,10 +31,11 @@ Without a local library/module, a bare module name selects an SDK framework.
 Use a target-specific source file or `#+build` constraint for platform-dependent
 imports: imports are resolved during parsing.
 
-A synchronous free function returning two to four numeric or Bool scalars maps
+A synchronous free function returning a tuple of numeric or Bool scalars maps
 to ordinary Odin multiple returns. For example, `low, high := example.bounds(x)`
-calls Swift's `bounds(_:) -> (lower: UInt64, upper: UInt64)`. Each result is
-copied in registers. Synchronous pointer and buffer parameters use the same typed
+calls Swift's `bounds(_:) -> (lower: UInt64, upper: UInt64)`. Swift can pack several narrow results into a single register. When a tuple needs
+more than four register components, the caller supplies result storage. Neither
+form requires heap allocation or cleanup. Synchronous pointer and buffer parameters use the same typed
 pointers and borrowed slices with these results. Run with `-show-swift-imports` to see the result names.
 
 Swift names become snake case, so `addLater` becomes `add_later`:

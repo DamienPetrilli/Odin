@@ -104,7 +104,7 @@ check_invalid darwin_arm64 \
 	"'#by_ptr' cannot be used with the \"swift\" calling convention" \
 	'Unsupported result type for the "swift" calling convention' \
 	'The "swift" calling convention requires a fixed, non-polymorphic procedure' \
-	'Multiple Swift results require two to four numeric or Bool scalars' \
+	'Multiple Swift results require numeric or Bool scalars' \
 	"'#swift_error' requires a final ^rawptr output after Swift self on a synchronous foreign procedure" \
 	'in_local_slot: ^' \
 	'in_callback_slot: ^' \

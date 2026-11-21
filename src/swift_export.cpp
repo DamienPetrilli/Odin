@@ -510,7 +510,7 @@ gb_internal bool swift_export_check_types() {
 	}
 	for_array(i, swift_export_procedures) {
 		Type *results = base_type(swift_export_procedures[i].entity->type)->Proc.results;
-		if (!swift_abi_tuple_has_narrow_fields(reduce_tuple_to_single_type(results))) continue;
+		if (!swift_abi_tuple_needs_layout(reduce_tuple_to_single_type(results))) continue;
 		source = gb_string_append_fmt(source, "@_silgen_name(\"odin_tuple_%td\") public func tuple_%td() -> (", i, i);
 		for_array(j, results->Tuple.variables) {
 			if (j) source = gb_string_appendc(source, ", ");
@@ -632,12 +632,14 @@ gb_internal bool swift_export_check_types() {
 	for_array(i, swift_export_procedures) {
 		Entity *e = swift_export_procedures[i].entity;
 		Type *results = base_type(e->type)->Proc.results;
-		if (!swift_abi_tuple_has_narrow_fields(reduce_tuple_to_single_type(results))) continue;
+		if (!swift_abi_tuple_needs_layout(reduce_tuple_to_single_type(results))) continue;
 		gbString name = gb_string_append_fmt(gb_string_make(temporary_allocator(), ""), "odin_tuple_%td", i);
 		LLVMValueRef probe = LLVMGetNamedFunction(module, name);
 		char *actual = probe ? LLVMPrintTypeToString(LLVMGetReturnType(LLVMGlobalGetValueType(probe))) : nullptr;
-		bool valid = actual && LLVMGetFunctionCallConv(probe) == LLVMSwiftCallConv && LLVMCountParams(probe) == 0 &&
-		             make_string_c(actual) == make_string_c(swift_abi_tuple_result_llvm(results));
+		String expected = make_string_c(swift_abi_tuple_result_llvm(results));
+		bool indirect = expected == "void";
+		bool valid = actual && make_string_c(actual) == expected && LLVMGetFunctionCallConv(probe) == LLVMSwiftCallConv &&
+		             LLVMCountParams(probe) == (indirect ? 1u : 0u) && (!indirect || swift_abi_tuple_storage(probe, data, results));
 		if (actual) LLVMDisposeMessage(actual);
 		if (!valid) error(e->token, "Swift export: unsupported native tuple result lowering for '%.*s'", LIT(e->token.string));
 	}
