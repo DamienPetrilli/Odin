@@ -60,6 +60,30 @@ check_width :: proc(values: []$T, $echo: $Echo, $later: $Later) -> int {
 	return len(values)
 }
 
+// All tested widths fit in 32 bits. Use a separate task expectation for nil.
+OPTIONAL_ABSENT :: u64(1)<<40
+
+optional_width_received :: proc(task: swift.Task, value: Maybe($T)) {
+	expected := take_expected(task)
+	if expected == OPTIONAL_ABSENT {
+		assert(value == nil)
+	} else {
+		assert(scalar_bits(value.(T)) == expected)
+	}
+	scalar_calls += 1
+}
+
+check_optional_width :: proc(values: []$T, $echo: $Echo, $later: $Later) -> int {
+	assert(echo(nil) == nil)
+	track_task(later(nil, optional_width_received) or_else panic("Async nil"), OPTIONAL_ABSENT)
+	for value in values {
+		actual := echo(value)
+		assert(scalar_bits(actual.(T)) == scalar_bits(value))
+		track_task(later(value, optional_width_received) or_else panic("Async optional"), scalar_bits(value))
+	}
+	return 1+len(values)
+}
+
 check_scalars :: proc() {
 	#assert(size_of(int) == 8 && size_of(uint) == 8 && size_of(bool) == 1)
 	#assert(size_of(fixture.NativeWords) == 16 && offset_of(fixture.NativeWords, unsigned) == 8)
@@ -167,6 +191,21 @@ check_scalars :: proc() {
 	expected += check_width([]i32{min(i32), max(i32), 1}, fixture.echo_int32, fixture.echo_int32_later)
 	expected += check_width([]u32{min(u32), max(u32), 1}, fixture.echo_uint32, fixture.echo_uint32_later)
 	expected += check_width([]f32{0, -1.25, transmute(f32)u32(0x80000000), transmute(f32)u32(0x7fc01234)}, fixture.echo_float, fixture.echo_float_later)
+	expected += check_optional_width([]i8{0, min(i8), max(i8), 1}, fixture.optional_int8, fixture.optional_int8_later)
+	expected += check_optional_width([]u8{min(u8), max(u8), 1}, fixture.optional_uint8, fixture.optional_uint8_later)
+	expected += check_optional_width([]i16{0, min(i16), max(i16), 1}, fixture.optional_int16, fixture.optional_int16_later)
+	expected += check_optional_width([]u16{min(u16), max(u16), 1}, fixture.optional_uint16, fixture.optional_uint16_later)
+	expected += check_optional_width([]i32{0, min(i32), max(i32), 1}, fixture.optional_int32, fixture.optional_int32_later)
+	expected += check_optional_width([]u32{min(u32), max(u32), 1}, fixture.optional_uint32, fixture.optional_uint32_later)
+	expected += check_optional_width([]f32{0, -1.25, transmute(f32)u32(0x80000000), transmute(f32)u32(0x7fc01234)}, fixture.optional_float, fixture.optional_float_later)
+	none: Maybe(i8)
+	some_none: Maybe(Maybe(i8)) = none
+	assert(fixture.nested_int8(nil) == nil)
+	inner, present := fixture.nested_int8(some_none).?
+	assert(present && inner == nil)
+	some: Maybe(i8) = min(i8)
+	inner, present = fixture.nested_int8(Maybe(Maybe(i8))(some)).?
+	assert(present && inner.(i8) == min(i8))
 	deadline := time.tick_now()
 	for scalar_calls != expected {
 		assert(time.tick_since(deadline) < 5*time.Second)

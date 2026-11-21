@@ -1131,6 +1131,42 @@ public func echoFloatLater(_ value: Float) async -> Float {
 	return value
 }
 
+public func optionalInt8(_ value: Int8?) -> Int8? { value }
+public func optionalInt8Later(_ value: Int8?) async -> Int8? {
+	await Task.yield()
+	return value
+}
+public func optionalUInt8(_ value: UInt8?) -> UInt8? { value }
+public func optionalUInt8Later(_ value: UInt8?) async -> UInt8? {
+	await Task.yield()
+	return value
+}
+public func optionalInt16(_ value: Int16?) -> Int16? { value }
+public func optionalInt16Later(_ value: Int16?) async -> Int16? {
+	await Task.yield()
+	return value
+}
+public func optionalUInt16(_ value: UInt16?) -> UInt16? { value }
+public func optionalUInt16Later(_ value: UInt16?) async -> UInt16? {
+	await Task.yield()
+	return value
+}
+public func optionalInt32(_ value: Int32?) -> Int32? { value }
+public func optionalInt32Later(_ value: Int32?) async -> Int32? {
+	await Task.yield()
+	return value
+}
+public func optionalUInt32(_ value: UInt32?) -> UInt32? { value }
+public func optionalUInt32Later(_ value: UInt32?) async -> UInt32? {
+	await Task.yield()
+	return value
+}
+public func optionalFloatLater(_ value: Float?) async -> Float? {
+	await Task.yield()
+	return value
+}
+public func nestedInt8(_ value: Int8??) -> Int8?? { value }
+
 public func inspectBuffer(_ values: UnsafeBufferPointer<Float>) -> UInt {
 	UInt(bitPattern: values.baseAddress)
 }

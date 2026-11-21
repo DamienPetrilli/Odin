@@ -394,7 +394,11 @@ gb_internal gbString swift_import_emit_case_result(gbString source, SwiftImportN
 gb_internal bool swift_import_plain_optional(SwiftImportNominal *type) {
 	if (!type->is_optional || !type->projected || type->owns || !type->alignment || !type->components.count) return false;
 	auto argument = type->argument;
-	if (argument->is_scalar) return type->size == 9 && type->alignment == 8;
+	if (argument->is_scalar) {
+		// Bool has spare bit patterns. Integer and floating-point scalars
+		// have none and their size equals their natural alignment on arm64.
+		return argument->swift_name != "Swift.Bool" && type->size == type->alignment+1;
+	}
 	return swift_import_plain_optional(argument) && type->size == argument->size+1 && type->alignment == argument->alignment;
 }
 
@@ -483,10 +487,14 @@ gb_internal gbString swift_import_emit_enum(gbString source, SwiftImportNominal 
 	source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_take :: proc(storage: rawptr) -> (result: %.*s, ok: bool) #optional_ok {\n", LIT(name), LIT(name));
 	bool plain_optional = swift_import_plain_optional(type);
 	if (plain_optional) source = gb_string_append_fmt(source,
-		"tag := u32((cast([^]u8)storage)[%llu])\n", cast(unsigned long long)(type->size-1));
+		"tag := u32((cast([^]u8)storage)[%llu])\nif tag > 1 { panic(\"Invalid frozen Swift enum tag\") }\n", cast(unsigned long long)(type->size-1));
 	else source = gb_string_append_fmt(source, "metadata := _swift_%.*s_metadata(0).type\ntag, tagged := swift.enum_tag(storage, metadata)\nassert(tagged)\n", LIT(name));
 	for_array(i, type->cases) {
 		auto const &c = type->cases[i];
+		if (plain_optional && !c.has_payload) {
+			source = swift_import_emit_case_result(source, type, c);
+			continue;
+		}
 		source = gb_string_append_fmt(source, "if tag == %.*s {\n", LIT(c.tag_name));
 		if (c.has_payload && !plain_optional) source = gb_string_appendc(source, "swift.enum_project(storage, metadata)\n");
 		source = swift_import_emit_tuple(source, c);
@@ -511,10 +519,7 @@ gb_internal gbString swift_import_emit_enum(gbString source, SwiftImportNominal 
 		source = gb_string_appendc(source, "}\n");
 	}
 	if (!type->is_frozen) source = gb_string_append_fmt(source, "unknown := swift.value_take(storage, metadata) or_return\nreturn %.*s_Unknown{_swift_unknown_%.*s(unknown)}, true\n", LIT(name), LIT(name));
-	else {
-		if (!plain_optional) source = gb_string_appendc(source, "swift.value_deinitialize(storage, metadata)\n");
-		source = gb_string_appendc(source, "panic(\"Invalid frozen Swift enum tag\")\n");
-	}
+	else if (!plain_optional) source = gb_string_appendc(source, "swift.value_deinitialize(storage, metadata)\npanic(\"Invalid frozen Swift enum tag\")\n");
 	source = gb_string_appendc(source, "}\n");
 
 	// Construct the native enum in uninitialized storage. Failure leaves it

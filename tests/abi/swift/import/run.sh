@@ -80,7 +80,7 @@ if [[ "$sdk" != macosx ]]; then cp "$here/controller.odin" "$build/names/"; fi
 # Check rejections in one invocation on every target, including link-only iOS runs.
 rejected=(async_buffer returned_buffer generic throwing isolated_sync overloaded future inout_value typed_throwing
 	unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields
-	unsupported_scalar_argument unsupported_scalar_result narrow_array optional_float unsupported_bool_array unsupported_set_result
+	unsupported_scalar_argument unsupported_scalar_result narrow_array unsupported_bool_array unsupported_set_result
 	unsupported_optional_set unsupported_bool_set client_only new_number new_number_for_ NewValue
 	NewValue_number EvolvingFailure_Deferred)
 cat > "$build/rejected.odin" <<'ODIN'
@@ -118,7 +118,6 @@ expect_diagnostic "'isolated_sync': synchronous @MainActor calls require actor i
 expect_diagnostic "'unsupported_scalar_argument': parameter 'value' has unsupported type or modifier 'Swift.Float16'"
 expect_diagnostic "'unsupported_scalar_result': unsupported result type 'Swift.Float16'"
 expect_diagnostic "'narrow_array': unsupported result type '[Swift.Int16]'"
-expect_diagnostic "'optional_float': unsupported result type 'Swift.Float?'"
 expect_diagnostic "'unsupported_bool_array': unsupported result type '[Swift.Bool]'"
 expect_diagnostic "'recursive_payload': unsupported result type 'SwiftImportFixture.RecursivePayload'"
 expect_diagnostic "func overloaded(_ value: UInt64) -> UInt64"

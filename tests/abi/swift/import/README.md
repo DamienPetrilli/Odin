@@ -106,7 +106,8 @@ copy/ownership rules as the other scalar arrays. Bool arrays remain outside this
 
 Swift `Float` and signed and unsigned 8-, 16-, and 32-bit integers import directly
 as `f32`, `i8/u8`, `i16/u16`, and `i32/u32` in synchronous and asynchronous
-procedures. Their optional, array and record mappings need separate layout checks.
+procedures. Optionals of these scalars use native Odin `Maybe(T)` by value, including
+async callback results. The importer checks the Swift size, alignment and calling sequence.
 
 A synchronous `UnsafeBufferPointer<T>` or `UnsafeMutableBufferPointer<T>`
 parameter accepts an ordinary Odin slice of a supported numeric scalar or bool.

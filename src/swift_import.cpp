@@ -36,7 +36,7 @@ struct SwiftImportType {
 	char const *odin;
 	char const *llvm;
 	SwiftImportNominal *nominal;
-	bool scalar_only; // Aggregate projections require separate storage and ownership checks.
+	bool scalar_only; // Narrow scalars need per-aggregate layout checks.
 };
 
 // Keep source identity, Odin spelling and ABI spelling together. Swift.Int
@@ -460,7 +460,7 @@ gb_internal bool swift_import_api_type(JsonValue *api, SwiftImportType *type, Ar
 	}
 	if (children.count != 1) return false;
 	SwiftImportType parameter = {};
-	if (!swift_import_api_type(children[0], &parameter, types, argument) || parameter.scalar_only) return false;
+	if (!swift_import_api_type(children[0], &parameter, types, argument) || (parameter.scalar_only && usr != "s:Sq")) return false;
 	if (!parameter.nominal) {
 		if ((usr != "s:Sa" && usr != "s:Sq" && usr != "s:Sh") || !parameter.swift) return false;
 		String swift_name = make_string_c(parameter.swift);
