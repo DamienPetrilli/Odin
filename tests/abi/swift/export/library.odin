@@ -136,3 +136,9 @@ identity_i32 :: proc "swift" (value: i32) -> i32 { return reply.identity_int32(v
 identity_u32 :: proc "swift" (value: u32) -> u32 { return reply.identity_uint32(value) }
 @(export)
 identity_f32 :: proc "swift" (value: f32) -> f32 { return reply.identity_float(value) }
+
+@(export)
+edit_buffer :: proc "swift" (values: []i16, flags: []bool) {
+	for &v in values { v += 1 }
+	for &v in flags { v = !v }
+}

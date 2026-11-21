@@ -106,7 +106,15 @@ copy/ownership rules as the other scalar arrays. Bool arrays remain outside this
 
 Swift `Float` and signed and unsigned 8-, 16-, and 32-bit integers import directly
 as `f32`, `i8/u8`, `i16/u16`, and `i32/u32` in synchronous and asynchronous
-procedures. Their aggregate and buffer mappings need separate layout checks.
+procedures. Their optional, array and record mappings need separate layout checks.
+
+A synchronous `UnsafeBufferPointer<T>` or `UnsafeMutableBufferPointer<T>`
+parameter accepts an ordinary Odin slice of a supported numeric scalar or bool.
+The call passes its address and count directly. Swift writes through a mutable
+buffer reach the original Odin elements. A nil slice is an empty buffer.
+`UnsafePointer<T>` and `UnsafeMutablePointer<T>` take a non-nil `^T`.
+Keep the storage alive for the lifetime documented by the Swift callee. The
+importer rejects async capture and returned views for these borrowed types.
 
 Copyable, escapable resilient structs use typed addresses backed by Swift
 metadata. Struct constructors, methods, getters and nested types are supported when

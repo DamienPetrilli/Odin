@@ -1130,3 +1130,15 @@ public func echoFloatLater(_ value: Float) async -> Float {
 	await Task.yield()
 	return value
 }
+
+public func inspectBuffer(_ values: UnsafeBufferPointer<Float>) -> UInt {
+	UInt(bitPattern: values.baseAddress)
+}
+public func editBuffer(_ values: UnsafeMutableBufferPointer<Int16>) -> Int {
+	for i in values.indices { values[i] &+= 1 }
+	return values.count
+}
+public func readPointer(_ value: UnsafePointer<UInt32>) -> UInt32 { value.pointee }
+public func writePointer(_ value: UnsafeMutablePointer<Float>, _ newValue: Float) { value.pointee = newValue }
+public func asyncBuffer(_ values: UnsafeBufferPointer<Int16>) async -> Int { values.count }
+public func returnedBuffer(_ values: UnsafeBufferPointer<Int16>) -> UnsafeBufferPointer<Int16> { values }

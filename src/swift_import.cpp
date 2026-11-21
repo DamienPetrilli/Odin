@@ -96,11 +96,20 @@ struct SwiftImportNominal {
 	bool supported, is_enum, is_frozen, is_template, is_optional, is_scalar, is_record, is_date, is_uuid, is_error;
 };
 
+enum SwiftImportBorrow {
+	SwiftImportBorrow_None,
+	SwiftImportBorrow_Pointer,
+	SwiftImportBorrow_MutablePointer,
+	SwiftImportBorrow_Buffer,
+	SwiftImportBorrow_MutableBuffer,
+};
+
 struct SwiftImportParameter {
 	String name, label;
 	SwiftImportType type;
 	bool empty_set;
 	bool objc_controller;
+	SwiftImportBorrow borrow;
 	bool consumed;
 };
 
@@ -542,6 +551,34 @@ gb_internal String swift_import_type_rejection(JsonValue *api, String parameter 
 	return make_string_c(text);
 }
 
+// Only accept the concrete standard-library declaration and an unmodified
+// scalar pointee. An optional, inout, or escaping async view needs another contract.
+gb_internal bool swift_import_borrowed_parameter(JsonValue *api, Slice<JsonValue *> fragments, SwiftImportParameter *param) {
+	String usr = swift_import_string(api, "usr");
+	SwiftImportBorrow kind = SwiftImportBorrow_None;
+	if (usr == "s:SP") kind = SwiftImportBorrow_Pointer;
+	else if (usr == "s:Sp") kind = SwiftImportBorrow_MutablePointer;
+	else if (usr == "s:SR") kind = SwiftImportBorrow_Buffer;
+	else if (usr == "s:Sr") kind = SwiftImportBorrow_MutableBuffer;
+	else return false;
+
+	auto children = swift_import_array(api, "children");
+	if (children.count != 1 || fragments.count != 6 ||
+	    swift_import_string(fragments[1], "spelling") != ": " ||
+	    swift_import_string(fragments[2], "preciseIdentifier") != usr ||
+	    swift_import_string(fragments[3], "spelling") != "<" ||
+	    swift_import_string(fragments[5], "spelling") != ">") return false;
+	SwiftImportType element = {};
+	String element_usr = swift_import_string(children[0], "usr");
+	if (swift_import_string(fragments[4], "preciseIdentifier") != element_usr || !swift_import_scalar(element_usr, &element)) return false;
+	bool buffer = kind == SwiftImportBorrow_Buffer || kind == SwiftImportBorrow_MutableBuffer;
+	String odin = concatenate_strings(permanent_allocator(), buffer ? str_lit("[]") : str_lit("^"), make_string_c(element.odin));
+	param->type = {alloc_cstring(permanent_allocator(), swift_import_string(api, "printedName")),
+	               alloc_cstring(permanent_allocator(), odin), buffer ? "i64, i64" : "ptr", nullptr};
+	param->borrow = kind;
+	return true;
+}
+
 gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftImportFunction *fn, Array<SwiftImportNominal *> *types) {
 	fn->api = api;
 	fn->name = swift_import_string(api, "name");
@@ -687,6 +724,11 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		    swift_import_string(fragments[2], "preciseIdentifier") == "c:objc(cs)UIViewController") {
 			p.type = {"UIKit.UIViewController", "^_swift_ui.ViewController", "ptr", nullptr};
 			p.objc_controller = true;
+		} else if (swift_import_borrowed_parameter(operand, fragments, &p)) {
+			if (fn->is_async) {
+				fn->rejection = str_lit("a borrowed Swift pointer or buffer cannot be captured across suspension");
+				return false;
+			}
 		} else if (fn->is_collection) {
 			if (api_types.count != 2 || swift_import_string(api_types[1], "name") != "GenericTypeParam" || swift_import_string(api_types[1], "printedName") != collection_parameter) return false;
 			if (!swift_import_container_type(str_lit("s:Sa"), swift_import_nominal_type(swift_import_string_type(types)), &p.type, types)) return false;
@@ -970,7 +1012,11 @@ gb_internal void swift_import_report_function(Array<String> *report, SwiftImport
 	for (auto const &param : fn.parameters) {
 		if (param.empty_set) continue;
 		if (param.objc_controller) row = gb_string_append_fmt(row, "  %.*s: retained through completion\n", LIT(param.name));
-		else if (param.type.nominal) row = gb_string_append_fmt(row, "  %.*s: caller keeps ownership\n", LIT(param.name));
+		else if (param.borrow != SwiftImportBorrow_None) {
+			bool writable = param.borrow == SwiftImportBorrow_MutableBuffer || param.borrow == SwiftImportBorrow_MutablePointer;
+			bool pointer = param.borrow == SwiftImportBorrow_Pointer || param.borrow == SwiftImportBorrow_MutablePointer;
+			row = gb_string_append_fmt(row, "  %.*s: borrowed %s storage%s; caller controls lifetime\n", LIT(param.name), writable ? "mutable" : "read-only", pointer ? " (non-null pointer)" : "");
+		} else if (param.type.nominal) row = gb_string_append_fmt(row, "  %.*s: caller keeps ownership\n", LIT(param.name));
 	}
 	if (fn.is_async) {
 		row = gb_string_appendc(row, "  start: owned task (swift.task_release); false means no callback\n  completion: borrowed task");
@@ -1785,7 +1831,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			}
 			declaration = gb_string_append_fmt(declaration, "%s%s", count++ ? ", " : "", llvm);
 			if (fn.is_collection && swift_import_string_array(param.type)) native_index++;
-			else if (swift_import_kind(param.type, SwiftImportValue_String)) native_index += 2;
+			else if (swift_import_kind(param.type, SwiftImportValue_String) || param.borrow == SwiftImportBorrow_Buffer || param.borrow == SwiftImportBorrow_MutableBuffer) native_index += 2;
 			else if (swift_import_projected(param.type) && !swift_import_indirect(param.type)) native_index += cast(unsigned)param.type.nominal->components.count;
 			else native_index++;
 		}

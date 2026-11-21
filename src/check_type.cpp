@@ -4142,7 +4142,7 @@ gb_internal bool is_swift_abi_slice_parameter(Type *type) {
 	type = base_type(type);
 	if (!type || type->kind != Type_Slice) return false;
 	Type *elem = type->Slice.elem;
-	return elem == t_i64 || elem == t_u64 || elem == t_int || elem == t_uint || elem == t_f64;
+	return elem == base_type(elem) && is_swift_abi_numeric_scalar(elem);
 }
 
 // Odin enum procedures use their integer backing type internally. The Swift

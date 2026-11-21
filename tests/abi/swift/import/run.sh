@@ -78,7 +78,7 @@ if [[ "$sdk" != macosx ]]; then cp "$here/controller.odin" "$build/names/"; fi
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/names-test"
 
 # Check rejections in one invocation on every target, including link-only iOS runs.
-rejected=(generic throwing isolated_sync overloaded future inout_value typed_throwing
+rejected=(async_buffer returned_buffer generic throwing isolated_sync overloaded future inout_value typed_throwing
 	unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields
 	unsupported_scalar_argument unsupported_scalar_result narrow_array optional_float unsupported_bool_array unsupported_set_result
 	unsupported_optional_set unsupported_bool_set client_only new_number new_number_for_ NewValue
@@ -111,6 +111,8 @@ for name in new_number new_number_for_ NewValue NewValue_number; do
 	expect_diagnostic "'$name': requires $platform $introduced (deployment target $platform 15.0.0)"
 done
 expect_diagnostic "'EvolvingFailure_Deferred': requires $platform 99.0 (deployment target $platform 15.0.0)"
+expect_diagnostic "'async_buffer': a borrowed Swift pointer or buffer cannot be captured across suspension"
+expect_diagnostic "'returned_buffer': unsupported result type"
 expect_diagnostic "'client_only': unsupported Swift attribute '@_alwaysEmitIntoClient'"
 expect_diagnostic "'isolated_sync': synchronous @MainActor calls require actor isolation"
 expect_diagnostic "'unsupported_scalar_argument': parameter 'value' has unsupported type or modifier 'Swift.Float16'"

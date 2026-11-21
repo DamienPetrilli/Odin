@@ -198,3 +198,12 @@ for value: UInt32 in [.min, .max, 1] { precondition(identityU32(value) == value)
 for bits: UInt32 in [0, 0x80000000, 0x00000001, 0x7f800000, 0x7fc01234] {
 	precondition(identityF32(Float(bitPattern: bits)).bitPattern == bits)
 }
+
+var shortBuffer: [Int16] = [-7, 0, .max, 9]
+var flagBuffer = [true, false, true]
+shortBuffer.withUnsafeMutableBufferPointer { words in
+	flagBuffer.withUnsafeMutableBufferPointer { flags in
+		editBuffer(UnsafeMutableBufferPointer(rebasing: words[1..<3]), flags)
+	}
+}
+precondition(shortBuffer == [-7, 1, .min, 9] && flagBuffer == [false, true, false])

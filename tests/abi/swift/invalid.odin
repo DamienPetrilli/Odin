@@ -26,7 +26,7 @@ Multiple_Bytes :: proc "swift" (value: Byte_Pair)
 Byte_Only :: proc "swift" (value: Byte)
 Indirect_Tag :: proc "swift" (value: Indirect_Byte)
 Indirect_Tag_Result :: proc "swift" () -> Indirect_Byte
-Slice_Parameter :: proc "swift" (value: []u8)
+Slice_Parameter :: proc "swift" (value: []i128)
 String_Slice :: proc "swift" (value: []string)
 Nested_Slice :: proc "swift" (value: [][]u64)
 Slice_Result :: proc "swift" () -> []u64

@@ -83,6 +83,16 @@ check_scalars :: proc() {
 	words := fixture.NativeWords{min(int), max(uint)}
 	assert(fixture.native_words(words) == words)
 	assert(fixture.ScalarState_can_proceed())
+	samples := [?]f32{0, 1, 2}
+	assert(fixture.inspect_buffer(samples[1:]) == uint(uintptr(&samples[1])))
+	assert(fixture.inspect_buffer(nil) == 0)
+	guarded := [?]i16{-7, 0, 32767, 9}
+	assert(fixture.edit_buffer(guarded[1:3]) == 2 && guarded == [4]i16{-7, 1, -32768, 9})
+	assert(fixture.edit_buffer(nil) == 0)
+	word := u32(0xfedcba98)
+	assert(fixture.read_pointer(&word) == word)
+	fixture.write_pointer(&samples[1], -1.25)
+	assert(samples == [3]f32{0, -1.25, 2})
 	assert(state.allocations == 0)
 	owner := fixture.ScalarState_init(true, min(int), max(uint)) or_else panic("Scalar getters")
 	assert(fixture.ScalarState_ready(owner))

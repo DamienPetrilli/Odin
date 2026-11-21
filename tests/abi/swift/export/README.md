@@ -59,7 +59,7 @@ structs become frozen Swift value types. Bool fields may be mixed with the
 supported 64-bit scalars. The Swift compiler verifies field offsets, size, stride
 and native register lowering; indirect results preserve Swift tail padding. Values are passed using the native ABI.
 
-Input slices of `i64`, `u64`, `int`, `uint`, or `f64` become
+Input slices of the supported native numeric scalars and `bool` become
 `UnsafeMutableBufferPointer<Element>`. Swift owns the storage; Odin borrows it
 only for the call. The entry point passes the same address and count and makes
 no buffer allocation or element copy. Odin must not free or retain this storage.
