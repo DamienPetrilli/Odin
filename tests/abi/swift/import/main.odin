@@ -81,6 +81,12 @@ failed_start :: proc() -> bool {
 }
 
 main :: proc() {
+	low, ready := fixture.Namespace_bounds(min(int))
+	assert(low == min(int) && !ready)
+	low, ready = fixture.Namespace_empty_bounds()
+	assert(low == 0 && !ready)
+	a, b, c, d, valid := fixture.Namespace_wide_bounds(max(u64))
+	assert(a == max(u64) && b == 0 && c == (a ~ 17) && d == a-4 && valid)
 	// Bound the entire process, including worker joins and runtime callbacks.
 	_ = alarm(60)
 	defer alarm(0)

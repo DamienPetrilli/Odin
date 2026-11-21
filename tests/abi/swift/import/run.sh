@@ -56,6 +56,7 @@ grep -Fq 'call add_later :: proc(value: u64, delta: u64, completion: proc(swift.
 grep -Fq 'call async_tuple :: proc(count: u64, completion: proc(task: swift.Task, count: u64, ready: bool))' "$build/mappings.txt"
 grep -Fq 'call throwing_tuple :: proc(n: u64, completion: proc(task: swift.Task, count: u64, ready: bool, err: Call_Error))' "$build/mappings.txt"
 grep -Fq 'call throwing_packed_tuple :: proc(n: u8, completion: proc(task: swift.Task, err: u8, err_: bool, value_2: u8, value_3: u8, value_4: u8, _swift_error: Call_Error))' "$build/mappings.txt"
+grep -Fq 'call Namespace_bounds :: proc(n: int) -> (low: int, ready: bool)' "$build/mappings.txt"
 grep -Fq 'call BoolTail_checked_limit :: proc(n: int) -> (limit: int, ready: bool, err: Call_Error)' "$build/mappings.txt"
 grep -Fq 'call checked_bounds :: proc(n: u64) -> (count: u64, ready: bool, err: Call_Error)' "$build/mappings.txt"
 grep -Fq 'call checked_packed :: proc(err: u8) -> (arg0: u8, value_1: bool, value_2: u16, _swift_error: Call_Error)' "$build/mappings.txt"

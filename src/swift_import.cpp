@@ -595,8 +595,8 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 	auto elements = swift_import_array(api, "children");
 	fn->rejection = str_lit("tuple results require supported scalar or String elements");
 	if (elements.count < 2) return false;
-	if (fn->owner && !(fn->is_static && fn->is_throwing && !fn->is_async)) {
-		fn->rejection = str_lit("tuple results currently require a free function or a synchronous throwing static method");
+	if (fn->owner && (!fn->is_static || fn->is_async)) {
+		fn->rejection = str_lit("tuple results currently require a free function or a synchronous static method");
 		return false;
 	}
 	bool managed = false;
@@ -802,20 +802,20 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		return false;
 	}
 	array_init(&fn->parameters, permanent_allocator());
-	if (fn->is_property) {
-		auto children = swift_import_array(api, "children");
-		if (children.count != 1) return false;
-		bool supported = swift_import_api_type(children[0], &fn->result, types);
-		if (fn->result.nominal && fn->result.nominal->kind == SwiftImportValue_Set) supported = false;
-		if (!supported) fn->rejection = swift_import_type_rejection(children[0]);
-		return supported;
-	}
 	auto api_types = swift_import_array(api, "children");
-	JsonValue *signature = swift_import_member(symbol, "functionSignature");
-	JsonValue *returns = swift_import_member(signature, "returns");
 	bool tuple = api_types.count && swift_import_string(api_types[0], "kind") == "TypeNominal" &&
 	             swift_import_string(api_types[0], "name") == "Tuple" && !swift_import_string(api_types[0], "usr").len &&
 	             swift_import_array(api_types[0], "children").count > 0;
+	if (fn->is_property) {
+		if (api_types.count != 1) return false;
+		if (tuple) return swift_import_tuple_result(api_types[0], fn, types);
+		bool supported = swift_import_api_type(api_types[0], &fn->result, types);
+		if (fn->result.nominal && fn->result.nominal->kind == SwiftImportValue_Set) supported = false;
+		if (!supported) fn->rejection = swift_import_type_rejection(api_types[0]);
+		return supported;
+	}
+	JsonValue *signature = swift_import_member(symbol, "functionSignature");
+	JsonValue *returns = swift_import_member(signature, "returns");
 	if (fn->is_initializer) {
 		// Failable initializers return Optional<Self>, not Self. The digester
 		// records that result even when the symbol graph omits a return clause.
@@ -1092,6 +1092,16 @@ gb_internal JsonValue *swift_import_implicit_raw_value(JsonValue *owner, StringS
 		if (!string_set_exists(published, swift_import_string(child, "usr"))) return child;
 	}
 	return nullptr;
+}
+
+gb_internal bool swift_import_needs_value_binding(SwiftImportFunction const &fn) {
+	// A nonthrowing static scalar tuple has the same verified ABI as a free function.
+	if (fn.owner && !(fn.is_static && fn.tuple_result && !fn.is_async && !fn.is_throwing)) return true;
+	if (fn.result.nominal || (fn.is_throwing && (!fn.is_async || !fn.tuple_result))) return true;
+	for (auto const &param : fn.parameters) {
+		if (param.type.nominal || param.objc_controller) return true;
+	}
+	return false;
 }
 
 gb_internal bool swift_import_has_receiver(SwiftImportFunction const &fn) {
@@ -2353,11 +2363,8 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		has_set |= type->supported && type->kind == SwiftImportValue_Set;
 	}
 	for (auto const &fn : functions) {
-		bool values = fn.owner || fn.result.nominal || (fn.is_throwing && (!fn.is_async || !fn.tuple_result));
-		for (auto const &param : fn.parameters) {
-			values |= param.type.nominal != nullptr || param.objc_controller;
-			has_ui |= param.objc_controller;
-		}
+		bool values = swift_import_needs_value_binding(fn);
+		for (auto const &param : fn.parameters) has_ui |= param.objc_controller;
 		has_values |= values;
 		has_scalar_async |= fn.is_async && !values;
 		has_value_async |= fn.is_async && values;
@@ -2396,9 +2403,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	}
 	if (has_throwing) source = swift_import_emit_call_error(source, types);
 	for (auto const &fn : functions) {
-		bool values = fn.owner || fn.result.nominal || (fn.is_throwing && (!fn.is_async || !fn.tuple_result));
-		for (auto const &param : fn.parameters) values |= param.type.nominal != nullptr || param.objc_controller;
-		if (values) {
+		if (swift_import_needs_value_binding(fn)) {
 			source = swift_import_emit_value_declaration(source, fn);
 			bool defaults = false;
 			for (auto const &param : fn.parameters) defaults |= param.empty_set;

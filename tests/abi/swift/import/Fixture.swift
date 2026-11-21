@@ -1396,3 +1396,15 @@ extension Namespace {
 		return "label " + String(index)
 	}
 }
+
+extension Namespace {
+	public static var emptyBounds: (low: Int, ready: Bool) { (0, false) }
+
+	@inline(never) public static func bounds(_ n: Int) -> (low: Int, ready: Bool) {
+		return (n, n >= 0)
+	}
+
+	@inline(never) public static func wideBounds(_ n: UInt64) -> (UInt64, UInt64, UInt64, UInt64, Bool) {
+		return (n, n &+ 1, n ^ 17, n &* 5, n != 0)
+	}
+}

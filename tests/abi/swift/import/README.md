@@ -49,6 +49,11 @@ assigned positionally, including a Swift field that itself is named `err`.
 Tuples with String fields currently require an async call.
 
 A static method takes no receiver at the Odin call site. For example,
+`low, ready := fixture.Namespace_bounds(n)` calls a nonthrowing static Swift
+method with native multiple returns. The same mapping covers static property
+getters. The suite exercises a register result and a five-field result returned
+through caller storage.
+
 `limit, ready, err := fixture.BoolTail_checked_limit(79)` calls the
 Swift type's `static func checkedLimit(_:) throws` directly. The importer
 checks that Swift itself supplies an unused context argument. A method
