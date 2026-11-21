@@ -3181,8 +3181,9 @@ gb_internal void lb_llvm_module_passes_and_verification(lbGenerator *gen, bool d
 }
 
 gb_internal String lb_filepath_ll_for_module(lbModule *m) {
+	String basename = swift_export_object_directory.len ? swift_export_object_directory : build_context.build_paths[BuildPath_Output].basename;
 	String path = concatenate_strings(permanent_allocator(),
-		build_context.build_paths[BuildPath_Output].basename,
+		basename,
 		STR_LIT("/")
 	);
 
@@ -3198,7 +3199,7 @@ gb_internal String lb_filepath_ll_for_module(lbModule *m) {
 		s = m->info->init_package->name;
 	}
 
-	if (build_context.out_filepath.len > 0) {
+	if (build_context.out_filepath.len > 0 || swift_export_object_directory.len) {
 		path = concatenate_strings(permanent_allocator(), path, s);
 		path = concatenate_strings(permanent_allocator(), path, STR_LIT(".ll"));
 	} else {
@@ -3208,7 +3209,7 @@ gb_internal String lb_filepath_ll_for_module(lbModule *m) {
 }
 
 gb_internal String lb_filepath_obj_for_module(lbModule *m) {
-	String basename = build_context.build_paths[BuildPath_Output].basename;
+	String basename = swift_export_object_directory.len ? swift_export_object_directory : build_context.build_paths[BuildPath_Output].basename;
 	String name = build_context.build_paths[BuildPath_Output].name;
 
 	bool use_temporary_directory = false;

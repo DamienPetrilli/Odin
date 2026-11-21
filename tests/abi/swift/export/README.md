@@ -47,6 +47,11 @@ exported structs, the archive also contains Swift-generated type metadata and
 memberwise initializers. This is needed for normal Swift value construction and
 reflection. Application procedures execute in Odin.
 
+Build each target into its own directory. Wait for a successful build before
+reading its three outputs. Swift clients link one Odin runtime root per process.
+Export procedures from one static-library package when composing several Odin
+packages for a Swift app.
+
 ## Values and memory
 
 This subset supports `proc "swift"` with 8-, 16-, 32-, and 64-bit signed and unsigned

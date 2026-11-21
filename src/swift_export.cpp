@@ -16,6 +16,7 @@ gb_global Array<SwiftExportProcedure> swift_export_procedures;
 gb_global Array<Type *> swift_export_types;
 gb_global Array<Type *> swift_export_optional_types;
 gb_global String swift_export_directory;
+gb_global String swift_export_object_directory;
 gb_global Ast *swift_export_node;
 gb_global bool swift_export_has_uuid;
 gb_global bool swift_export_has_string;
@@ -313,6 +314,11 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 	swift_export_directory = make_string_c(directory);
 	if (!swift_import_directories.allocator.proc) array_init(&swift_import_directories, permanent_allocator());
 	array_add(&swift_import_directories, swift_export_directory);
+	swift_export_object_directory = swift_import_path(swift_export_directory, "objects");
+	if (mkdir(alloc_cstring(permanent_allocator(), swift_export_object_directory), 0700) != 0) {
+		gb_printf_err("Swift export: cannot create object directory: %s\n", strerror(errno));
+		return false;
+	}
 	return swift_export_check_types();
 #endif
 }
@@ -662,6 +668,81 @@ gb_internal bool swift_export_check_types() {
 #endif
 }
 
+#if defined(GB_SYSTEM_OSX)
+#include <sys/file.h>
+
+// Stage on the destination volume. An exchange keeps the previous version
+// in staging until all three publications have succeeded.
+gb_internal bool swift_export_publish(String dir, String output, String module, String interface) {
+	auto a = temporary_allocator();
+	String parent = directory_from_path(output);
+	if (!parent.len) parent = str_lit(".");
+	int dst = open(alloc_cstring(a, parent), O_RDONLY|O_DIRECTORY);
+	if (dst < 0) {
+		gb_printf_err("Swift export: cannot open '%.*s': %s\n", LIT(parent), strerror(errno));
+		return false;
+	}
+	defer (close(dst));
+	if (flock(dst, LOCK_EX) != 0) {
+		gb_printf_err("Swift export: cannot lock '%.*s': %s\n", LIT(parent), strerror(errno));
+		return false;
+	}
+	char *stage = alloc_cstring(a, swift_import_path(parent, ".odin-swift-XXXXXX"));
+	if (!mkdtemp(stage)) {
+		gb_printf_err("Swift export: cannot stage files in '%.*s': %s\n", LIT(parent), strerror(errno));
+		return false;
+	}
+	bool keep_stage = false;
+	defer (if (!keep_stage) removefile(stage, nullptr, REMOVEFILE_RECURSIVE));
+	int tmp = open(stage, O_RDONLY|O_DIRECTORY);
+	if (tmp < 0) {
+		gb_printf_err("Swift export: cannot open '%s': %s\n", stage, strerror(errno));
+		return false;
+	}
+	defer (close(tmp));
+	char const *names[] = {alloc_cstring(a, module), alloc_cstring(a, interface), alloc_cstring(a, filename_without_directory(output))};
+	struct stat info[3] = {};
+	bool exists[3] = {};
+	for (isize i = 0; i < 3; i++) {
+		String from = swift_import_path(dir, i == 2 ? "exports.a" : names[i]);
+		String to = swift_import_path(make_string_c(stage), names[i]);
+		if (copyfile(alloc_cstring(a, from), alloc_cstring(a, to), nullptr, COPYFILE_DATA|COPYFILE_EXCL) != 0) {
+			gb_printf_err("Swift export: cannot stage '%s': %s\n", names[i], strerror(errno));
+			return false;
+		}
+		if (fstatat(dst, names[i], &info[i], AT_SYMLINK_NOFOLLOW) != 0) {
+			if (errno == ENOENT) continue;
+			gb_printf_err("Swift export: cannot inspect '%s': %s\n", names[i], strerror(errno));
+			return false;
+		}
+		if (!S_ISREG(info[i].st_mode)) {
+			gb_printf_err("Swift export: expected a regular file at '%s'\n", names[i]);
+			return false;
+		}
+		exists[i] = true;
+		for (isize j = 0; j < i; j++) {
+			if (exists[j] && info[i].st_dev == info[j].st_dev && info[i].st_ino == info[j].st_ino) {
+				gb_printf_err("Swift export: '%s' and '%s' refer to the same file\n", names[j], names[i]);
+				return false;
+			}
+		}
+	}
+	for (isize i = 0; i < 3; i++) {
+		if (renameatx_np(tmp, names[i], dst, names[i], exists[i] ? RENAME_SWAP : RENAME_EXCL) == 0) continue;
+		gb_printf_err("Swift export: cannot publish '%s': %s\n", names[i], strerror(errno));
+		while (i > 0) {
+			i--;
+			if (renameatx_np(dst, names[i], tmp, names[i], exists[i] ? RENAME_SWAP : RENAME_EXCL) != 0) {
+				gb_printf_err("Swift export: cannot restore '%s': %s; recovery files in '%s'\n", names[i], strerror(errno), stage);
+				keep_stage = true;
+			}
+		}
+		return false;
+	}
+	return true;
+}
+#endif
+
 gb_internal bool swift_export_link(Array<String> const &objects) {
 #if !defined(GB_SYSTEM_OSX)
 	return false;
@@ -755,16 +836,6 @@ gb_internal bool swift_export_link(Array<String> const &objects) {
 	array_add(&args, swift_import_path(dir, "types.o"));
 	if (!swift_import_exec(swift_export_node, dir, args, nullptr, true)) return false;
 	String output = path_to_string(permanent_allocator(), build_context.build_paths[BuildPath_Output]);
-	String output_dir = directory_from_path(output);
-	String files[] = {module_file, interface_file, str_lit("exports.a")};
-	for (isize i = 0; i < 3; i++) {
-		String from = swift_import_path(dir, alloc_cstring(permanent_allocator(), files[i]));
-		String to = i == 2 ? output : swift_import_path(output_dir, alloc_cstring(permanent_allocator(), files[i]));
-		if (!gb_file_copy(alloc_cstring(permanent_allocator(), from), alloc_cstring(permanent_allocator(), to), false)) {
-			gb_printf_err("Swift export: cannot write '%.*s'\n", LIT(to));
-			return false;
-		}
-	}
-	return true;
+	return swift_export_publish(dir, output, module_file, interface_file);
 #endif
 }
