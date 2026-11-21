@@ -1134,6 +1134,10 @@ gb_internal void swift_import_report_function(Array<String> *report, SwiftImport
 			bool writable = param.borrow == SwiftImportBorrow_MutableBuffer || param.borrow == SwiftImportBorrow_MutablePointer;
 			bool pointer = param.borrow == SwiftImportBorrow_Pointer || param.borrow == SwiftImportBorrow_MutablePointer;
 			row = gb_string_append_fmt(row, "  %.*s: borrowed %s storage%s; caller controls lifetime\n", LIT(param.name), writable ? "mutable" : "read-only", pointer ? " (non-null pointer)" : "");
+			String representation = make_string_c(param.type.odin);
+			if (representation == "[]bool" || representation == "^bool") {
+				row = gb_string_appendc(row, "    Swift Bool storage requires bytes 0 or 1\n");
+			}
 		} else if (param.type.nominal) row = gb_string_append_fmt(row, "  %.*s: caller keeps ownership\n", LIT(param.name));
 	}
 	if (fn.is_async) {

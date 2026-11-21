@@ -242,6 +242,11 @@ func checkMissing<T: Equatable>(_ call: (T?, T) -> T?, _ input: T) {
 	precondition(call(input, input) == nil)
 }
 checkMissing(missingBool, false)
+for byte in UInt8.min...UInt8.max {
+	let flag = optionalFlagFromByte(byte)
+	precondition(flag == .some(byte != 0))
+	withUnsafeBytes(of: flag) { precondition($0[0] == (byte != 0 ? 1 : 0)) }
+}
 checkMissing(missingI8, Int8.min)
 checkMissing(missingU8, UInt8.max)
 checkMissing(missingI16, Int16.min)

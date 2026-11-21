@@ -449,6 +449,9 @@ gb_internal lbValue lb_swift_optional_write(lbProcedure *p, lbValue value, Type 
 	LLVMValueRef present = LLVMBuildICmp(b, LLVMIntEQ, tag.value, some.value, "");
 	LLVMValueRef bits = lb_emit_load(p, lb_emit_union_variant_ptr(p, slot, element)).value;
 	if (element == t_bool) {
+		// Swift reserves 2 for none. Every nonzero Odin bool denotes true.
+		LLVMValueRef truth = LLVMBuildICmp(b, LLVMIntNE, bits, LLVMConstNull(LLVMTypeOf(bits)), "");
+		bits = LLVMBuildZExt(b, truth, lb_type(m, t_u8), "");
 		return {LLVMBuildSelect(b, present, bits, lb_const_int(m, t_u8, 2).value, ""), t_u8};
 	}
 	unsigned width = cast(unsigned)type_size_of(element)*8;

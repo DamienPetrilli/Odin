@@ -47,6 +47,13 @@ bool_mixed_checked :: proc(task: swift.Task, value: fixture.BoolMixed, error: fi
 }
 
 check_mixed_records :: proc() {
+	flags := [?]bool{true, false, true}
+	assert(fixture.count_true(flags[:]) == 2)
+	for byte in 0..=255 {
+		value := transmute(bool)u8(byte)
+		got, present := fixture.optional_bool(value).?
+		assert(present && transmute(u8)got == u8(byte != 0))
+	}
 	#assert(size_of(fixture.BoolOnly) == 1 && align_of(fixture.BoolOnly) == 1)
 	#assert(size_of(fixture.BoolTriple) == 3 && size_of(fixture.BoolRun) == 9)
 	#assert(size_of(fixture.BoolHead) == 16 && offset_of(fixture.BoolHead, count) == 8)

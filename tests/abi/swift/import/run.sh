@@ -55,6 +55,7 @@ grep -Fq 'call add_later :: proc(value: u64, delta: u64, completion: proc(swift.
 grep -Fq 'call bounds :: proc(value: u64) -> (lower: u64, upper: u64)' "$build/mappings.txt"
 grep -Fq 'type SwiftImportFixture.`TextRecord` -> TextRecord (struct, frozen)' "$build/mappings.txt"
 grep -Fq 'call ArrayRecord_advance :: proc(receiver: ^ArrayRecord, amount: u64) -> u64' "$build/mappings.txt"
+grep -Fq 'Swift Bool storage requires bytes 0 or 1' "$build/mappings.txt"
 grep -Fq 'receiver: exclusive borrow during call' "$build/mappings.txt"
 grep -Fq 'call RawCode_raw_value :: proc(receiver: RawCode) -> u64' "$build/mappings.txt"
 grep -Fq 'call RawCode_adding :: proc(receiver: RawCode, value: u64) -> u64' "$build/mappings.txt"

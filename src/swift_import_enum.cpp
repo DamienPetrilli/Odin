@@ -341,6 +341,9 @@ gb_internal gbString swift_import_emit_take_field(gbString source, SwiftImportTy
 }
 
 gb_internal gbString swift_import_emit_initialize_field(gbString source, SwiftImportType const &type, String value, String address) {
+	if (type.odin && make_string_c(type.odin) == "bool") {
+		return gb_string_append_fmt(source, "(cast(^u8)%.*s)^ = u8(%.*s)\n", LIT(address), LIT(value));
+	}
 	if (!type.nominal || type.nominal->is_scalar) return gb_string_append_fmt(source, "(cast(^%s)%.*s)^ = %.*s\n", type.odin, LIT(address), LIT(value));
 	if (swift_import_kind(type, SwiftImportValue_String)) return gb_string_append_fmt(source, "(cast(^swift.Native_String)%.*s)^ = swift.string_from_odin(%.*s) or_return\n", LIT(address), LIT(value));
 	if (swift_import_slice(type.nominal)) return gb_string_append_fmt(source, "(cast(^swift.Native_Array)%.*s)^ = %.*s or_return\n", LIT(address), LIT(swift_import_array_from(type.nominal, value)));

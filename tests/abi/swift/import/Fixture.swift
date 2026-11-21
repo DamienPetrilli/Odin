@@ -1235,6 +1235,9 @@ public func editBuffer(_ values: UnsafeMutableBufferPointer<Int16>) -> Int {
 	for i in values.indices { values[i] &+= 1 }
 	return values.count
 }
+public func countTrue(_ flags: UnsafeBufferPointer<Bool>) -> Int {
+    flags.reduce(0) { $0 + ($1 ? 1 : 0) }
+}
 public func readPointer(_ value: UnsafePointer<UInt32>) -> UInt32 { value.pointee }
 public func writePointer(_ value: UnsafeMutablePointer<Float>, _ newValue: Float) { value.pointee = newValue }
 public func asyncBuffer(_ values: UnsafeBufferPointer<Int16>) async -> Int { values.count }

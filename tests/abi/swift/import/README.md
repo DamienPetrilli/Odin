@@ -119,6 +119,9 @@ parameter accepts an ordinary Odin slice of a supported numeric scalar or bool.
 The call passes its address and count directly. Swift writes through a mutable
 buffer reach the original Odin elements. A nil slice is an empty buffer.
 `UnsafePointer<T>` and `UnsafeMutablePointer<T>` take a non-nil `^T`.
+A borrowed Bool pointer or buffer must already contain Swift-compatible 0/1
+bytes. When the source is a foreign byte buffer, initialize the Odin flags with
+`flags[i] = bytes[i] != 0` before lending their address to Swift.
 Keep the storage alive for the lifetime documented by the Swift callee. The
 importer rejects async capture and returned views for these borrowed types.
 

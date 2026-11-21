@@ -91,3 +91,8 @@ local_optional :: proc "swift" (input: Maybe(u64), seed: u64, first: bool) -> Ma
 	storage := [2]u64{seed, 0}
 	return transmute(Maybe(u64))storage
 }
+
+@(export)
+optional_flag_from_byte :: proc "swift" (byte: u8) -> Maybe(bool) {
+	return transmute(bool)byte
+}
