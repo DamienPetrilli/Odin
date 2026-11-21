@@ -3309,6 +3309,16 @@ gb_internal lbArgType lb_swift_abi_value(LLVMContextRef c, LLVMTypeRef type, boo
 	if (base_type(odin_type) == t_bool) {
 		return lb_arg_type_direct(type, LLVMInt1TypeInContext(c), nullptr, nullptr);
 	}
+	if (swift_export_optional_element(odin_type)) {
+		// The body receives an Odin union. Its payload and tag are not
+		// struct fields eligible for Swift register expansion.
+		if (type_size_of(odin_type) > 8) {
+			LLVMAttributeRef attr = is_result ? lb_create_enum_attribute_with_type(c, "sret", type) : nullptr;
+			return lb_arg_type_indirect(type, attr);
+		}
+		LLVMTypeRef storage = LLVMIntTypeInContext(c, cast(unsigned)type_size_of(odin_type)*8);
+		return lb_arg_type_direct(type, storage, nullptr, nullptr);
+	}
 	if (is_swift_uuid_type(odin_type)) {
 		// This is the Odin implementation's byte array, not native UUID storage.
 		// Coerce it to two words so a nested call cannot clobber byte components

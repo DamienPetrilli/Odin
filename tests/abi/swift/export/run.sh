@@ -28,7 +28,7 @@ swiftc=(xcrun --sdk "$sdk" swiftc -target "$triple" -swift-version 6 -warnings-a
 	-module-cache-path "${TMPDIR:-/tmp}/odin-swift-module-cache" "${swift_opt[@]}")
 "${swiftc[@]}" -parse-as-library -module-name SwiftReply -emit-object \
 	-o "$build/reply/SwiftReply.o" -emit-module-path "$build/reply/SwiftReply.swiftmodule" "$here/Reply.swift"
-cp "$here/library.odin" "$here/enums.odin" "$here/records.odin" "$here/uuids.odin" "$build/"
+cp "$here/library.odin" "$here/enums.odin" "$here/records.odin" "$here/uuids.odin" "$here/optionals.odin" "$build/"
 "$ODIN" build "$build" -build-mode:static "${odin_target[@]}" "${odin_opt[@]}" \
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/libOdinExportFixture.a"
 # Use the same Apple sanitizer runtime for Swift and Odin. Instrument Odin's
@@ -311,4 +311,19 @@ fi
 grep -Fq 'require a synchronous exported procedure body' "$build/string-errors.log"
 grep -Fq 'require an @(export) procedure' "$build/string-errors.log"
 test ! -e "$build/OdinRejectedStrings.swiftmodule"
+# Only runtime.Maybe with a supported scalar has a Swift Optional projection.
+for kind in LOOKALIKE DISTINCT NESTED OWNED FOREIGN; do
+	if "$ODIN" build "$here/rejected_optionals.odin" -file -build-mode:static "${odin_target[@]}" \
+		-define:"$kind=true" -out:"$build/rejected-optional.a" > "$build/optional-errors.log" 2>&1; then
+		echo "Expected an unsupported Swift Optional diagnostic ($kind)" >&2
+		exit 1
+	fi
+	case "$kind" in
+		OWNED) diagnostic='Unsupported result type' ;;
+		FOREIGN) diagnostic='Swift Maybe parameters require a synchronous exported procedure body' ;;
+		*) diagnostic='Unsupported parameter type' ;;
+	esac
+	grep -Fq "$diagnostic" "$build/optional-errors.log" || { cat "$build/optional-errors.log" >&2; exit 1; }
+	test ! -e "$build/OdinRejectedOptionals.swiftmodule"
+done
 echo "Swift export checks passed ($sdk, $mode)"

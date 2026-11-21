@@ -47,3 +47,4 @@ precondition(value.`self` == 11 && value.p0 == 22 && value.`init` == 33 && value
 precondition(initialize() == 11 && finalize() == 22 && leadingName() == 33)
 print("Swift export name checks passed")
 precondition(textLength(Swift.String("a\0🦉")) == 6)
+precondition(optionalFlag(nil) == false && optionalFlag(false) == nil)

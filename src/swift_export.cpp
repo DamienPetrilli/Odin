@@ -14,6 +14,7 @@ struct SwiftExportSymbol {
 gb_global Array<SwiftExportSymbol> swift_export_symbols;
 gb_global Array<SwiftExportProcedure> swift_export_procedures;
 gb_global Array<Type *> swift_export_types;
+gb_global Array<Type *> swift_export_optional_types;
 gb_global String swift_export_directory;
 gb_global Ast *swift_export_node;
 gb_global bool swift_export_has_uuid;
@@ -76,6 +77,9 @@ gb_internal String swift_export_type_name(Type *type, bool escaped = false) {
 	if (char const *name = swift_export_scalar(type)) return make_string_c(name);
 	if (is_swift_uuid_type(type)) return str_lit("Foundation.UUID");
 	if (type == t_string) return str_lit("Swift.String");
+	if (Type *element = swift_export_optional_element(type)) {
+		return concatenate_strings(permanent_allocator(), make_string_c(swift_export_scalar(element)), str_lit("?"));
+	}
 	if (is_type_slice(type)) {
 		gbString name = gb_string_append_fmt(gb_string_make(permanent_allocator(), ""),
 			"Swift.UnsafeMutableBufferPointer<%s>", swift_export_scalar(base_type(type)->Slice.elem));
@@ -93,6 +97,11 @@ gb_internal GB_COMPARE_PROC(swift_export_enum_value_compare) {
 
 gb_internal bool swift_export_check_type(Type *type, bool parameter) {
 	if (swift_export_scalar(type)) return true;
+	if (Type *element = swift_export_optional_element(type)) {
+		for (Type *existing : swift_export_optional_types) if (existing == element) return true;
+		array_add(&swift_export_optional_types, element);
+		return true;
+	}
 	if (parameter && type == t_string) {
 		swift_export_has_string = true;
 		return true;
@@ -207,21 +216,23 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 	}
 	array_init(&swift_export_procedures, permanent_allocator());
 	array_init(&swift_export_types, permanent_allocator());
+	array_init(&swift_export_optional_types, permanent_allocator());
 	for (Entity *e : checker->info.entities) {
 		if (!is_swift_export_procedure(checker, e)) continue;
 		Type *type = base_type(e->type);
 		bool valid = !type->Proc.is_polymorphic && !type->Proc.variadic && !type->Proc.c_vararg &&
 		             !type->Proc.diverging && !type->Proc.return_by_pointer &&
 		             type->Proc.calling_convention == ProcCC_Swift;
-		bool borrows_string = false;
+		bool adapted_value = false;
 		for (isize i = 0; i < type->Proc.param_count; i++) {
 			Entity *param = type->Proc.params->Tuple.variables[i];
-			borrows_string |= param->type == t_string;
+			adapted_value |= param->type == t_string || swift_export_optional_element(param->type);
 			valid &= !(param->flags & EntityFlags_SwiftABI) && swift_export_check_type(param->type, true);
 		}
 		for (isize i = 0; i < type->Proc.result_count; i++) {
 			Entity *result = type->Proc.results->Tuple.variables[i];
 			valid &= swift_export_check_type(result->type, false);
+			adapted_value |= swift_export_optional_element(result->type) != nullptr;
 			if (type->Proc.result_count == 1 || !result->token.string.len) continue;
 			String label = swift_export_name(result->token.string, false);
 			if (!swift_import_identifier(label)) error(result->token, "Swift export: invalid tuple result label after case conversion");
@@ -233,15 +244,15 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 			}
 		}
 		if (!valid) {
-			error(e->token, "Swift export: expected a synchronous Swift procedure without ABI parameter attributes, with supported numeric scalars, bool, integer enums, flat scalar structs, uuid.Identifier, or borrowed string and scalar slice parameters, and supported result types");
+			error(e->token, "Swift export: expected a synchronous Swift procedure without ABI parameter attributes, with supported numeric scalars, bool, integer enums, flat scalar structs, scalar Maybe values, uuid.Identifier, or borrowed string and scalar slice parameters, and supported result types");
 			continue;
 		}
 		SwiftExportProcedure proc = {};
 		proc.entity = e;
 		proc.name = swift_export_name(e->token.string, false);
 		proc.symbol = make_string_c(gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "__odin_swift_%.*s_%.*s", LIT(build_context.swift_module_name), LIT(proc.name)));
-		if (borrows_string) {
-			// The body takes Odin UTF-8. Expose the native Swift entry under
+		if (adapted_value) {
+			// The body uses Odin value storage. Expose the native Swift entry under
 			// both the module name and the requested linker name.
 			proc.link_alias = e->Procedure.link_name.len ? e->Procedure.link_name : e->token.string;
 			e->Procedure.link_name = concatenate_strings(permanent_allocator(), proc.symbol, str_lit(".body"));
@@ -342,6 +353,58 @@ gb_internal gbString swift_export_emit_struct(gbString source, Type *type) {
 	return source;
 }
 
+#if defined(GB_SYSTEM_OSX)
+// Inspect the SDK's native calling sequence and its constant case encodings.
+// The optimizer may leave padding unspecified; only the case bit is read.
+gb_internal bool swift_export_check_optional(LLVMModuleRef module, LLVMTargetDataRef data, Type *element, isize index) {
+	auto name = [&](char const *suffix) -> char const * {
+		return gb_string_append_fmt(gb_string_make(temporary_allocator(), ""), "odin_swift_optional_%td_%s", index, suffix);
+	};
+	LLVMValueRef function = LLVMGetNamedFunction(module, name("identity"));
+	LLVMContextRef context = LLVMGetModuleContext(module);
+	unsigned bits = cast(unsigned)type_size_of(element)*8;
+	LLVMTypeRef word = LLVMIntTypeInContext(context, element == t_bool ? 8 : gb_min(bits*2, 64));
+	bool wide = bits == 64;
+	if (!function || LLVMGetFunctionCallConv(function) != LLVMSwiftCallConv || LLVMCountParams(function) != (wide ? 2u : 1u) ||
+	    LLVMTypeOf(LLVMGetParam(function, 0)) != word) return false;
+	LLVMTypeRef result = LLVMGetReturnType(LLVMGlobalGetValueType(function));
+	if (wide) {
+		LLVMTypeRef tag = LLVMInt8TypeInContext(context);
+		if (LLVMTypeOf(LLVMGetParam(function, 1)) != tag || LLVMGetTypeKind(result) != LLVMStructTypeKind ||
+		    LLVMCountStructElementTypes(result) != 2 || LLVMStructGetTypeAtIndex(result, 0) != word ||
+		    LLVMStructGetTypeAtIndex(result, 1) != tag) return false;
+	} else if (result != word) {
+		return false;
+	}
+
+	char const *cases[] = {"none", "zero", "one"};
+	u64 one = element == t_f32 ? 0x3f800000ull : element == t_f64 ? 0x3ff0000000000000ull : 1;
+	for (isize i = 0; i < gb_count_of(cases); i++) {
+		LLVMValueRef global = LLVMGetNamedGlobal(module, name(cases[i]));
+		if (!global || !LLVMIsGlobalConstant(global)) return false;
+		LLVMValueRef value = LLVMGetInitializer(global);
+		if (!value) return false;
+		if (element == t_bool) {
+			if (!LLVMIsAConstantInt(value) || LLVMTypeOf(value) != word ||
+			    LLVMConstIntGetZExtValue(value) != (i == 0 ? 2u : i-1)) return false;
+			continue;
+		}
+		LLVMTypeRef layout = LLVMTypeOf(value);
+		if (LLVMGetTypeKind(layout) != LLVMStructTypeKind || LLVMCountStructElementTypes(layout) != 2 ||
+		    LLVMStructGetTypeAtIndex(layout, 0) != LLVMIntTypeInContext(context, bits) ||
+		    LLVMStructGetTypeAtIndex(layout, 1) != LLVMInt1TypeInContext(context) ||
+		    LLVMOffsetOfElement(data, layout, 1) != bits/8) return false;
+		LLVMValueRef tag = LLVMGetAggregateElement(value, 1);
+		if (!tag || !LLVMIsAConstantInt(tag) || LLVMConstIntGetZExtValue(tag) != (i == 0)) return false;
+		if (i != 0) {
+			LLVMValueRef payload = LLVMGetAggregateElement(value, 0);
+			if (!payload || !LLVMIsAConstantInt(payload) || LLVMConstIntGetZExtValue(payload) != (i == 2 ? one : 0)) return false;
+		}
+	}
+	return true;
+}
+#endif
+
 gb_internal bool swift_export_check_types() {
 #if !defined(GB_SYSTEM_OSX)
 	return false;
@@ -355,6 +418,17 @@ gb_internal bool swift_export_check_types() {
 	}
 	if (swift_export_has_string) {
 		source = gb_string_appendc(source, "@_silgen_name(\"odin_swift_export_string\") public func string_probe(_ value: Swift.String) {}\n");
+	}
+	for_array(i, swift_export_optional_types) {
+		Type *element = swift_export_optional_types[i];
+		char const *type = swift_export_scalar(element);
+		source = gb_string_append_fmt(source,
+			"@_silgen_name(\"odin_swift_optional_%td_identity\") public func optional_%td(_ value: %s?) -> %s? { value }\n"
+			"@_silgen_name(\"odin_swift_optional_%td_none\") public let optional_none_%td: %s? = nil\n"
+			"@_silgen_name(\"odin_swift_optional_%td_zero\") public let optional_zero_%td: %s? = %s\n"
+			"@_silgen_name(\"odin_swift_optional_%td_one\") public let optional_one_%td: %s? = %s\n",
+			i, i, type, type, i, i, type, i, i, type, element == t_bool ? "false" : "0",
+			i, i, type, element == t_bool ? "true" : "1");
 	}
 	auto records = array_make<SwiftImportNominal>(temporary_allocator(), swift_export_types.count);
 	for_array(i, swift_export_types) {
@@ -439,6 +513,12 @@ gb_internal bool swift_export_check_types() {
 	defer (LLVMDisposeModule(module));
 	LLVMTargetDataRef data = LLVMCreateTargetData(LLVMGetDataLayoutStr(module));
 	defer (LLVMDisposeTargetData(data));
+	for_array(i, swift_export_optional_types) {
+		if (!swift_export_check_optional(module, data, swift_export_optional_types[i], i)) {
+			error(swift_export_node, "Swift export: unsupported native Optional lowering or cases for %s", swift_export_scalar(swift_export_optional_types[i]));
+			return false;
+		}
+	}
 	if (swift_export_has_string) {
 		LLVMValueRef probe = LLVMGetNamedFunction(module, "odin_swift_export_string");
 		String signature = str_lit(" @odin_swift_export_string : $@convention(thin) (@guaranteed String) -> () {");

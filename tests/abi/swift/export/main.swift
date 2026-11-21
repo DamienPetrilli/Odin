@@ -235,3 +235,35 @@ units.withUnsafeBufferPointer {
 	let foreign = NSString(characters: $0.baseAddress!, length: $0.count) as String
 	checkText(foreign)
 }
+
+// Each export observes nil independently and constructs a fresh Optional.
+func checkMissing<T: Equatable>(_ call: (T?, T) -> T?, _ input: T) {
+	precondition(call(nil, input) == input)
+	precondition(call(input, input) == nil)
+}
+checkMissing(missingBool, false)
+checkMissing(missingI8, Int8.min)
+checkMissing(missingU8, UInt8.max)
+checkMissing(missingI16, Int16.min)
+checkMissing(missingU16, UInt16.max)
+checkMissing(missingI32, Int32.min)
+checkMissing(missingU32, UInt32.max)
+checkMissing(missingI64, Int64.min)
+checkMissing(missingU64, UInt64.max)
+checkMissing(missingInt, Int.min)
+checkMissing(missingUint, UInt.max)
+checkMissing(missingF32, -Float.greatestFiniteMagnitude)
+checkMissing(missingF64, -Double.greatestFiniteMagnitude)
+let optionalNaN = Double(bitPattern: 0x7ff8000000000042)
+precondition(selectOptional(optionalNaN, nil, true)?.bitPattern == optionalNaN.bitPattern)
+precondition(selectOptional(nil, -0.0, false)?.bitPattern == (-0.0 as Double).bitPattern)
+precondition(selectOptional(nil, optionalNaN, true) == nil)
+for byte: UInt8 in [0, 1, 42, 0xff] {
+	precondition(selectOptionalByte(byte, nil, true) == byte)
+	precondition(selectOptionalByte(nil, byte, false) == byte)
+	precondition(selectOptionalByte(nil, byte, true) == nil)
+}
+precondition(localOptional(42, 0x12345678, true) == 42)
+let localNone = localOptional(42, 0x12345678, false)
+precondition(localNone == nil)
+withUnsafeBytes(of: localNone) { precondition($0.load(as: UInt64.self) == 0) }

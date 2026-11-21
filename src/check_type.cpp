@@ -4216,6 +4216,18 @@ gb_internal bool is_swift_uuid_type(Type *type) {
 	return name->pkg->fullpath == path;
 }
 
+// Only the builtin Maybe(T) gets Swift Optional semantics. A structurally
+// similar user union is a separate type.
+gb_internal Type *swift_export_optional_element(Type *type) {
+	if (!type || type->kind != Type_Named || !type->Named.type_name || !is_type_union(type)) return nullptr;
+	Entity *parent = type_get_polymorphic_parent(type, nullptr);
+	if (!parent || !parent->pkg || parent->pkg->kind != Package_Runtime || parent->token.string != "Maybe" ||
+	    type->Named.type_name->pkg != parent->pkg) return nullptr;
+	auto variants = base_type(type)->Union.variants;
+	if (variants.count != 1 || variants[0] != base_type(variants[0]) || !is_swift_abi_numeric_scalar(variants[0])) return nullptr;
+	return variants[0];
+}
+
 gb_internal bool is_type_supported_by_swift_abi(Type *type) {
 	if (is_swift_uuid_type(type)) return true;
 	type = base_type(type);
@@ -4386,13 +4398,13 @@ gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc
 				if (param->flags & EntityFlag_ByPtr) {
 					error(param->token, "'#by_ptr' cannot be used with the \"swift\" calling convention");
 					success = false;
-				} else if (param->type == t_string) {
-					// A module entry borrows UTF-8 for the body. Raw foreign
-					// declarations and callback signatures have no such entry.
+				} else if (param->type == t_string || swift_export_optional_element(param->type)) {
+					// A module entry projects the native value for the Odin body.
+					// Raw foreign declarations and callback types have no such entry.
 					// check_proc_decl checks @(export) after reading the attributes.
 					if (!c->decl || !c->decl->proc_lit || c->decl->proc_lit->ProcLit.type != proc_type_node ||
 					    !c->decl->proc_lit->ProcLit.body) {
-						error(param->token, "Swift string parameters require a synchronous exported procedure body");
+						error(param->token, "Swift %s parameters require a synchronous exported procedure body", param->type == t_string ? "string" : "Maybe");
 						success = false;
 					}
 				} else if (!is_type_supported_by_swift_abi(param->type) && !is_swift_abi_slice_parameter(param->type)) {
@@ -4410,7 +4422,10 @@ gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc
 					success = false;
 				}
 			}
-			if (result_count == 1 && !is_type_supported_by_swift_abi(results->Tuple.variables[0]->type)) {
+			bool module_result = result_count == 1 && swift_export_optional_element(results->Tuple.variables[0]->type) &&
+			                     c->decl && c->decl->proc_lit && c->decl->proc_lit->ProcLit.type == proc_type_node &&
+			                     c->decl->proc_lit->ProcLit.body;
+			if (result_count == 1 && !module_result && !is_type_supported_by_swift_abi(results->Tuple.variables[0]->type)) {
 				error(proc_type_node, "Unsupported result type for the \"swift\" calling convention");
 				success = false;
 			}

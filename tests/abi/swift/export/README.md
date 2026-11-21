@@ -119,6 +119,12 @@ A foreign string requiring transcoding uses temporary storage released by
 the entry after the call. Clone a string that must outlive the procedure.
 Embedded zero bytes are preserved.
 
+Scalar `Maybe(T)` parameters and results become Swift optionals. The element
+can be an exported numeric scalar or `bool`. A present zero or false remains
+distinct from nil. Conversion uses registers and local value storage. The
+compiler checks the SDK's calling convention and case encodings for each
+element type before emitting the module.
+
 String results, owned collections, slice results, closures, generics, async exports,
 and throwing exports are outside this subset and receive diagnostics. Swift
 calling Odin is a separate direction from the richer existing Swift importer.

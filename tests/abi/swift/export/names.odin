@@ -118,3 +118,11 @@ _leading_name :: proc "swift" () -> u64 { return 33 }
 
 @(export)
 text_length :: proc "swift" (value: string) -> int { return len(value) }
+
+Optional_Flag :: Maybe(bool)
+
+@(export)
+optional_flag :: proc "swift" (x: Optional_Flag) -> Optional_Flag {
+	if x == nil { return false }
+	return nil
+}

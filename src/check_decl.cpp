@@ -1611,10 +1611,15 @@ gb_internal void check_proc_decl(CheckerContext *ctx, Entity *e, DeclInfo *d) {
 	if (pt->calling_convention == ProcCC_Swift) {
 		bool uuid = pt->result_count == 1 && is_swift_uuid_type(pt->results->Tuple.variables[0]->type);
 		bool string_parameter = false;
+		bool optional = pt->result_count == 1 && swift_export_optional_element(pt->results->Tuple.variables[0]->type);
 		for (isize i = 0; i < pt->param_count; i++) {
 			Type *type = pt->params->Tuple.variables[i]->type;
 			uuid |= is_swift_uuid_type(type);
 			string_parameter |= type == t_string;
+			optional |= swift_export_optional_element(type) != nullptr;
+		}
+		if (optional && (is_foreign || !is_export || build_context.build_mode != BuildMode_StaticLibrary || e->pkg != ctx->info->init_package)) {
+			error(e->token, "Swift Maybe values require an @(export) procedure in the initial package of a static library");
 		}
 		if (string_parameter) {
 			if (is_foreign || !is_export || build_context.build_mode != BuildMode_StaticLibrary || e->pkg != ctx->info->init_package) {
