@@ -415,6 +415,7 @@ enum FieldFlag : u32 {
 	FieldFlag_swift_async = 1<<12,
 	FieldFlag_swift_self  = 1<<13,
 	FieldFlag_swift_result = 1<<14,
+	FieldFlag_swift_error = 1<<17,
 
 	// Internal use by the parser only
 	FieldFlag_Tags      = 1<<15,
@@ -427,7 +428,7 @@ enum FieldFlag : u32 {
 	// Parameter List Restrictions
 	FieldFlag_Signature = FieldFlag_ellipsis|FieldFlag_using|FieldFlag_no_alias|FieldFlag_c_vararg|
 	                      FieldFlag_const|FieldFlag_any_int|FieldFlag_by_ptr|FieldFlag_no_broadcast|
-	                      FieldFlag_no_capture|FieldFlag_swift_async|FieldFlag_swift_self|FieldFlag_swift_result,
+	                      FieldFlag_no_capture|FieldFlag_swift_async|FieldFlag_swift_self|FieldFlag_swift_result|FieldFlag_swift_error,
 
 	FieldFlag_Struct    = FieldFlag_using|FieldFlag_subtype|FieldFlag_Tags,
 };

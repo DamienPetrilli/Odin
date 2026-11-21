@@ -185,3 +185,13 @@ public func snapshotValue(_ snapshot: borrowing AsyncSnapshot) -> UInt64 {
 }
 
 public func invertFlag(_ value: Bool) -> Bool { !value }
+
+public final class FixtureFailure: Error {
+	public init() {}
+}
+
+@inline(never)
+public func checkedWord(_ value: UInt64, _ failure: FixtureFailure) throws -> UInt64 {
+	if value == 0 { throw failure }
+	return value
+}

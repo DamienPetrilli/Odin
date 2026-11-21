@@ -280,3 +280,31 @@ foreign fixture {
 invert_flag_round_trip :: proc "swift" (value: bool) -> bool {
 	return invert_flag(value)
 }
+
+foreign fixture {
+	@(link_name="$s15SwiftABIFixture11checkedWordys6UInt64VAD_AA14FixtureFailureCtKF")
+	checked_word :: proc "swift" (value: u64, failure: rawptr, #swift_self _: rawptr, #swift_error error: ^rawptr) -> u64 ---
+}
+
+foreign {
+	@(link_name="swift_errorRelease")
+	release_error :: proc "c" (error: rawptr) ---
+}
+
+@(export)
+odin_swift_abi_check_errors :: proc "swift" (failure: rawptr) -> bool {
+	error: rawptr
+	for i in 0..<64 {
+		value := u64(i % 2)
+		result := checked_word(value, failure, nil, &error)
+		if value == 0 {
+			if error == nil {
+				return false
+			}
+			release_error(error)
+		} else if error != nil || result != value {
+			return false
+		}
+	}
+	return true
+}

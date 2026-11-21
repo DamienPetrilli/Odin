@@ -85,7 +85,7 @@ fi
 check_invalid() {
 	local target=$1
 	shift
-	if "$ODIN" check "$here/invalid.odin" -file -no-entry-point "-target:$target" > "$build/invalid.log" 2>&1; then
+	if "$ODIN" check "$here/invalid.odin" -file -no-entry-point -max-error-count:100 "-target:$target" > "$build/invalid.log" 2>&1; then
 		echo "Expected invalid Swift ABI declarations to fail on $target" >&2
 		return 1
 	fi
@@ -105,6 +105,14 @@ check_invalid darwin_arm64 \
 	'Unsupported result type for the "swift" calling convention' \
 	'The "swift" calling convention requires a fixed, non-polymorphic procedure' \
 	'Multiple Swift results require two to four word-sized numeric scalars' \
+	"'#swift_error' requires a final ^rawptr output after Swift self on a synchronous foreign procedure" \
+	'in_local_slot: ^' \
+	'in_callback_slot: ^' \
+	'before_self_slot: ^' \
+	'without_self_slot: ^' \
+	'wrong_type_slot: ^' \
+	'without_adjacent_self_slot: ^' \
+	'in_async_slot: ^' \
 	'Nested_Arg ::' \
 	'Packed_Arg ::' \
 	'Empty_Arg ::' \

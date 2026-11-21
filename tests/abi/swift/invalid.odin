@@ -62,3 +62,13 @@ check_swift_register_assignment :: proc(f: Swift_Receiver) {
 check_swift_async_call :: proc(f: proc "swift/async" (#swift_async ctx: rawptr)) {
 	f(nil)
 }
+
+error_in_local :: proc "swift" (#swift_self receiver: rawptr, #swift_error in_local_slot: ^rawptr) {}
+foreign {
+	error_in_callback :: proc "swift" (f: proc "swift" (#swift_self receiver: rawptr, #swift_error in_callback_slot: ^rawptr)) ---
+	error_before_self :: proc "swift" (#swift_error before_self_slot: ^rawptr, #swift_self receiver: rawptr) ---
+	error_without_self :: proc "swift" (#swift_error without_self_slot: ^rawptr) ---
+	error_wrong_type :: proc "swift" (#swift_self receiver: rawptr, #swift_error wrong_type_slot: ^u8) ---
+	error_without_adjacent_self :: proc "swift" (#swift_self receiver: rawptr, x: int, #swift_error without_adjacent_self_slot: ^rawptr) ---
+	error_in_async :: proc "swift/async" (#swift_async frame: rawptr, #swift_self receiver: rawptr, #swift_error in_async_slot: ^rawptr) ---
+}

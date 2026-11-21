@@ -14,6 +14,7 @@
 #include <llvm-c/Analysis.h>
 #include <llvm-c/Object.h>
 #include <llvm-c/BitWriter.h>
+#include <llvm-c/IRReader.h>
 #include <llvm-c/DebugInfo.h>
 #include <llvm-c/Transforms/PassBuilder.h>
 #include <llvm-c/Comdat.h>
@@ -419,6 +420,7 @@ struct lbProcedure {
 	std::atomic<bool> is_done;
 
 	lbAddr           return_ptr;
+	LLVMValueRef     swift_error_slot;
 	Entity *         sret_rvo_entity; // Local aliases of `return_ptr`
 	Array<lbDefer>   defer_stmts;
 	Array<lbBlock *> blocks;

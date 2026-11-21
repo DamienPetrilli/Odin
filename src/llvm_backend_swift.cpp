@@ -75,6 +75,30 @@ gb_internal void lb_swift_record_store(lbProcedure *p, LLVMValueRef pointer, lbV
 	}
 }
 
+// LLVM requires the call operand to be a swifterror alloca. Its C builder
+// has no setter for that bit. Move one instruction, in the same context,
+// into the entry allocation block. All throwing calls in this procedure
+// reuse the slot; the caller clears it before each call.
+gb_internal LLVMValueRef lb_swift_error_slot(lbProcedure *p) {
+	if (p->swift_error_slot) return p->swift_error_slot;
+	char const ir[] = "define void @slot() { %s = alloca swifterror ptr, align 8\n ret void }";
+	LLVMMemoryBufferRef buffer = LLVMCreateMemoryBufferWithMemoryRangeCopy(ir, sizeof(ir)-1, "Swift error slot");
+	LLVMModuleRef donor = nullptr;
+	char *message = nullptr;
+	if (LLVMParseIRInContext(p->module->ctx, buffer, &donor, &message)) {
+		GB_PANIC("Invalid Swift error slot IR: %s", message);
+	}
+	LLVMValueRef slot = LLVMGetFirstInstruction(LLVMGetEntryBasicBlock(LLVMGetFirstFunction(donor)));
+	LLVMInstructionRemoveFromParent(slot);
+	LLVMDisposeModule(donor);
+	LLVMBasicBlockRef block = LLVMGetInsertBlock(p->builder);
+	LLVMPositionBuilderAtEnd(p->builder, p->decl_block->block);
+	LLVMInsertIntoBuilderWithName(p->builder, slot, "swift.error");
+	LLVMPositionBuilderAtEnd(p->builder, block);
+	p->swift_error_slot = slot;
+	return slot;
+}
+
 // Native async imports use a task-owned record for arguments and completion.
 // Imported calls have scalar arguments/results and an optional borrowed
 // receiver. Completion borrows the native task handle from the runtime.

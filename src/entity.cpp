@@ -89,13 +89,14 @@ enum EntityFlag : u64 {
 	EntityFlag_SwiftAsync  = 1ull<<52,
 	EntityFlag_SwiftSelf   = 1ull<<53,
 	EntityFlag_SwiftResult = 1ull<<54,
+	EntityFlag_SwiftError  = 1ull<<55,
 
 	EntityFlag_Overridden    = 1ull<<63,
 };
 
 enum : u64 {
 	EntityFlags_IsSubtype = EntityFlag_Using|EntityFlag_Subtype,
-	EntityFlags_SwiftABI = EntityFlag_SwiftAsync|EntityFlag_SwiftSelf|EntityFlag_SwiftResult,
+	EntityFlags_SwiftABI = EntityFlag_SwiftAsync|EntityFlag_SwiftSelf|EntityFlag_SwiftResult|EntityFlag_SwiftError,
 };
 
 enum EntityState : u32 {

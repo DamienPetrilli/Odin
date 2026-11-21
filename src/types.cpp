@@ -5939,6 +5939,9 @@ gb_internal gbString write_type_to_string(gbString str, Type *type, bool shortha
 					if (var->flags&EntityFlag_SwiftResult) {
 						str = gb_string_appendc(str, "#swift_result ");
 					}
+					if (var->flags&EntityFlag_SwiftError) {
+						str = gb_string_appendc(str, "#swift_error ");
+					}
 					if (var->flags&EntityFlag_CVarArg) {
 						str = gb_string_appendc(str, "#c_vararg ");
 					}

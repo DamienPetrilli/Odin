@@ -1437,7 +1437,18 @@ gb_internal lbValue lb_emit_call_internal(lbProcedure *p, lbValue value, lbValue
 			}
 		}
 
+		LLVMValueRef error_out = nullptr;
+		if (proc_type->Proc.calling_convention == ProcCC_Swift && proc_type->Proc.param_count > 0 &&
+		    (proc_type->Proc.params->Tuple.variables[proc_type->Proc.param_count-1]->flags & EntityFlag_SwiftError)) {
+			error_out = args[arg_count-1];
+			args[arg_count-1] = lb_swift_error_slot(p);
+			LLVMBuildStore(p->builder, LLVMConstNull(lb_type(p->module, t_rawptr)), p->swift_error_slot);
+		}
 		LLVMValueRef ret = LLVMBuildCall2(p->builder, fnp, fn, args, arg_count, "");
+		if (error_out) {
+			LLVMValueRef thrown = LLVMBuildLoad2(p->builder, lb_type(p->module, t_rawptr), p->swift_error_slot, "");
+			LLVMBuildStore(p->builder, thrown, error_out);
+		}
 
 		LLVMSetInstructionCallConv(ret, lb_calling_convention_kind(proc_type->Proc.calling_convention));
 

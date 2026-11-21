@@ -154,3 +154,16 @@ precondition(transactions == [beforeTransaction, updated, afterTransaction])
 func invertFlagRoundTrip(_ value: Bool) -> Bool
 precondition(invertFlagRoundTrip(false))
 precondition(!invertFlagRoundTrip(true))
+
+@_silgen_name("odin_swift_abi_check_errors")
+func checkErrorsInOdin(_ failure: UnsafeMutableRawPointer) -> Bool
+
+weak var releasedFailure: FixtureFailure?
+do {
+	let failure = FixtureFailure()
+	releasedFailure = failure
+	withExtendedLifetime(failure) {
+		precondition(checkErrorsInOdin(Unmanaged.passUnretained(failure).toOpaque()))
+	}
+}
+precondition(releasedFailure == nil)

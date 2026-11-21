@@ -3864,6 +3864,9 @@ gb_internal Type *check_get_params(CheckerContext *ctx, Scope *scope, Ast *_para
 			if (p->flags&FieldFlag_swift_result) {
 				param->flags |= EntityFlag_SwiftResult;
 			}
+			if (p->flags&FieldFlag_swift_error) {
+				param->flags |= EntityFlag_SwiftError;
+			}
 
 
 			param->state = EntityState_Resolved; // NOTE(bill): This should have be resolved whilst determining it
@@ -4345,6 +4348,16 @@ gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc
 		if ((flags & EntityFlag_SwiftResult) && (swift_async || i != 0 || result_count != 0)) {
 			error(param->token, "'#swift_result' requires the first parameter of a synchronous Swift procedure with no result");
 			success = false;
+		}
+		if (flags & EntityFlag_SwiftError) {
+			Entity *decl = c->decl ? c->decl->entity.load() : nullptr;
+			bool foreign = decl && decl->kind == Entity_Procedure && decl->Procedure.is_foreign &&
+			               c->decl->proc_lit && c->decl->proc_lit->ProcLit.type == proc_type_node;
+			if (!foreign || cc != ProcCC_Swift || i+1 != param_count || i == 0 || !(params->Tuple.variables[i-1]->flags & EntityFlag_SwiftSelf) ||
+			    !is_type_pointer(param->type) || type_deref(param->type) != t_rawptr) {
+				error(param->token, "'#swift_error' requires a final ^rawptr output after Swift self on a synchronous foreign procedure");
+				success = false;
+			}
 		}
 		swift_parameters |= flags;
 	}

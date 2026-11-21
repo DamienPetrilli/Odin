@@ -2911,6 +2911,8 @@ gb_internal LLVMTypeRef lb_type_internal_for_procedures_raw(lbModule *m, Type *t
 				arg->attribute = lb_create_enum_attribute(m->ctx, "swiftasync");
 			} else if (e->flags & EntityFlag_SwiftSelf) {
 				arg->attribute = lb_create_enum_attribute(m->ctx, "swiftself");
+			} else if (e->flags & EntityFlag_SwiftError) {
+				arg->attribute = lb_create_enum_attribute(m->ctx, "swifterror");
 			} else if (e->flags & EntityFlag_SwiftResult) {
 				LLVMTypeRef opaque = LLVMGetTypeByName2(m->ctx, "swift.opaque");
 				if (opaque == nullptr) {

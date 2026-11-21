@@ -4890,6 +4890,7 @@ gb_global ParseFieldPrefixMapping const parse_field_prefix_mappings[] = {
 	{str_lit("swift_async"),  Token_Hash,      FieldFlag_swift_async},
 	{str_lit("swift_self"),   Token_Hash,      FieldFlag_swift_self},
 	{str_lit("swift_result"), Token_Hash,      FieldFlag_swift_result},
+	{str_lit("swift_error"),  Token_Hash,      FieldFlag_swift_error},
 	{str_lit("no_broadcast"), Token_Hash,      FieldFlag_no_broadcast},
 };
 
