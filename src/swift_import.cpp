@@ -98,6 +98,7 @@ struct SwiftImportParameter {
 
 struct SwiftImportFunction {
 	String name, title, signature, symbol, odin_name, base_name, rejection;
+	JsonValue *api;
 	SwiftImportNominal *owner;
 	Array<SwiftImportParameter> parameters;
 	SwiftImportType result;
@@ -499,7 +500,7 @@ gb_internal bool swift_import_type(Slice<JsonValue *> fragments, bool result, Sw
 }
 
 gb_internal void swift_import_reject(SwiftImportPackage *pkg, String name, String reason = {}, String title = {}) {
-	if (!reason.len) reason = str_lit("declaration is unavailable for this target or outside the supported ABI subset");
+	if (!reason.len) reason = str_lit("unsupported Swift declaration form");
 	for (auto &rejection : pkg->unsupported) {
 		if (rejection.name == name) {
 			if (rejection.title != title) rejection.title = {};
@@ -508,6 +509,11 @@ gb_internal void swift_import_reject(SwiftImportPackage *pkg, String name, Strin
 		}
 	}
 	array_add(&pkg->unsupported, SwiftImportRejection{name, reason, title});
+}
+
+gb_internal void swift_import_reject_function(SwiftImportPackage *pkg, Array<SwiftImportRejection> *lookup, SwiftImportFunction const &fn) {
+	swift_import_reject(pkg, fn.odin_name, fn.rejection, fn.title);
+	if (fn.base_name != fn.odin_name) array_add(lookup, (SwiftImportRejection{fn.base_name, fn.rejection, fn.title}));
 }
 
 // Record the source type at the rejected parameter/result rather than exposing
@@ -524,8 +530,8 @@ gb_internal String swift_import_type_rejection(JsonValue *api, String parameter 
 }
 
 gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftImportFunction *fn, Array<SwiftImportNominal *> *types) {
+	fn->api = api;
 	fn->name = swift_import_string(api, "name");
-	fn->title = swift_import_string(swift_import_member(symbol, "names"), "title");
 	fn->symbol = swift_import_string(api, "mangledName");
 	if (!swift_import_identifier(fn->name) || !string_starts_with(fn->symbol, str_lit("$s")) ||
 	    fn->symbol.len <= 2) return false;
@@ -552,22 +558,29 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		if (!collection || !strings) return false;
 		fn->is_collection = true;
 		fn->rejection = {};
-	} else if (swift_import_member(api, "genericSig")) return false;
-	for (auto fragment : swift_import_array(symbol, "declarationFragments")) {
+	} else if (swift_import_member(api, "genericSig")) {
+		fn->rejection = str_lit("unsupported Swift generic signature");
+		return false;
+	}
+	auto fragments = swift_import_array(symbol, "declarationFragments");
+	for (auto fragment : fragments) {
 		fn->is_main_actor |= swift_import_string(fragment, "preciseIdentifier") == "s:ScM" && swift_import_string(fragment, "kind") == "attribute";
 	}
-	for (auto attribute : swift_import_array(api, "declAttributes")) {
-		if (attribute->kind != Json_String) return false;
-		String name = attribute->string;
-		if (name != "Available" && !(fn->is_property && name == "HasStorage") && !(fn->is_main_actor && name == "Custom")) return false;
-	}
 	gbString declaration = gb_string_make(permanent_allocator(), "");
-	for (JsonValue *fragment : swift_import_array(symbol, "declarationFragments")) {
+	for_array(i, fragments) {
+		JsonValue *fragment = fragments[i];
 		String word = swift_import_string(fragment, "spelling");
 		declaration = gb_string_append_length(declaration, word.text, word.len);
 		if (swift_import_string(fragment, "kind") == "attribute") {
-			if (!fn->is_main_actor || (word != "@" && swift_import_string(fragment, "preciseIdentifier") != "s:ScM")) return false;
+			if (swift_import_string(fragment, "preciseIdentifier") == "s:ScM") continue;
+			if (word == "@" && i+1 < fragments.count && swift_import_string(fragments[i+1], "kind") == "attribute") {
+				if (swift_import_string(fragments[i+1], "preciseIdentifier") == "s:ScM") continue;
+				word = concatenate_strings(permanent_allocator(), word, swift_import_string(fragments[i+1], "spelling"));
+			}
+			fn->rejection = concatenate3_strings(permanent_allocator(), str_lit("unsupported Swift attribute '"), word, str_lit("'"));
+			return false;
 		} else if (string_contains_char(word, '@')) {
+			fn->rejection = concatenate3_strings(permanent_allocator(), str_lit("unsupported attributed Swift declaration fragment '"), word, str_lit("'"));
 			return false;
 		}
 		if (swift_import_string(fragment, "kind") == "keyword") {
@@ -576,15 +589,36 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 			else if (word == "mutating") fn->is_mutating = true;
 			else if (word != "func" && word != "static" && !(fn->is_collection && word == "where") &&
 			         !(fn->is_property && (word == "var" || word == "let" || word == "get" || word == "set")) &&
-			         !(fn->is_initializer && word == "init")) return false;
+			         !(fn->is_initializer && word == "init")) {
+				fn->rejection = concatenate3_strings(permanent_allocator(), str_lit("unsupported Swift declaration keyword '"), word, str_lit("'"));
+				return false;
+			}
 		}
 	}
+	for (auto attribute : swift_import_array(api, "declAttributes")) {
+		if (attribute->kind != Json_String) return false;
+		String name = attribute->string;
+		// Inline affects the optimizer. The call still requires a verified external entry point.
+		if (name == "Available" || name == "Inline" || (fn->is_property && name == "HasStorage") || (fn->is_main_actor && name == "Custom")) continue;
+		if (name == "AlwaysEmitIntoClient") name = str_lit("@_alwaysEmitIntoClient");
+		if (name == "Inlinable") name = str_lit("@inlinable");
+		fn->rejection = concatenate3_strings(permanent_allocator(), str_lit("unsupported Swift attribute '"), name, str_lit("'"));
+		return false;
+	}
 	fn->signature = make_string_c(declaration);
-	if (fn->is_main_actor && !fn->is_async) return false;
+	if (fn->is_main_actor && !fn->is_async) {
+		fn->rejection = str_lit("synchronous @MainActor calls require actor isolation");
+		return false;
+	}
 	if (fn->is_collection && (!fn->is_async || fn->is_initializer || fn->is_property || (fn->owner && !fn->is_static))) return false;
-	if (fn->is_throwing && (!fn->is_async || swift_import_index(make_string_c(declaration), str_lit("throws(")) >= 0 ||
-	                       swift_import_index(make_string_c(declaration), str_lit("throws (")) >= 0)) return false;
-	fn->odin_name = swift_import_name(fn->name);
+	if (fn->is_throwing && !fn->is_async) {
+		fn->rejection = str_lit("synchronous throws is unsupported");
+		return false;
+	}
+	if (fn->is_throwing && (swift_import_index(fn->signature, str_lit("throws(")) >= 0 || swift_import_index(fn->signature, str_lit("throws (")) >= 0)) {
+		fn->rejection = str_lit("typed throws is unsupported");
+		return false;
+	}
 	array_init(&fn->parameters, permanent_allocator());
 	if (fn->is_property) {
 		auto children = swift_import_array(api, "children");
@@ -600,7 +634,10 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 	if (fn->is_initializer) {
 		// Failable initializers return Optional<Self>, not Self. The digester
 		// records that result even when the symbol graph omits a return clause.
-		if (api_types.count == 0 || !swift_import_api_type(api_types[0], &fn->result, types)) return false;
+		if (api_types.count == 0 || !swift_import_api_type(api_types[0], &fn->result, types)) {
+			fn->rejection = swift_import_type_rejection(api_types.count ? api_types[0] : nullptr);
+			return false;
+		}
 		// API digester names the initializing entry; calls use the allocating
 		// entry. Both the inspected IR and library exports must confirm it.
 		if (!string_ends_with(fn->symbol, str_lit("cfc"))) return false;
@@ -642,7 +679,7 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 			if (!swift_import_container_type(str_lit("s:Sa"), swift_import_nominal_type(swift_import_string_type(types)), &p.type, types)) return false;
 		} else if (!swift_import_type(swift_import_array(parameter, "declarationFragments"), false, &p.type, *types) &&
 		    (api_types.count <= fn->parameters.count+1 || !swift_import_api_type(api_types[fn->parameters.count+1], &p.type, types))) {
-			fn->rejection = swift_import_type_rejection(api_types.count > fn->parameters.count+1 ? api_types[fn->parameters.count+1] : nullptr, name);
+			fn->rejection = swift_import_type_rejection(operand, name);
 			return false;
 		}
 		if (p.type.nominal && p.type.nominal->kind == SwiftImportValue_Set) {
@@ -759,28 +796,49 @@ gb_internal JsonValue *swift_import_find_api(JsonValue *api, String usr) {
 	return nullptr;
 }
 
-gb_internal bool swift_import_available(JsonValue *symbol) {
+gb_internal int swift_import_version_part(JsonValue *version, int index) {
+	char const *keys[] = {"major", "minor", "patch"};
+	JsonValue *part = swift_import_member(version, keys[index]);
+	return part && part->kind == Json_Number ? cast(int)part->number : 0;
+}
+
+gb_internal String swift_import_availability_rejection(JsonValue *symbol) {
 	char const *domain = selected_subtarget == Subtarget_Default ? "macOS" : "iOS";
 	int minimum[3] = {};
 	sscanf(alloc_cstring(temporary_allocator(), build_context.minimum_os_version_string), "%d.%d.%d", minimum, minimum+1, minimum+2);
 	for (JsonValue *availability : swift_import_array(symbol, "availability")) {
 		String availability_domain = swift_import_string(availability, "domain");
 		if (availability_domain.len && availability_domain != "*" && availability_domain != make_string_c(domain)) continue;
-		if (swift_import_member(availability, "isUnconditionallyUnavailable") ||
-		    swift_import_member(availability, "isUnconditionallyDeprecated")) return false;
+		char const *why = nullptr;
+		JsonValue *version = nullptr;
 		JsonValue *introduced = swift_import_member(availability, "introduced");
-		char const *keys[] = {"major", "minor", "patch"};
-		for (isize i = 0; i < 3; i++) {
-			JsonValue *part = swift_import_member(introduced, keys[i]);
-			int version = part && part->kind == Json_Number ? cast(int)part->number : 0;
-			if (version != minimum[i]) {
-				if (version > minimum[i]) return false;
+		if (swift_import_member(availability, "isUnconditionallyUnavailable")) {
+			why = "unavailable on";
+		} else if (swift_import_member(availability, "isUnconditionallyDeprecated")) {
+			why = "deprecated on";
+		} else {
+			for (int i = 0; i < 3; i++) {
+				int part = swift_import_version_part(introduced, i);
+				if (part == minimum[i]) continue;
+				if (part > minimum[i]) {
+					why = "requires";
+					version = introduced;
+				}
 				break;
 			}
+			if (!why && (version = swift_import_member(availability, "obsoleted"))) why = "marked obsolete in";
+			if (!why && (version = swift_import_member(availability, "deprecated"))) why = "marked deprecated in";
 		}
-		if (swift_import_member(availability, "deprecated") || swift_import_member(availability, "obsoleted")) return false;
+		if (!why) continue;
+		gbString text = gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "%s %s", why, domain);
+		if (version) {
+			text = gb_string_append_fmt(text, " %d.%d", swift_import_version_part(version, 0), swift_import_version_part(version, 1));
+			int patch = swift_import_version_part(version, 2);
+			if (patch) text = gb_string_append_fmt(text, ".%d", patch);
+		}
+		return make_string_c(gb_string_append_fmt(text, " (deployment target %s %.*s)", domain, LIT(build_context.minimum_os_version_string)));
 	}
-	return true;
+	return {};
 }
 
 gb_internal bool swift_import_has_receiver(SwiftImportFunction const &fn) {
@@ -1177,9 +1235,11 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		return false;
 	}
 	auto types = array_make<SwiftImportNominal *>(permanent_allocator());
+	// These names are useful for diagnostics but do not participate in overload selection.
+	auto lookup_rejections = array_make<SwiftImportRejection>(temporary_allocator());
 	for (JsonValue *symbol : swift_import_array(graph, "symbols")) {
 		String kind = swift_import_string(swift_import_member(symbol, "kind"), "identifier");
-		if ((kind != "swift.struct" && kind != "swift.enum") || !swift_import_available(symbol)) continue;
+		if (kind != "swift.struct" && kind != "swift.enum") continue;
 		String usr = swift_import_string(swift_import_member(symbol, "identifier"), "precise");
 		JsonValue *declaration = swift_import_find_api(api, usr);
 		if (!declaration) continue;
@@ -1207,6 +1267,11 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			swift_name = gb_string_append_fmt(swift_name, ".`%.*s`", LIT(part->string));
 		}
 		if (!valid || gb_string_length(name) == 0) continue;
+		String reason = swift_import_availability_rejection(symbol);
+		if (reason.len) {
+			array_add(&lookup_rejections, (SwiftImportRejection{make_string_c(name), reason}));
+			continue;
+		}
 		auto type = gb_alloc_item(permanent_allocator(), SwiftImportNominal);
 		*type = {};
 		type->name = make_string_c(name);
@@ -1231,6 +1296,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	if (!swift_import_check_type_names(node, types)) return false;
 
 	auto functions = array_make<SwiftImportFunction>(permanent_allocator());
+	isize unavailable_type_count = lookup_rejections.count;
 	array_init(&pkg->unsupported, permanent_allocator());
 	for (JsonValue *symbol : swift_import_array(graph, "symbols")) {
 		String kind = swift_import_string(swift_import_member(symbol, "kind"), "identifier");
@@ -1247,6 +1313,8 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		fn.is_static = kind == "swift.type.method" || kind == "swift.type.property";
 		fn.is_property = property;
 		fn.is_initializer = initializer;
+		fn.title = swift_import_string(swift_import_member(symbol, "names"), "title");
+		fn.rejection = swift_import_availability_rejection(symbol);
 		if (components.count > 1) {
 			gbString owner_name = gb_string_make(permanent_allocator(), "");
 			for (isize i = 0; i < components.count-1; i++) {
@@ -1254,16 +1322,23 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 				owner_name = gb_string_append_fmt(owner_name, "%s%.*s", i ? "_" : "", LIT(components[i]->string));
 			}
 			for (auto type : types) if (type->name == make_string_c(owner_name)) fn.owner = type;
+			if (!fn.owner && !fn.rejection.len) {
+				fn.rejection = str_lit("unsupported Swift receiver type");
+				for (isize i = 0; i < unavailable_type_count; i++) {
+					if (lookup_rejections[i].name == make_string_c(owner_name)) {
+						fn.rejection = lookup_rejections[i].reason;
+						break;
+					}
+				}
+			}
 			name = concatenate3_strings(permanent_allocator(), make_string_c(owner_name), str_lit("_"), name);
 		}
-		bool available = swift_import_available(symbol);
-		if (!available) fn.rejection = str_lit("unavailable for this deployment target");
-		bool supported = (components.count == 1 || fn.owner) && available &&
-		                 (!fn.owner || !fn.owner->is_template) && swift_import_function(symbol, declaration, &fn, &types);
+		if (!fn.rejection.len && fn.owner && fn.owner->is_template) fn.rejection = str_lit("unsupported generic Swift receiver");
+		bool supported = (components.count == 1 || fn.owner) && !fn.rejection.len && swift_import_function(symbol, declaration, &fn, &types);
 		fn.base_name = name;
 		// Keep argument labels in distinct binding names, like Objective-C
 		// selectors. A unique supported declaration also gets the short name.
-		String title = swift_import_string(swift_import_member(symbol, "names"), "title");
+		String title = fn.title;
 		isize open = string_index_byte(title, '(');
 		if (!property && open >= 0 && string_ends_with(title, str_lit(")"))) {
 			String_Iterator labels = {substring(title, open+1, title.len-1)};
@@ -1277,17 +1352,25 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		if (property && supported) {
 			supported = false;
 			for (JsonValue *accessor : swift_import_array(declaration, "accessors")) {
-				if (swift_import_string(accessor, "accessorKind") == "get" && !swift_import_member(accessor, "declAttributes")) {
+				if (swift_import_string(accessor, "accessorKind") != "get") continue;
+				if (!swift_import_member(accessor, "declAttributes")) {
 					fn.symbol = swift_import_string(accessor, "mangledName");
+					fn.rejection = {};
 					supported = true;
+					break;
+				}
+				auto attributes = swift_import_array(accessor, "declAttributes");
+				if (attributes.count && attributes[0]->kind == Json_String) {
+					fn.rejection = concatenate3_strings(permanent_allocator(), str_lit("unsupported Swift getter attribute '"), attributes[0]->string, str_lit("'"));
 				}
 			}
-		}
-		if (!supported) {
-			swift_import_reject(pkg, name, fn.rejection, title);
-			continue;
+			if (!supported && !fn.rejection.len) fn.rejection = str_lit("no supported Swift getter");
 		}
 		fn.odin_name = name;
+		if (!supported) {
+			swift_import_reject_function(pkg, &lookup_rejections, fn);
+			continue;
+		}
 		SwiftImportFunction const *collision = nullptr;
 		for (auto const &previous : functions) if (previous.odin_name == name) { collision = &previous; break; }
 		if (collision) {
@@ -1343,9 +1426,11 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			String usr = swift_import_string(element, "usr");
 			String labels = {};
 			bool available = false;
+			String case_rejection = {};
 			for (JsonValue *symbol : swift_import_array(graph, "symbols")) {
 				if (swift_import_string(swift_import_member(symbol, "identifier"), "precise") == usr) {
-					available = swift_import_available(symbol);
+					case_rejection = swift_import_availability_rejection(symbol);
+					available = !case_rejection.len;
 					String title = swift_import_string(swift_import_member(symbol, "names"), "title");
 					isize open = string_index_byte(title, '(');
 					if (open >= 0 && string_ends_with(title, str_lit(")"))) labels = substring(title, open+1, title.len-1);
@@ -1357,7 +1442,12 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			}
 			// Resilient enums preserve other tags in their owned Unknown variant.
 			// Do not reference a case symbol unavailable on the deployment target.
-			if (!available && !type->is_frozen) continue;
+			if (!available && !type->is_frozen) {
+				if (case_rejection.len && swift_import_identifier(c.name)) {
+					array_add(&lookup_rejections, (SwiftImportRejection{swift_import_case_name(type, c), case_rejection}));
+				}
+				continue;
+			}
 			c.available &= available;
 			c.symbol = concatenate_strings(permanent_allocator(), swift_import_string(element, "mangledName"), str_lit("WC"));
 			auto children = swift_import_array(element, "children");
@@ -1540,9 +1630,25 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		LLVMValueRef native = LLVMGetNamedFunction(inspection, alloc_cstring(permanent_allocator(), fn.symbol));
 		bool record_parameters = false;
 		unsigned native_index = 0;
-		bool supported = (!fn.owner || fn.is_static || (fn.owner->supported && (fn.is_initializer || !fn.owner->projected))) && swift_import_ownership(sil, &fn);
-		if (fn.result.nominal) supported &= fn.result.nominal->supported;
-		for (auto const &param : fn.parameters) if (param.type.nominal) supported &= param.type.nominal->supported;
+		String &reason = fn.rejection;
+		auto api_types = swift_import_array(fn.api, "children");
+		if (fn.owner && !fn.is_static && (!fn.owner->supported || (!fn.is_initializer && fn.owner->projected))) {
+			reason = str_lit("unsupported Swift receiver representation");
+		} else if (fn.result.nominal && !fn.result.nominal->supported) {
+			reason = swift_import_type_rejection(api_types.count ? api_types[0] : nullptr);
+		}
+		for_array(i, fn.parameters) {
+			auto const &param = fn.parameters[i];
+			if (!reason.len && param.type.nominal && !param.type.nominal->supported) {
+				reason = swift_import_type_rejection(i+1 < api_types.count ? api_types[i+1] : nullptr, param.name);
+			}
+		}
+		if (!reason.len && !swift_import_ownership(sil, &fn)) reason = str_lit("Swift parameter or result ownership could not be verified");
+		if (reason.len) {
+			swift_import_reject_function(pkg, &lookup_rejections, fn);
+			array_ordered_remove(&functions, index);
+			continue;
+		}
 		gbString declaration = gb_string_make(permanent_allocator(), "");
 		declaration = gb_string_append_fmt(declaration, "declare %s %s @\"%.*s\"(", fn.is_async ? "swifttailcc" : "swiftcc",
 			fn.is_async || indirect_result || swift_import_empty(fn.result) || !fn.result.llvm ? "void" : swift_import_projected(fn.result) ? alloc_cstring(permanent_allocator(), swift_import_enum_llvm(fn.result.nominal, true)) : fn.result.llvm, LIT(fn.symbol));
@@ -1550,7 +1656,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		if (indirect_result) {
 			if (fn.result.nominal->projected && fn.result.nominal->alignment) {
 				record_parameters = true;
-				supported &= swift_import_struct_parameter(native, native_index, fn.result.nominal, true);
+				if (!reason.len && !swift_import_struct_parameter(native, native_index, fn.result.nominal, true)) reason = str_lit("unsupported indirect Swift result layout");
 				if (fn.is_async) declaration = gb_string_appendc(declaration, "ptr noalias");
 				else declaration = gb_string_append_fmt(declaration, "ptr noalias sret(%%%.*s)", LIT(fn.result.nominal->indirect_llvm));
 			} else declaration = gb_string_appendc(declaration, fn.is_async ? "ptr noalias" : "ptr noalias sret(%swift.opaque)");
@@ -1567,7 +1673,9 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			if (fn.is_collection && swift_import_string_array(param.type)) llvm = "ptr noalias";
 			if (swift_import_indirect(param.type) && param.type.nominal->projected && param.type.nominal->alignment) {
 				record_parameters = true;
-				supported &= swift_import_struct_parameter(native, native_index, param.type.nominal, false);
+				if (!reason.len && !swift_import_struct_parameter(native, native_index, param.type.nominal, false)) {
+					reason = concatenate3_strings(permanent_allocator(), str_lit("unsupported indirect layout for parameter '"), param.name, str_lit("'"));
+				}
 				llvm = "ptr noalias";
 			}
 			declaration = gb_string_append_fmt(declaration, "%s%s", count++ ? ", " : "", llvm);
@@ -1583,10 +1691,13 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		char *native_declaration = record_parameters && native ? LLVMPrintValueToString(native) : nullptr;
 		defer (if (native_declaration) LLVMDisposeMessage(native_declaration));
 		String inspected = native_declaration ? make_string_c(native_declaration) : ir;
-		if (!supported || !swift_import_has_line(inspected, make_string_c(declaration), true) ||
-		    (!pkg->framework && (!swift_import_has_line(exports, exported, false) ||
-		    (fn.is_async && !swift_import_has_line(exports, concatenate_strings(permanent_allocator(), exported, str_lit("Tu")), false))))) {
-			swift_import_reject(pkg, fn.odin_name, str_lit("native lowering, value layout, ownership or exported symbol is outside the supported ABI subset"));
+		if (!reason.len && !swift_import_has_line(inspected, make_string_c(declaration), true)) reason = str_lit("unsupported native Swift calling sequence");
+		if (!reason.len && !pkg->framework) {
+			if (!swift_import_has_line(exports, exported, false)) reason = str_lit("Swift library does not export the function symbol");
+			else if (fn.is_async && !swift_import_has_line(exports, concatenate_strings(permanent_allocator(), exported, str_lit("Tu")), false)) reason = str_lit("Swift library does not export the async descriptor");
+		}
+		if (reason.len) {
+			swift_import_reject_function(pkg, &lookup_rejections, fn);
 			array_ordered_remove(&functions, index);
 		}
 	}
@@ -1798,6 +1909,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			swift_import_reject(pkg, fn.base_name, str_lit("ambiguous Swift overload or binding name; use its argument-label binding"));
 		}
 	}
+	for (auto const &rejection : lookup_rejections) swift_import_reject(pkg, rejection.name, rejection.reason, rejection.title);
 	return swift_import_write(node, swift_import_path(pkg->directory, "import.odin"), source);
 }
 #endif

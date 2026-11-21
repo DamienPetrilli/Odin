@@ -17,7 +17,7 @@ gb_internal void swift_import_struct_fields(SwiftImportNominal *type, JsonValue 
 		for (auto candidate : swift_import_array(graph, "symbols")) {
 			if (swift_import_string(swift_import_member(candidate, "identifier"), "precise") == usr) { symbol = candidate; break; }
 		}
-		if (!symbol || !swift_import_available(symbol)) return;
+		if (!symbol || swift_import_availability_rejection(symbol).len) return;
 		for (auto attribute : swift_import_array(field, "declAttributes")) {
 			if (attribute->kind != Json_String || (attribute->string != "HasStorage" && attribute->string != "Available")) return;
 		}

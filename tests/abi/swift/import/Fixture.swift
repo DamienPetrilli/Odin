@@ -1,6 +1,6 @@
 import Foundation
 
-public func add(_ value: UInt64, _ delta: UInt64) -> UInt64 {
+@inline(never) public func add(_ value: UInt64, _ delta: UInt64) -> UInt64 {
 	value &+ delta
 }
 
@@ -106,6 +106,14 @@ public func inoutValue(_ value: inout UInt64) { value += 1 }
 
 @available(macOS 99, iOS 99, *)
 public func future() -> UInt64 { 1 }
+
+@available(macOS 15.2.1, iOS 18.2, *)
+public struct NewValue {
+	public static func number() -> UInt64 { 42 }
+}
+@available(macOS 15.2.1, iOS 18.2, *)
+public func newNumber(for value: UInt64) -> UInt64 { value }
+@inline(never) @_alwaysEmitIntoClient public func clientOnly() -> UInt64 { 1 }
 
 // A resilient value exercises a borrowed async receiver. Its storage belongs
 // to Swift and is destroyed only after both Odin completions have returned.

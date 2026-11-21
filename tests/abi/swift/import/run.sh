@@ -5,13 +5,14 @@ here=$(cd "$(dirname "$0")" && pwd)
 : "${ODIN:=$here/../../../../odin}"
 sdk=${1:-macosx}
 mode=${2:-debug}
-odin_target=(-target:darwin_arm64 -minimum-os-version:15.0)
+platform_target=(-target:darwin_arm64)
 case "$sdk" in
 	macosx) triple=arm64-apple-macosx15.0 ;;
-	iphoneos) triple=arm64-apple-ios15.0; odin_target+=(-subtarget:iphone) ;;
-	iphonesimulator) triple=arm64-apple-ios15.0-simulator; odin_target+=(-subtarget:iphonesimulator) ;;
+	iphoneos) triple=arm64-apple-ios15.0; platform_target+=(-subtarget:iphone) ;;
+	iphonesimulator) triple=arm64-apple-ios15.0-simulator; platform_target+=(-subtarget:iphonesimulator) ;;
 	*) echo "Unsupported SDK: $sdk" >&2; exit 1 ;;
 esac
+odin_target=("${platform_target[@]}" -minimum-os-version:15.0)
 case "$mode" in
 	debug) odin_opt=(-debug -o:none); swift_opt=(-g -Onone) ;;
 	release) odin_opt=(-o:speed); swift_opt=(-O) ;;
@@ -68,6 +69,60 @@ cp "$here/names.odin" "$build/names/main.odin"
 if [[ "$sdk" != macosx ]]; then cp "$here/controller.odin" "$build/names/"; fi
 "$ODIN" build "$build/names" "${odin_target[@]}" "${odin_opt[@]}" \
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/names-test"
+
+# Check rejections in one invocation on every target, including link-only iOS runs.
+rejected=(narrow generic throwing isolated_sync overloaded future inout_value typed_throwing
+	unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields
+	unsupported_scalar_argument unsupported_scalar_result unsupported_bool_array unsupported_set_result
+	unsupported_optional_set unsupported_bool_set client_only new_number new_number_for_ NewValue
+	NewValue_number EvolvingFailure_Deferred)
+cat > "$build/rejected.odin" <<'ODIN'
+package rejected
+foreign import fixture "swift:fixture/SwiftImportFixture"
+main :: proc() {
+ODIN
+for name in "${rejected[@]}"; do
+	printf '\t_ = fixture.%s\n' "$name" >> "$build/rejected.odin"
+done
+printf '}\n' >> "$build/rejected.odin"
+if "$ODIN" check "$build/rejected.odin" -file "${odin_target[@]}" > "$build/invalid.log" 2>&1; then
+	echo "Expected importer to reject unsupported declarations" >&2
+	exit 1
+fi
+expect_diagnostic() {
+	if ! grep -Fq "$1" "$build/invalid.log"; then
+		cat "$build/invalid.log" >&2
+		echo "Missing Swift diagnostic: $1" >&2
+		exit 1
+	fi
+}
+for name in "${rejected[@]}"; do expect_diagnostic "Swift import: '$name':"; done
+platform=iOS
+introduced=18.2
+if [[ "$sdk" == macosx ]]; then platform=macOS; introduced=15.2.1; fi
+for name in new_number new_number_for_ NewValue NewValue_number; do
+	expect_diagnostic "'$name': requires $platform $introduced (deployment target $platform 15.0.0)"
+done
+expect_diagnostic "'EvolvingFailure_Deferred': requires $platform 99.0 (deployment target $platform 15.0.0)"
+expect_diagnostic "'client_only': unsupported Swift attribute '@_alwaysEmitIntoClient'"
+expect_diagnostic "'isolated_sync': synchronous @MainActor calls require actor isolation"
+expect_diagnostic "'unsupported_scalar_argument': parameter 'value' has unsupported type or modifier 'Swift.Float'"
+expect_diagnostic "'unsupported_scalar_result': unsupported result type 'Swift.Float'"
+expect_diagnostic "'unsupported_bool_array': unsupported result type '[Swift.Bool]'"
+expect_diagnostic "'recursive_payload': unsupported result type 'SwiftImportFixture.RecursivePayload'"
+expect_diagnostic "func overloaded(_ value: UInt64) -> UInt64"
+expect_diagnostic "func overloaded(_ value: Double) -> Double"
+cat > "$build/rejected.odin" <<'ODIN'
+package available
+foreign import fixture "swift:fixture/SwiftImportFixture"
+main :: proc() {
+	_ = fixture.new_number(1)
+	_ = fixture.new_number_for_(2)
+	_ = fixture.NewValue_number()
+}
+ODIN
+"$ODIN" check "$build/rejected.odin" -file "${platform_target[@]}" -minimum-os-version:"$introduced"
+rm "$build/rejected.odin"
 
 # Simulator execution is opt-in and uses a caller-owned, booted device.
 # Do not change the user's simulator state from this test script.
@@ -148,42 +203,6 @@ for selection in BUILTIN FLATTENED HELPER UNSUPPORTED_HELPER ENUM_CASE FROZEN_EN
 	if ! grep -F 'Swift import:' "$build/invalid.log" | grep -Fq "$diagnostic"; then
 		cat "$build/invalid.log" >&2
 		echo "Missing name collision diagnostic: $selection" >&2
-		exit 1
-	fi
-done
-
-# Check all rejected declarations in one import. Each compiler invocation
-# inspects the Swift module; repeating that for each diagnostic is expensive.
-cat > "$build/rejected.odin" <<'ODIN'
-package rejected
-foreign import fixture "swift:fixture/SwiftImportFixture"
-main :: proc() {
-ODIN
-for selection in narrow generic throwing isolated_sync overloaded future inout_value typed_throwing unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields unsupported_scalar_argument unsupported_scalar_result unsupported_bool_array unsupported_set_result unsupported_optional_set unsupported_bool_set; do
-	printf '\t_ = fixture.%s\n' "$selection" >> "$build/rejected.odin"
-done
-printf '}\n' >> "$build/rejected.odin"
-if "$ODIN" check "$build/rejected.odin" -file "${odin_target[@]}" > "$build/invalid.log" 2>&1; then
-	echo "Expected importer to reject unsupported declarations" >&2
-	exit 1
-fi
-for selection in narrow generic throwing isolated_sync overloaded future inout_value typed_throwing unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields unsupported_scalar_argument unsupported_scalar_result unsupported_bool_array unsupported_set_result unsupported_optional_set unsupported_bool_set; do
-	if ! grep -F "Swift import:" "$build/invalid.log" | grep -Fq "'$selection'"; then
-		cat "$build/invalid.log" >&2
-		echo "Missing rejection for $selection" >&2
-		exit 1
-	fi
-done
-
-for diagnostic in \
-	"func overloaded(_ value: UInt64) -> UInt64" \
-	"func overloaded(_ value: Double) -> Double" \
-	"parameter 'value' has unsupported type or modifier 'Swift.Float'" \
-	"unsupported result type 'Swift.Float'" \
-	"unsupported result type '[Swift.Bool]'"; do
-	if ! grep -Fq "$diagnostic" "$build/invalid.log"; then
-		cat "$build/invalid.log" >&2
-		echo "Missing scalar diagnostic: $diagnostic" >&2
 		exit 1
 	fi
 done
