@@ -24,6 +24,16 @@ records_received :: proc(task: swift.Task, values: []fixture.ArrayRecord, conver
 	record_calls += 1
 }
 
+record_advanced :: proc(task: swift.Task, result: u64) {
+	assert(result == take_expected(task))
+	record_calls += 1
+}
+
+record_advanced_after_cancel :: proc(task: swift.Task, result: u64) {
+	assert(swift.task_is_cancelled(task) && result == 10)
+	record_calls += 1
+}
+
 check_records :: proc() {
 	#assert(size_of(fixture.ArrayRecord) == 24 && align_of(fixture.ArrayRecord) == 8)
 	#assert(offset_of(fixture.ArrayRecord, fraction) == 8)
@@ -34,6 +44,10 @@ check_records :: proc() {
 	assert(fixture.direct_value({73}).value == 73)
 	assert(fixture.DirectValue_init(73).value == 73)
 	value := fixture.ArrayRecord{9, 0.5, 10}
+	items := [3]fixture.ArrayRecord{value, value, value}
+	assert(fixture.ArrayRecord_storage_address(&items[1]) == uint(uintptr(&items[1])))
+	assert(fixture.ArrayRecord_advance(&items[1], 3) == 12)
+	assert(items[0] == value && items[1] == fixture.ArrayRecord{12, 0.75, 11} && items[2] == value)
 	assert(fixture.echo_record(value) == value)
 	changed := fixture.increment_record(value, 3)
 	assert(changed == fixture.ArrayRecord{12, 0.75, 13})
@@ -126,10 +140,20 @@ check_records :: proc() {
 	input[0].first = 999
 	value.first = 999
 	wide.first = 999
+	failed_mutation, started := fixture.ArrayRecord_advance_later(nil, 7, record_advanced)
+	assert(!started && failed_mutation == nil)
+	task = fixture.ArrayRecord_advance_later(&items[1], 7, record_advanced) or_else panic("Async record mutation")
+	track_task(task, 19)
+	// This method finishes its mutation even when cancellation was requested.
+	task = fixture.ArrayRecord_advance_later(&items[0], 1, record_advanced_after_cancel) or_else panic("Cancelled mutation")
+	swift.task_cancel(task)
+	swift.task_release(task)
 	deadline := time.tick_now()
-	for record_calls != 4 {
+	for record_calls != 6 {
 		assert(time.tick_since(deadline) < 5*time.Second)
 		_ = cf.RunLoopRunInMode(cf.kRunLoopDefaultMode, 0.01, false)
 	}
+	assert(items[0] == fixture.ArrayRecord{10, 0.75, 11})
+	assert(items[1] == fixture.ArrayRecord{19, 1, 12} && items[2].first == 9)
 	assert(state.allocations == state.frees)
 }

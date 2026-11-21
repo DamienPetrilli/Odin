@@ -694,6 +694,20 @@ public func mixedWideLater(_ prefix: ArrayRecord, _ text: String, _ value: WideR
 	await Task.yield()
 	return mixedWide(prefix, text, value)
 }
+extension ArrayRecord {
+	public mutating func recursiveResult() -> RecursivePayload { .end }
+	public mutating func storageAddress() -> UInt {
+		withUnsafePointer(to: &self) { UInt(bitPattern: $0) }
+	}
+	@inline(never) public mutating func advance(_ amount: UInt64) -> UInt64 {
+		self = ArrayRecord(first: first &+ amount, fraction: fraction + 0.25, last: last &+ 1)
+		return first
+	}
+	public mutating func advanceLater(_ amount: UInt64) async -> UInt64 {
+		await Task.yield()
+		return advance(amount)
+	}
+}
 public func echoRecord(_ value: ArrayRecord) -> ArrayRecord { value }
 public func incrementRecord(_ value: ArrayRecord, _ delta: UInt64) -> ArrayRecord {
 	ArrayRecord(first: value.first &+ delta, fraction: value.fraction + 0.25, last: value.last &+ delta)
@@ -819,6 +833,9 @@ public func echoBoolHead(_ value: BoolHead) -> BoolHead { value }
 	public var count: Int
 	public var flag: Bool
 }
+extension BoolTail {
+	public mutating func toggle() { flag.toggle() }
+}
 public func echoBoolTail(_ value: BoolTail) -> BoolTail { value }
 @frozen public struct BoolMixed {
 	public var a: Bool
@@ -900,6 +917,9 @@ public func echoOptionalDateLater(_ value: Date?) async -> Date? {
 	public init(_ title: String, _ count: Int, _ flag: Bool) {
 		self.title = title; self.count = count; self.flag = flag
 	}
+}
+extension TextRecord {
+	public mutating func clear() { title = "" }
 }
 @frozen public struct WideTextRecord {
 	public var flag: Bool

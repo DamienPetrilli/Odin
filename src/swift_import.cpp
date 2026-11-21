@@ -128,6 +128,7 @@ struct SwiftImportFunction {
 	bool is_initializer;
 	bool is_main_actor;
 	bool is_collection;
+	bool record_inout; // The verified native storage is borrowed through a typed Odin pointer.
 	bool value_receiver; // Lowered as the last Swift value argument, named first in Odin.
 };
 
@@ -803,6 +804,10 @@ gb_internal bool swift_import_ownership(String sil, SwiftImportFunction *fn) {
 			bool borrowed = string_starts_with(argument, indirect ? str_lit("@in_guaranteed ") : str_lit("@guaranteed "));
 			if (!param.consumed && !borrowed) return false;
 		}
+		if (fn->record_inout) {
+			String self = string_trim_whitespace(string_split_iterator(&parameters, ','));
+			if (!string_starts_with(self, str_lit("@inout ")) || parameters.pos != parameters.str.len) return false;
+		}
 		if (swift_import_native_owns(fn->result)) {
 			String result = string_trim_whitespace(substring(line, end+1, line.len));
 			String convention = swift_import_indirect(fn->result) && !fn->result.nominal->alignment ? str_lit("@out ") : str_lit("@owned ");
@@ -1043,7 +1048,7 @@ gb_internal void swift_import_report_function(Array<String> *report, SwiftImport
 		row = gb_string_appendc(row, "\n");
 	}
 	if (swift_import_has_receiver(fn) || fn.value_receiver) {
-		char const *borrow = !fn.is_async ? "borrowed during call" : fn.is_mutating ? "exclusive borrow through completion" : "copied for task";
+		char const *borrow = !fn.is_async ? (fn.is_mutating ? "exclusive borrow during call" : "borrowed during call") : fn.is_mutating ? "exclusive borrow through completion" : "copied for task";
 		row = gb_string_append_fmt(row, "  receiver: %s\n", borrow);
 	}
 	for (auto const &param : fn.parameters) {
@@ -1115,7 +1120,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	bool entry_needs_capture = indirect_result || receiver || fn.is_collection;
 	gbString params = gb_string_make(permanent_allocator(), "");
 	gbString arguments = gb_string_make(permanent_allocator(), "");
-	if (receiver || fn.value_receiver) params = gb_string_append_fmt(params, "receiver: %.*s", LIT(fn.owner->name));
+	if (receiver || fn.value_receiver) params = gb_string_append_fmt(params, "receiver: %s%.*s", fn.record_inout ? "^" : "", LIT(fn.owner->name));
 	for_array(i, fn.parameters) {
 		auto const &param = fn.parameters[i];
 		if (!param.empty_set && !(fn.value_receiver && i == fn.parameters.count-1)) params = gb_string_append_fmt(params, "%s%.*s: %s", gb_string_length(params) ? ", " : "", LIT(param.name), param.type.odin);
@@ -1867,10 +1872,17 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		String &reason = fn.rejection;
 		auto api_types = swift_import_array(fn.api, "children");
 		if (receiver && fn.owner->projected && fn.is_mutating) {
-			reason = str_lit("mutating a projected Swift receiver requires write-back to the Odin value");
+			// Borrow storage directly only when every bit pattern of each Odin
+			// field is a valid Swift value. Bool and owned fields need conversion.
+			fn.record_inout = fn.owner->is_record && fn.owner->size != 0 && !fn.owner->owns;
+			for (auto const &field : fn.owner->fields) {
+				if (make_string_c(field.type.odin) == "bool") fn.record_inout = false;
+			}
+			if (!fn.record_inout) reason = str_lit("mutating a projected Swift receiver requires write-back to the Odin value");
 		} else if (fn.owner && !fn.is_static && !fn.owner->supported) {
 			reason = str_lit("unsupported Swift receiver representation");
-		} else if (fn.result.nominal && !fn.result.nominal->supported) {
+		}
+		if (!reason.len && fn.result.nominal && !fn.result.nominal->supported) {
 			reason = swift_import_type_rejection(api_types.count ? api_types[0] : nullptr);
 		}
 		for_array(i, fn.parameters) {
@@ -1921,6 +1933,10 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			else native_index++;
 		}
 		if (fn.is_collection) declaration = gb_string_append_fmt(declaration, "%sptr, ptr", count++ ? ", " : "");
+		if (fn.record_inout) {
+			record_parameters = true;
+			if (!reason.len && !swift_import_struct_parameter(native, native_index, fn.owner, false)) reason = str_lit("unsupported mutable Swift record receiver layout");
+		}
 		if (receiver) declaration = gb_string_append_fmt(declaration, "%s%s", count ? ", " : "", fn.is_mutating ? "ptr swiftself" : "ptr noalias swiftself");
 		declaration = gb_string_appendc(declaration, ")");
 		String exported = concatenate_strings(permanent_allocator(), str_lit(" _"), fn.symbol);
