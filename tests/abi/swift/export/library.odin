@@ -163,3 +163,10 @@ text_edges :: proc "swift" (text: string) -> int {
 same_utf8 :: proc "swift" (a, b: string, expected: []u8) -> bool {
 	return a == b && a == string(expected)
 }
+
+@(export)
+packed_reply :: proc "swift" (x: i8, y: u16, truth: u8, w: f32) -> (code: i8, quantity: u16, enabled: bool, weight: f32) {
+	code, quantity, _, weight = reply.packed_reply(x, y, false, w)
+	enabled = transmute(bool)truth
+	return
+}

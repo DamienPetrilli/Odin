@@ -31,7 +31,7 @@ Without a local library/module, a bare module name selects an SDK framework.
 Use a target-specific source file or `#+build` constraint for platform-dependent
 imports: imports are resolved during parsing.
 
-A synchronous free function returning two to four full-width numeric values maps
+A synchronous free function returning two to four numeric or Bool scalars maps
 to ordinary Odin multiple returns. For example, `low, high := example.bounds(x)`
 calls Swift's `bounds(_:) -> (lower: UInt64, upper: UInt64)`. Each result is
 copied in registers. Run with `-show-swift-imports` to see the result names.

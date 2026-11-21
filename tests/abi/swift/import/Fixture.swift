@@ -1252,7 +1252,10 @@ public func measureTuple(_ a: Int64, _ b: Double, _ c: UInt, _ d: Int) -> (Int64
 }
 
 public func mixedLabels(_ x: Int) -> (Int, weight: Double) { (x, 0.5) }
-public func packedTuple() -> (UInt8, UInt16) { (0, 0) }
+public func packedTuple(_ x: UInt8, _ y: UInt16) -> (UInt8, UInt16) { (x, y) }
+public func mixedTuple(_ x: Int8, _ y: UInt16, _ z: Bool, _ w: Float) -> (Int8, UInt16, Bool, Float) {
+	(x, y, z, w)
+}
 public func indirectTuple() -> (Int, Int, Int, Int, Int) { (0, 1, 2, 3, 4) }
 public func ownedTuple() -> (String, UInt64) { ("text", 0) }
 public func tupleCaseCollision() -> (pageID: UInt64, page_id: UInt64) { (0, 1) }

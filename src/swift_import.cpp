@@ -582,11 +582,10 @@ gb_internal bool swift_import_borrowed_parameter(JsonValue *api, Slice<JsonValue
 	return true;
 }
 
-// A Swift tuple is a list of results. On Darwin arm64 up to four full-width
-// numeric elements return directly. Match the target compiler's IR as usual.
+gb_internal char const *swift_abi_tuple_result_llvm(char const **elements, isize count);
 gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *fn) {
 	auto elements = swift_import_array(api, "children");
-	fn->rejection = str_lit("tuple results require two to four word-sized numeric scalars");
+	fn->rejection = str_lit("tuple results require two to four numeric or Bool scalars");
 	if (elements.count < 2 || elements.count > 4) return false;
 	if (fn->is_async || fn->owner) {
 		fn->rejection = str_lit("tuple results currently require a synchronous free function");
@@ -610,7 +609,6 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 	for_array(i, elements) {
 		SwiftImportType &type = types[i];
 		if (!swift_import_scalar(swift_import_string(elements[i], "usr"), &type)) return false;
-		if (make_string_c(type.llvm) != "i64" && make_string_c(type.llvm) != "double") return false;
 		String item = string_trim_whitespace(string_split_iterator(&it, ','));
 		isize colon = swift_import_index(item, str_lit(":"));
 		if (colon >= 0) {
@@ -626,7 +624,7 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 
 	gbString swift = gb_string_make(permanent_allocator(), "(");
 	gbString odin = gb_string_make(permanent_allocator(), "(");
-	gbString llvm = gb_string_make(permanent_allocator(), "{ ");
+	char const *fields[4];
 	for_array(i, elements) {
 		char const *separator = i ? ", " : "";
 		swift = gb_string_append_fmt(swift, "%s%s", separator, types[i].swift);
@@ -648,9 +646,10 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 			odin = gb_string_append_fmt(odin, "%.*s: ", LIT(labels[i]));
 		}
 		odin = gb_string_appendc(odin, types[i].odin);
-		llvm = gb_string_append_fmt(llvm, "%s%s", separator, types[i].llvm);
+		fields[i] = types[i].odin;
 	}
-	fn->result = {gb_string_appendc(swift, ")"), gb_string_appendc(odin, ")"), gb_string_appendc(llvm, " }"), nullptr};
+	fn->result = {gb_string_appendc(swift, ")"), gb_string_appendc(odin, ")"), swift_abi_tuple_result_llvm(fields, elements.count), nullptr};
+	if (!fn->result.llvm) return false;
 	fn->rejection = {};
 	return true;
 }

@@ -3331,7 +3331,7 @@ gb_internal lbArgType lb_swift_abi_value(LLVMContextRef c, LLVMTypeRef type, boo
 		return lb_arg_type_direct(type);
 	}
 
-	if (swift_abi_record_has_narrow_fields(odin_type)) {
+	if ((is_result && swift_abi_tuple_has_narrow_fields(odin_type)) || swift_abi_record_has_narrow_fields(odin_type)) {
 		SwiftABIRecordComponent components[4];
 		isize count = swift_abi_record_components(odin_type, components, gb_count_of(components));
 		lbArgType arg = {};
@@ -3346,7 +3346,7 @@ gb_internal lbArgType lb_swift_abi_value(LLVMContextRef c, LLVMTypeRef type, boo
 			LLVMTypeRef fields[4];
 			for (isize i = 0; i < count; i++) {
 				Type *field = base_type(components[i].type);
-				fields[i] = field == t_bool ? LLVMInt1TypeInContext(c) : field == t_f64 ? LLVMDoubleTypeInContext(c) :
+				fields[i] = field == t_bool ? LLVMInt1TypeInContext(c) : field == t_f64 ? LLVMDoubleTypeInContext(c) : field == t_f32 ? LLVMFloatTypeInContext(c) :
 				            is_type_pointer(field) || is_type_multi_pointer(field) ? LLVMPointerType(LLVMInt8TypeInContext(c), 0) :
 				            LLVMIntTypeInContext(c, cast(unsigned)type_size_of(field)*8);
 			}

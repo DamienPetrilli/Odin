@@ -4173,16 +4173,20 @@ struct SwiftABIRecordComponent {
 // Narrow integer fields sharing an eight-byte unit are gathered into one
 // register. Keep field indices so packing never reads padding or beyond size.
 gb_internal isize swift_abi_record_components(Type *type, SwiftABIRecordComponent *components, isize capacity) {
-	auto fields = base_type(type)->Struct.fields;
+	type = base_type(type);
+	auto fields = type->kind == Type_Tuple ? type->Tuple.variables : type->Struct.fields;
+	auto packed_integer = [](Type *field) {
+		return base_type(field) == t_bool || (is_type_integer(field) && type_size_of(field) < 8);
+	};
 	isize count = 0;
 	for (isize i = 0; i < fields.count;) {
 		SwiftABIRecordComponent component = {fields[i]->type, i, 1, type_offset_of(type, i)};
-		if (is_swift_abi_narrow_field(component.type)) {
+		if (packed_integer(component.type)) {
 			i64 end = component.offset+type_size_of(component.type);
 			while (i+component.count < fields.count) {
 				isize next = i+component.count;
 				i64 offset = type_offset_of(type, next);
-				if (!is_swift_abi_narrow_field(fields[next]->type) || offset/8 != component.offset/8) break;
+				if (!packed_integer(fields[next]->type) || offset/8 != component.offset/8) break;
 				end = offset+type_size_of(fields[next]->type);
 				component.count++;
 			}
@@ -4204,6 +4208,49 @@ gb_internal bool swift_abi_record_has_narrow_fields(Type *type) {
 	for (Entity *field : type->Struct.fields) if (is_swift_abi_narrow_field(field->type)) return true;
 	return false;
 }
+
+gb_internal bool swift_abi_tuple_has_narrow_fields(Type *type) {
+	type = base_type(type);
+	if (!type || type->kind != Type_Tuple || type->Tuple.variables.count > 4) return false;
+	for (Entity *field : type->Tuple.variables) {
+		if (is_swift_abi_numeric_scalar(field->type) && type_size_of(field->type) < 8) return true;
+	}
+	return false;
+}
+
+// Only Darwin module inspection needs textual LLVM types. Both probes and
+// code generation derive the result registers from the same Odin tuple.
+#if defined(GB_SYSTEM_OSX)
+gb_internal char const *swift_abi_tuple_result_llvm(Type *tuple) {
+	SwiftABIRecordComponent components[4];
+	isize n = swift_abi_record_components(tuple, components, gb_count_of(components));
+	GB_ASSERT(n >= 1 && n <= gb_count_of(components));
+	gbString result = gb_string_make(permanent_allocator(), n == 1 ? "" : "{ ");
+	for (isize i = 0; i < n; i++) {
+		Type *type = base_type(components[i].type);
+		char const *part = type == t_bool ? "i1" : type == t_f32 ? "float" : type == t_f64 ? "double" :
+		                   type_size_of(type) == 1 ? "i8" : type_size_of(type) == 2 ? "i16" :
+		                   type_size_of(type) == 4 ? "i32" : "i64";
+		if (i) result = gb_string_appendc(result, ", ");
+		result = gb_string_appendc(result, part);
+	}
+	return n == 1 ? result : gb_string_appendc(result, " }");
+}
+
+gb_internal char const *swift_abi_tuple_result_llvm(char const **odin_names, isize count) {
+	Type *fields[4] = {};
+	GB_ASSERT(count >= 2 && count <= gb_count_of(fields));
+	for (isize i = 0; i < count; i++) {
+		for (auto &type : basic_types) {
+			if (type.Basic.name != make_string_c(odin_names[i])) continue;
+			fields[i] = &type;
+			break;
+		}
+		if (!fields[i]) return nullptr;
+	}
+	return swift_abi_tuple_result_llvm(alloc_type_tuple_from_field_types(fields, count, false, true));
+}
+#endif
 
 // Recognize the core value by package identity, not by shape or user spelling.
 gb_internal bool is_swift_uuid_type(Type *type) {
@@ -4415,10 +4462,10 @@ gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc
 			if (result_count > 1) {
 				bool direct = result_count <= 4;
 				for (Entity *result : results->Tuple.variables) {
-					direct &= is_swift_abi_word_field(result->type) && is_swift_abi_numeric_scalar(result->type);
+					direct &= is_swift_abi_numeric_scalar(result->type);
 				}
 				if (!direct) {
-					error(proc_type_node, "Multiple Swift results require two to four word-sized numeric scalars");
+					error(proc_type_node, "Multiple Swift results require two to four numeric or Bool scalars");
 					success = false;
 				}
 			}

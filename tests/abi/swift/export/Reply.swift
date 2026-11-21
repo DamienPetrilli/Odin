@@ -20,3 +20,7 @@ public func identityFloat(_ value: Float) -> Float { value }
 @inline(never) public func measure(_ index: Int64, _ weight: Double) -> (Int64, Double) {
 	(index &- 1, weight + 0.25)
 }
+
+@inline(never) public func packedReply(_ x: Int8, _ y: UInt16, _ z: Bool, _ w: Float) -> (Int8, UInt16, Bool, Float) {
+	(x, y, z, w)
+}

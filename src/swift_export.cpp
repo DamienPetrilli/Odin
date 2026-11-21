@@ -508,6 +508,16 @@ gb_internal bool swift_export_check_types() {
 				i, j, i, j, LIT(name), LIT(member));
 		}
 	}
+	for_array(i, swift_export_procedures) {
+		Type *results = base_type(swift_export_procedures[i].entity->type)->Proc.results;
+		if (!swift_abi_tuple_has_narrow_fields(reduce_tuple_to_single_type(results))) continue;
+		source = gb_string_append_fmt(source, "@_silgen_name(\"odin_tuple_%td\") public func tuple_%td() -> (", i, i);
+		for_array(j, results->Tuple.variables) {
+			if (j) source = gb_string_appendc(source, ", ");
+			source = gb_string_appendc(source, swift_export_scalar(results->Tuple.variables[j]->type));
+		}
+		source = gb_string_appendc(source, ") { fatalError() }\n");
+	}
 	if (!gb_string_length(source)) return true;
 	String dir = swift_export_directory;
 	if (!swift_import_write(swift_export_node, swift_import_path(dir, "Types.swift"), source, true)) return false;
@@ -618,6 +628,18 @@ gb_internal bool swift_export_check_types() {
 			}
 		}
 		if (!valid) error(type->Named.type_name->token, "Swift export: unsupported native enum lowering for '%.*s'", LIT(type->Named.name));
+	}
+	for_array(i, swift_export_procedures) {
+		Entity *e = swift_export_procedures[i].entity;
+		Type *results = base_type(e->type)->Proc.results;
+		if (!swift_abi_tuple_has_narrow_fields(reduce_tuple_to_single_type(results))) continue;
+		gbString name = gb_string_append_fmt(gb_string_make(temporary_allocator(), ""), "odin_tuple_%td", i);
+		LLVMValueRef probe = LLVMGetNamedFunction(module, name);
+		char *actual = probe ? LLVMPrintTypeToString(LLVMGetReturnType(LLVMGlobalGetValueType(probe))) : nullptr;
+		bool valid = actual && LLVMGetFunctionCallConv(probe) == LLVMSwiftCallConv && LLVMCountParams(probe) == 0 &&
+		             make_string_c(actual) == make_string_c(swift_abi_tuple_result_llvm(results));
+		if (actual) LLVMDisposeMessage(actual);
+		if (!valid) error(e->token, "Swift export: unsupported native tuple result lowering for '%.*s'", LIT(e->token.string));
 	}
 	if (swift_export_optional_types.count) {
 		// Inspect the other probes first. Canonicalize only after their

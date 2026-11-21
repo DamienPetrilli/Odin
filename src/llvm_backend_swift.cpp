@@ -33,7 +33,8 @@ gb_internal LLVMValueRef lb_swift_record_unpack(lbProcedure *p, LLVMValueRef val
 	isize count = swift_abi_record_components(type, components, gb_count_of(components));
 	GB_ASSERT(count <= gb_count_of(components));
 	lbAddr slot = lb_add_local_generated(p, type, true);
-	auto fields = base_type(type)->Struct.fields;
+	Type *bt = base_type(type);
+	auto fields = bt->kind == Type_Tuple ? bt->Tuple.variables : bt->Struct.fields;
 	for (isize i = 0; i < count; i++) {
 		auto const &component = components[i];
 		LLVMValueRef packed = count == 1 ? value : LLVMBuildExtractValue(p->builder, value, cast(unsigned)i, "");

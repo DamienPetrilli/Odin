@@ -85,6 +85,12 @@ check_optional_width :: proc(values: []$T, $echo: $Echo, $later: $Later) -> int 
 }
 
 check_scalars :: proc() {
+	lo, hi := fixture.packed_tuple(0xfe, 0xfcba)
+	assert(lo == 0xfe && hi == 0xfcba)
+	for flag in ([]bool{true, false}) {
+		signed, unsigned, enabled, ratio := fixture.mixed_tuple(min(i8), 0xffed, flag, -0.0)
+		assert(signed == min(i8) && unsigned == 0xffed && enabled == flag && transmute(u32)ratio == 0x8000_0000)
+	}
 	lower, upper := fixture.bounds(max(u64))
 	assert(lower == max(u64) && upper == 0)
 	integer, fraction, bits, whole := fixture.measure_tuple(-17, -0.0, max(uint), min(int))

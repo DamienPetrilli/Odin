@@ -272,3 +272,10 @@ precondition(localOptional(42, 0x12345678, true) == 42)
 let localNone = localOptional(42, 0x12345678, false)
 precondition(localNone == nil)
 withUnsafeBytes(of: localNone) { precondition($0.load(as: UInt64.self) == 0) }
+
+for truth in UInt8.min...UInt8.max {
+	let weight = Float(bitPattern: 0xffc12345)
+	let value = packedReply(.min, 0xffba, truth, weight)
+	precondition(value.code == .min && value.quantity == 0xffba && value.enabled == (truth != 0))
+	precondition(value.weight.bitPattern == weight.bitPattern)
+}

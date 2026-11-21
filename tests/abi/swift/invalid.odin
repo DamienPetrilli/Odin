@@ -33,7 +33,7 @@ Slice_Result :: proc "swift" () -> []u64
 By_Ptr_Parameter :: proc "swift" (#by_ptr value: i64)
 String_Result :: proc "swift" () -> string
 Variadic_Parameter :: proc "swift" (value: ..i64)
-Packed_Results :: proc "swift" () -> (u8, u16)
+Managed_Results :: proc "swift" () -> (u8, string)
 Indirect_Results :: proc "swift" () -> (u64, u64, u64, u64, u64)
 Odin_Callback :: proc "swift" (f: proc ())
 C_Callback :: proc "swift" (f: proc "c" ())
