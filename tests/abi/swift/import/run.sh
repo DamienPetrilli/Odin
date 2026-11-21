@@ -53,6 +53,8 @@ cp "$here/scalars.odin" "$build/scalars.odin"
 	"${odin_target[@]}" "${odin_opt[@]}" -out:"$build/import" -show-swift-imports > "$build/mappings.txt"
 grep -Fq 'call add_later :: proc(value: u64, delta: u64, completion: proc(swift.Task, u64))' "$build/mappings.txt"
 grep -Fq 'call async_tuple :: proc(count: u64, completion: proc(task: swift.Task, count: u64, ready: bool))' "$build/mappings.txt"
+grep -Fq 'call throwing_tuple :: proc(n: u64, completion: proc(task: swift.Task, count: u64, ready: bool, err: Async_Error))' "$build/mappings.txt"
+grep -Fq 'call throwing_packed_tuple :: proc(n: u8, completion: proc(task: swift.Task, err: u8, err_: bool, value_2: u8, value_3: u8, value_4: u8, _swift_error: Async_Error))' "$build/mappings.txt"
 grep -Fq 'call bounds :: proc(value: u64) -> (lower: u64, upper: u64)' "$build/mappings.txt"
 grep -Fq 'type SwiftImportFixture.`TextRecord` -> TextRecord (struct, frozen)' "$build/mappings.txt"
 grep -Fq 'call ArrayRecord_advance :: proc(receiver: ^ArrayRecord, amount: u64) -> u64' "$build/mappings.txt"
@@ -85,7 +87,7 @@ if [[ "$sdk" != macosx ]]; then cp "$here/controller.odin" "$build/names/"; fi
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/names-test"
 
 # Check rejections in one invocation on every target, including link-only iOS runs.
-rejected=(text_bounds owned_tuple tuple_case_collision throwing_tuple ArrayRecord_recursive_result TextRecord_clear RawCollision_raw_value RawCode_replace async_buffer returned_buffer generic throwing isolated_sync overloaded future inout_value typed_throwing
+rejected=(text_bounds owned_tuple tuple_case_collision ArrayRecord_recursive_result TextRecord_clear RawCollision_raw_value RawCode_replace async_buffer returned_buffer generic throwing isolated_sync overloaded future inout_value typed_throwing
 	unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields
 	unsupported_scalar_argument unsupported_scalar_result narrow_array unsupported_bool_array unsupported_set_result
 	unsupported_optional_set unsupported_bool_set client_only new_number new_number_for_ NewValue
@@ -114,7 +116,6 @@ for name in "${rejected[@]}"; do expect_diagnostic "Swift import: '$name':"; don
 expect_diagnostic "'owned_tuple': tuple results require numeric or Bool scalars"
 expect_diagnostic "'text_bounds': tuple results with converted parameters are unsupported"
 expect_diagnostic "'tuple_case_collision': tuple result labels collide after Odin name conversion"
-expect_diagnostic "'throwing_tuple': tuple results currently require a nonthrowing free function"
 platform=iOS
 introduced=18.2
 if [[ "$sdk" == macosx ]]; then platform=macOS; introduced=15.2.1; fi
@@ -257,6 +258,7 @@ for diagnostic in \
 	'requires a constant Swift link name' \
 	'completion task handle must have a rawptr base type' \
 	'result must be a supported Swift numeric scalar or bool' \
+	'error projection must name an Odin procedure' \
 	'completion must be an Odin procedure' \
 	'arguments must be a supported Swift numeric scalar or bool' \
 	'receiver must be a pointer to a live Swift value' \

@@ -1288,7 +1288,21 @@ public func wideTupleLater(_ value: UInt64) async -> (UInt64, Double, Int64, UIn
 	await Task.yield()
 	return (value, -0.0, .min, value &+ 13, value != 0)
 }
-public func throwingTuple() async throws -> (Int, Bool) { (0, false) }
+public func throwingTuple(_ n: UInt64) async throws -> (count: UInt64, ready: Bool) {
+	await Task.yield()
+	if n == 0 { throw PlainFailure.missing }
+	return (n, true)
+}
+public func throwingPackedTuple(_ n: UInt8) async throws -> (err: UInt8, err_: Bool, UInt8, UInt8, UInt8) {
+	await Task.yield()
+	if n == 0 { throw PlainFailure.denied }
+	return (n, true, 0xfe, 0x41, n &+ 1)
+}
+public func throwingWideTuple(_ n: UInt64) async throws -> (UInt64, Double, Int64, UInt64, Bool) {
+	await Task.yield()
+	if n == 0 { throw InspectionFailure.message("kept after the Swift task completed", 37) }
+	return (n, -0.0, .min, n &+ 13, true)
+}
 
 public func inspectPrefix(_ bytes: UnsafeBufferPointer<UInt8>, _ needle: UnsafePointer<UInt8>) -> (index: Int, found: Bool) {
 	guard let index = bytes.firstIndex(of: needle.pointee) else { return (bytes.count, false) }

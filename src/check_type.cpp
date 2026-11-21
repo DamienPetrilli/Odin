@@ -4278,7 +4278,7 @@ gb_internal bool swift_abi_frame_field(LLVMValueRef pointer, LLVMTypeRef *frame,
 
 // Inspect the continuation stored into the actual child frame at the probe call.
 // Swift places its resume address in the second pointer-sized field.
-gb_internal bool swift_abi_async_tuple(LLVMValueRef fn, LLVMTargetDataRef layout, Type *tuple) {
+gb_internal bool swift_abi_async_tuple(LLVMValueRef fn, LLVMTargetDataRef layout, Type *tuple, bool throwing) {
 	if (!fn || LLVMCountBasicBlocks(fn)) return false;
 	SwiftABIRecordComponent components[4];
 	isize count = swift_abi_record_components(tuple, components, gb_count_of(components));
@@ -4311,11 +4311,16 @@ gb_internal bool swift_abi_async_tuple(LLVMValueRef fn, LLVMTargetDataRef layout
 			break;
 		}
 		if (!resume || !LLVMIsAFunction(resume) || LLVMGetFunctionCallConv(resume) != LLVMGetFunctionCallConv(fn) ||
-		    LLVMGetReturnType(LLVMGlobalGetValueType(resume)) != LLVMVoidTypeInContext(ctx) || LLVMCountParams(resume) != 1+n ||
+		    LLVMGetReturnType(LLVMGlobalGetValueType(resume)) != LLVMVoidTypeInContext(ctx) || LLVMCountParams(resume) != 1+n+throwing ||
 		    !LLVMGetEnumAttributeAtIndex(resume, 1, async_attr)) return false;
 		for (unsigned i = 0; i < n; i++) {
 			if (LLVMTypeOf(LLVMGetParam(resume, i+1)) != swift_abi_scalar_llvm_type(ctx, components[i].type) ||
 			    LLVMGetAttributeCountAtIndex(resume, i+2) != 0) return false;
+		}
+		if (throwing) {
+			unsigned self = LLVMGetEnumAttributeKindForName("swiftself", 9);
+			if (LLVMTypeOf(LLVMGetParam(resume, 1+n)) != LLVMPointerTypeInContext(ctx, 0) ||
+			    !LLVMGetEnumAttributeAtIndex(resume, 2+n, self) || LLVMGetAttributeCountAtIndex(resume, 2+n) != 1) return false;
 		}
 		verified = true;
 	}

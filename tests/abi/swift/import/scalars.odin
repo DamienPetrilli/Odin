@@ -126,6 +126,44 @@ check_tuple_borrows :: proc() {
 	assert(old == 0 && counter == 0xffff && count == counter)
 }
 
+throwing_tuple_received :: proc(task: swift.Task, count: u64, ready: bool, err: fixture.Async_Error) {
+	expected := take_expected(task)
+	assert(count == expected && ready == (expected != 0))
+	if expected == 0 {
+		assert(err.(fixture.PlainFailure) == .Missing)
+	} else {
+		assert(err == nil)
+	}
+	fixture.Async_Error_destroy(err)
+	scalar_calls += 1
+}
+
+throwing_packed_received :: proc(task: swift.Task, n: u8, ready: bool, a, b, c: u8, err: fixture.Async_Error) {
+	expected := u8(take_expected(task))
+	assert(n == expected && ready == (expected != 0))
+	if expected == 0 {
+		assert(a == 0 && b == 0 && c == 0 && err.(fixture.PlainFailure) == .Denied)
+	} else {
+		assert(a == 0xfe && b == 0x41 && c == n+1 && err == nil)
+	}
+	fixture.Async_Error_destroy(err)
+	scalar_calls += 1
+}
+
+throwing_wide_received :: proc(task: swift.Task, n: u64, weight: f64, low: i64, next: u64, ready: bool, err: fixture.Async_Error) {
+	expected := take_expected(task)
+	assert(n == expected && ready == (expected != 0))
+	if expected == 0 {
+		assert(transmute(u64)weight == 0 && low == 0 && next == 0)
+		message := err.(fixture.InspectionFailure).(fixture.InspectionFailure_Message)
+		assert(message.value_0 == "kept after the Swift task completed" && message.value_1 == 37)
+	} else {
+		assert(transmute(u64)weight == 1<<63 && low == min(i64) && next == n+13 && err == nil)
+	}
+	fixture.Async_Error_destroy(err)
+	scalar_calls += 1
+}
+
 check_scalars :: proc() {
 	check_large_tuples()
 	check_tuple_borrows()
@@ -215,7 +253,13 @@ check_scalars :: proc() {
 		track_task(packed, value)
 		wide := fixture.wide_tuple_later(value, wide_tuple_received) or_else panic("Async indirect result")
 		track_task(wide, value)
-		expected += 3
+		pair = fixture.throwing_tuple(value, throwing_tuple_received) or_else panic("Throwing tuple")
+		track_task(pair, value)
+		packed = fixture.throwing_packed_tuple(u8(value), throwing_packed_received) or_else panic("Throwing packed tuple")
+		track_task(packed, value)
+		wide = fixture.throwing_wide_tuple(value, throwing_wide_received) or_else panic("Throwing indirect tuple")
+		track_task(wide, value)
+		expected += 6
 	}
 
 	for value in ([]bool{false, true}) {

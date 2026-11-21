@@ -42,6 +42,10 @@ A nonthrowing async free function returning numeric or Bool scalars delivers the
 as separate callback parameters. For `asyncTuple(_:) async -> (count: UInt64, ready: Bool)`,
 the callback is `proc(task: swift.Task, count: u64, ready: bool)`. The task owns
 the result storage through completion. A callback can copy each scalar directly.
+For an untyped throwing function, the callback takes one additional argument,
+`err: Async_Error`. On success it is nil. On failure the scalar arguments
+are zero and the callback owns the error. Use `Async_Error_destroy(err)` after
+inspecting it or transfer ownership to the caller’s state.
 
 Swift names become snake case, so `addLater` becomes `add_later`:
 

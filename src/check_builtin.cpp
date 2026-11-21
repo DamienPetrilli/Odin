@@ -6073,6 +6073,7 @@ gb_internal bool check_builtin_procedure(CheckerContext *c, Operand *operand, As
 		break;
 
 	case BuiltinProc_swift_async_call:
+	case BuiltinProc_swift_async_throwing_call:
 	case BuiltinProc_swift_async_method_call: {
 		if (build_context.metrics.os != TargetOs_darwin || build_context.metrics.arch != TargetArch_arm64) {
 			error(call, "'swift_async_call' is only supported on Darwin arm64");
@@ -6104,7 +6105,23 @@ gb_internal bool check_builtin_procedure(CheckerContext *c, Operand *operand, As
 			error(ce->args[1], "Swift async completion task handle must have a rawptr base type");
 			return false;
 		}
-		for (isize i = 1; i < ct->Proc.param_count; i++) {
+		bool throwing = id == BuiltinProc_swift_async_throwing_call;
+		if (throwing) {
+			Operand projection = {};
+			check_expr(c, &projection, ce->args[2]);
+			Type *pt = base_type(projection.type);
+			Entity *entity = entity_of_node(ce->args[2]);
+			Type *err = ct->Proc.params->Tuple.variables[ct->Proc.param_count-1]->type;
+			if (ct->Proc.param_count < 2 || !is_type_union(err) || !entity || entity->kind != Entity_Procedure ||
+			    !pt || pt->kind != Type_Proc || pt->Proc.calling_convention != ProcCC_Odin ||
+			    pt->Proc.is_polymorphic || pt->Proc.variadic || pt->Proc.param_count != 1 || pt->Proc.result_count != 1 ||
+			    base_type(pt->Proc.params->Tuple.variables[0]->type) != t_rawptr ||
+			    !are_types_identical(pt->Proc.results->Tuple.variables[0]->type, err)) {
+				error(ce->args[2], "Swift async error projection must name an Odin procedure taking a native error pointer and returning the completion's final union type");
+				return false;
+			}
+		}
+		for (isize i = 1; i < ct->Proc.param_count-throwing; i++) {
 			Type *rt = base_type(ct->Proc.params->Tuple.variables[i]->type);
 			if (!is_swift_abi_numeric_scalar(rt)) {
 				error(ce->args[1], "Swift async result must be a supported Swift numeric scalar or bool");
@@ -6120,7 +6137,7 @@ gb_internal bool check_builtin_procedure(CheckerContext *c, Operand *operand, As
 				return false;
 			}
 		}
-		for (isize i = has_self ? 3 : 2; i < ce->args.count; i++) {
+		for (isize i = has_self || throwing ? 3 : 2; i < ce->args.count; i++) {
 			Operand arg = {};
 			check_expr(c, &arg, ce->args[i]);
 			Type *at = base_type(arg.type);

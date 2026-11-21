@@ -50,6 +50,8 @@ swift_async_context_addr :: proc() -> ^rawptr ---
 // or nil if the start was rejected. Completion borrows that same handle.
 // Arguments are copied; values referenced by context remain borrowed.
 swift_async_call :: proc($symbol: string, completion: $P, ..any) -> rawptr ---
+// The projection consumes the native error and produces the final callback argument.
+swift_async_throwing_call :: proc($symbol: string, completion: $P, project_error: $E, ..any) -> rawptr ---
 swift_async_method_call :: proc($symbol: string, completion: $P, receiver: $R, ..any) -> rawptr ---
 
 // The current value of the stack pointer

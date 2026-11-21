@@ -8,6 +8,7 @@ bad :: proc() {
 	wrong_task :: proc(task: u64, value: u64) {}
 	wrong_result :: proc(task: swift.Task, value: string) {}
 	foreign_callback :: proc "c" (task: swift.Task, value: u64) {}
+	_ = intrinsics.swift_async_throwing_call("$sInvalid", callback, wrong_result)
 	_ = intrinsics.swift_async_call("not_a_swift_symbol", callback)
 	_ = intrinsics.swift_async_call("$sInvalid", wrong_task)
 	_ = intrinsics.swift_async_call("$sInvalid", wrong_result)

@@ -4230,6 +4230,8 @@ gb_internal lbValue lb_build_builtin_proc(lbProcedure *p, Ast *expr, TypeAndValu
 
 	case BuiltinProc_swift_async_call:
 		return lb_build_swift_async_call(p, expr, false);
+	case BuiltinProc_swift_async_throwing_call:
+		return lb_build_swift_async_call(p, expr, false, true);
 	case BuiltinProc_swift_async_method_call:
 		return lb_build_swift_async_call(p, expr, true);
 

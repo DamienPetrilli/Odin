@@ -110,12 +110,12 @@ gb_internal LLVMValueRef lb_swift_error_slot(lbProcedure *p) {
 // Imported calls have scalar arguments/results and an optional borrowed
 // receiver. Completion borrows the native task handle from the runtime.
 
-gb_internal Type *lb_swift_async_proc_type(Type **params, isize count, bool has_self = false, bool indirect_result = false) {
+gb_internal Type *lb_swift_async_proc_type(Type **params, isize count, isize self_index = -1, bool indirect_result = false) {
 	Type *tuple = alloc_type_tuple_from_field_types(params, count, false, true);
 	isize context_index = indirect_result ? 1 : 0;
 	tuple->Tuple.variables[context_index]->flags |= EntityFlag_SwiftAsync;
-	if (has_self) {
-		tuple->Tuple.variables[context_index+1]->flags |= EntityFlag_SwiftSelf;
+	if (self_index >= 0) {
+		tuple->Tuple.variables[self_index]->flags |= EntityFlag_SwiftSelf;
 	}
 	return alloc_type_proc(nullptr, tuple, count, nullptr, 0, false, ProcCC_SwiftAsync);
 }
@@ -135,14 +135,15 @@ gb_internal lbValue lb_swift_capture_load(lbProcedure *p, LLVMTypeRef capture_ty
 	return lbValue{LLVMBuildLoad2(p->builder, lb_type(p->module, type), ptr, ""), type};
 }
 
-gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool has_self) {
+gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool has_self, bool throwing = false) {
 	ast_node(ce, CallExpr, expr);
 	lbModule *m = p->module;
 	String symbol = type_and_value_of_expr(ce->args[0]).value.value_string;
-	isize arg_count = ce->args.count - 2;
+	isize first_arg = throwing ? 3 : 2;
+	isize arg_count = ce->args.count-first_arg;
 	lbValue callback = lb_build_expr(p, ce->args[1]);
 	Type *callback_type = base_type(callback.type);
-	isize result_count = callback_type->Proc.param_count-1;
+	isize result_count = callback_type->Proc.param_count-1-throwing;
 	Type *result_type = nullptr;
 	SwiftABIRecordComponent components[4] = {};
 	isize register_count = result_count;
@@ -160,7 +161,7 @@ gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool ha
 
 	auto values = array_make<lbValue>(temporary_allocator());
 	array_add(&values, callback);
-	for (isize i = 2; i < ce->args.count; i++) {
+	for (isize i = first_arg; i < ce->args.count; i++) {
 		array_add(&values, lb_build_expr(p, ce->args[i]));
 	}
 	auto fields = array_make<LLVMTypeRef>(temporary_allocator());
@@ -170,6 +171,8 @@ gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool ha
 	if (result_type) {
 		array_add(&fields, lb_type(m, result_type));
 	}
+	unsigned error_index = cast(unsigned)fields.count;
+	if (throwing) array_add(&fields, lb_type(m, t_rawptr));
 	LLVMTypeRef capture_type = LLVMStructTypeInContext(m->ctx, fields.data, cast(unsigned)fields.count, false);
 	GB_ASSERT(lb_alignof(capture_type) <= 8);
 
@@ -177,12 +180,14 @@ gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool ha
 		"__$%s::swift_async_%lld", m->module_name, m->swift_next_async_id++);
 	String prefix = make_string_c(name);
 	Type *entry_params[] = {t_rawptr, t_rawptr};
-	Type *resume_params[1+gb_count_of(components)] = {t_rawptr};
+	Type *resume_params[2+gb_count_of(components)] = {t_rawptr};
 	for (isize i = 0; i < register_count; i++) resume_params[i+1] = components[i].type;
+	isize error_param = 1+register_count;
+	if (throwing) resume_params[error_param] = t_rawptr;
 	Type *invoke_params = alloc_type_tuple_from_field_types(entry_params, 1, false, true);
 	Type *invoke_type = alloc_type_proc(nullptr, invoke_params, 1, nullptr, 0, false, ProcCC_Odin);
-	lbProcedure *entry = lb_swift_async_helper(m, prefix, "entry", lb_swift_async_proc_type(entry_params, 2, true));
-	lbProcedure *resume = lb_swift_async_helper(m, prefix, "resume", lb_swift_async_proc_type(resume_params, 1+register_count));
+	lbProcedure *entry = lb_swift_async_helper(m, prefix, "entry", lb_swift_async_proc_type(entry_params, 2, 1));
+	lbProcedure *resume = lb_swift_async_helper(m, prefix, "resume", lb_swift_async_proc_type(resume_params, 1+register_count+throwing, throwing ? error_param : -1));
 	lbProcedure *invoke = lb_swift_async_helper(m, prefix, "invoke", invoke_type);
 
 	// The native function receives the async frame, an optional Swift self,
@@ -193,7 +198,7 @@ gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool ha
 	for (isize i = 0; i < arg_count; i++) {
 		array_add(&native_params, values[i+1].type);
 	}
-	Type *native_type = lb_swift_async_proc_type(native_params.data, native_params.count, has_self, indirect);
+	Type *native_type = lb_swift_async_proc_type(native_params.data, native_params.count, has_self ? 1+indirect : -1, indirect);
 	char *native_name = alloc_cstring(permanent_allocator(), symbol);
 	LLVMValueRef native = LLVMGetNamedFunction(m->mod, native_name);
 	if (native == nullptr) {
@@ -229,27 +234,50 @@ gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool ha
 	lb_begin_procedure_body(resume);
 	{
 		LLVMValueRef child = LLVMGetParam(resume->value, 0);
-		if (register_count) {
+		if (register_count || throwing) {
 			LLVMValueRef parent = LLVMBuildLoad2(resume->builder, lb_type(m, t_rawptr), child, "parent");
 			auto args = array_make<lbValue>(temporary_allocator());
 			array_add(&args, lbValue{parent, t_rawptr});
 			lbValue capture = lb_emit_runtime_call(resume, "swift_async_payload", args);
-			LLVMValueRef result = LLVMBuildStructGEP2(resume->builder, capture_type, capture.value, cast(unsigned)values.count, "result");
-			LLVMValueRef value = LLVMGetParam(resume->value, 1);
-			if (result_count > 1) {
-				if (register_count > 1) {
-					LLVMTypeRef parts[gb_count_of(components)];
-					for (isize i = 0; i < register_count; i++) parts[i] = LLVMTypeOf(LLVMGetParam(resume->value, cast(unsigned)i+1));
-					value = LLVMGetUndef(LLVMStructTypeInContext(m->ctx, parts, cast(unsigned)register_count, false));
-					for (isize i = 0; i < register_count; i++) {
-						value = LLVMBuildInsertValue(resume->builder, value, LLVMGetParam(resume->value, cast(unsigned)i+1), cast(unsigned)i, "");
+			LLVMValueRef result = result_type ? LLVMBuildStructGEP2(resume->builder, capture_type, capture.value, cast(unsigned)values.count, "result") : nullptr;
+			lbBlock *done = nullptr;
+			if (throwing) {
+				LLVMValueRef err = LLVMGetParam(resume->value, cast(unsigned)error_param);
+				LLVMValueRef slot = LLVMBuildStructGEP2(resume->builder, capture_type, capture.value, error_index, "error");
+				LLVMBuildStore(resume->builder, err, slot);
+				if (result_type) {
+					// On a throw all result registers and indirect storage are undefined.
+					done = lb_create_block(resume, "swift.resumed");
+					lbBlock *failure = indirect ? lb_create_block(resume, "swift.failure") : done;
+					lbBlock *success = register_count ? lb_create_block(resume, "swift.success") : done;
+					lb_emit_if(resume, lbValue{LLVMBuildIsNull(resume->builder, err, ""), t_llvm_bool}, success, failure);
+					if (indirect) {
+						lb_start_block(resume, failure);
+						LLVMBuildStore(resume->builder, LLVMConstNull(lb_type(m, result_type)), result);
+						lb_emit_jump(resume, done);
 					}
+					if (register_count) lb_start_block(resume, success);
 				}
-				value = lb_swift_record_unpack(resume, value, result_type);
-			} else if (base_type(result_type) == t_bool) {
-				value = LLVMBuildZExt(resume->builder, value, lb_type(m, result_type), "");
 			}
-			LLVMBuildStore(resume->builder, value, result);
+			if (register_count) {
+				LLVMValueRef value = LLVMGetParam(resume->value, 1);
+				if (result_count > 1) {
+					if (register_count > 1) {
+						LLVMTypeRef parts[gb_count_of(components)];
+						for (isize i = 0; i < register_count; i++) parts[i] = LLVMTypeOf(LLVMGetParam(resume->value, cast(unsigned)i+1));
+						value = LLVMGetUndef(LLVMStructTypeInContext(m->ctx, parts, cast(unsigned)register_count, false));
+						for (isize i = 0; i < register_count; i++) {
+							value = LLVMBuildInsertValue(resume->builder, value, LLVMGetParam(resume->value, cast(unsigned)i+1), cast(unsigned)i, "");
+						}
+					}
+					value = lb_swift_record_unpack(resume, value, result_type);
+				} else if (base_type(result_type) == t_bool) {
+					value = LLVMBuildZExt(resume->builder, value, lb_type(m, result_type), "");
+				}
+				LLVMBuildStore(resume->builder, value, result);
+				if (done) lb_emit_jump(resume, done);
+			}
+			if (done) lb_start_block(resume, done);
 		}
 		auto args = array_make<lbValue>(temporary_allocator());
 		array_add(&args, lbValue{child, t_rawptr});
@@ -269,6 +297,12 @@ gb_internal lbValue lb_build_swift_async_call(lbProcedure *p, Ast *expr, bool ha
 		if (result_type) {
 			lbValue result = lb_swift_capture_load(invoke, capture_type, capture, cast(unsigned)values.count, result_type);
 			lb_append_tuple_values(invoke, &args, result);
+		}
+		if (throwing) {
+			lbValue projection = lb_find_procedure_value_from_entity(m, entity_of_node(ce->args[2]));
+			Type *native_error = base_type(projection.type)->Proc.params->Tuple.variables[0]->type;
+			lbValue error = lb_swift_capture_load(invoke, capture_type, capture, error_index, native_error);
+			array_add(&args, lb_emit_call(invoke, projection, array_make_from_ptr(&error, 1, 1)));
 		}
 		lb_emit_call(invoke, completion, args);
 		LLVMBuildRetVoid(invoke->builder);
