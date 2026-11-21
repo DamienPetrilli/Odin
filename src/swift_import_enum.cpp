@@ -62,10 +62,17 @@ gb_internal bool swift_import_pointer_offset(LLVMTargetDataRef data, LLVMValueRe
 	LLVMTypeRef type = LLVMGetGEPSourceElementType(value);
 	for (unsigned i = 1; i < cast(unsigned)LLVMGetNumOperands(value); i++) {
 		LLVMValueRef operand = LLVMGetOperand(value, i);
-		if (!LLVMIsAConstantInt(operand)) return false;
+		if (!LLVMIsAConstantInt(operand) || LLVMGetIntTypeWidth(LLVMTypeOf(operand)) > 64) return false;
 		u64 index = LLVMConstIntGetZExtValue(operand);
 		if (i == 1) {
-			if (index != 0) return false;
+			if (index != 0) {
+				// InstCombine can spell a field address as a byte offset.
+				// Accept a direct, nonnegative constant offset from the base.
+				if (LLVMGetNumOperands(value) != 2 || LLVMGetOperand(value, 0) != base ||
+				    LLVMGetTypeKind(type) != LLVMIntegerTypeKind || LLVMGetIntTypeWidth(type) != 8 ||
+				    LLVMConstIntGetSExtValue(operand) < 0) return false;
+				result = index;
+			}
 		} else if (LLVMGetTypeKind(type) == LLVMStructTypeKind) {
 			if (index >= LLVMCountStructElementTypes(type)) return false;
 			result += LLVMOffsetOfElement(data, type, cast(unsigned)index);
