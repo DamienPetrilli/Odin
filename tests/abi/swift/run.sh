@@ -83,6 +83,7 @@ fi
 "$build/async"
 if [[ "${2:-debug}" == debug ]]; then
 	ODIN="$ODIN" bash "$here/import/cache.sh"
+	ODIN="$ODIN" bash "$here/import/modules.sh"
 	ODIN="$ODIN" bash "$here/export/publication.sh"
 fi
 

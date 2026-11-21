@@ -11465,11 +11465,20 @@ gb_internal ExprKind check_or_return_expr(CheckerContext *c, Operand *o, Ast *no
 				// within 'or_return' to improve the experience using third-party code
 			} else if (!check_is_assignable_to(c, &rhs, end_type)) {
 				ERROR_BLOCK();
-				// TODO(bill): better error message
 				gbString a = type_to_string(right_type);
 				gbString b = type_to_string(end_type);
 				gbString ret_type = type_to_string(result_type);
 				error(node, "Cannot assign end value of type '%s' to '%s' in '%.*s'", a, b, LIT(name));
+				if (gb_strcmp(a, b) == 0) {
+					AstPackage *from = get_package_of_type(right_type);
+					AstPackage *to = get_package_of_type(end_type);
+					if (from && to && from != to) {
+						String src = swift_import_module_name(from->fullpath);
+						String dst = swift_import_module_name(to->fullpath);
+						error_line("\tReceived '%.*s.%s', expected '%.*s.%s'\n",
+						           LIT(src.len ? src : from->name), a, LIT(dst.len ? dst : to->name), b);
+					}
+				}
 				if (vars.count == 1) {
 					error_line("\tProcedure return value type: %s\n", ret_type);
 				} else {

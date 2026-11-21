@@ -2503,11 +2503,11 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 // Foreign Swift imports become normal Odin package scopes after inspection.
 gb_internal bool swift_import_setup(Ast *node, String base_dir, String spec, String *import_path) {
 #if !defined(GB_SYSTEM_OSX)
-	syntax_error(node, "Swift imports require a macOS host with Xcode");
+	syntax_error(node, "Swift imports require a macOS host with Xcode. For portable packages, place the import in a file selected by '#+build darwin arm64'.");
 	return false;
 #else
 	if (build_context.metrics.os != TargetOs_darwin || build_context.metrics.arch != TargetArch_arm64) {
-		syntax_error(node, "Swift imports currently require a Darwin arm64 target");
+		syntax_error(node, "Swift imports currently require a Darwin arm64 target. Place the import in a separate file with '#+build darwin arm64'.");
 		return false;
 	}
 #if LLVM_VERSION_MAJOR < 18
@@ -2593,6 +2593,17 @@ gb_internal String swift_import_unsupported(String path, String name) {
 	for (auto const &pkg : swift_import_packages) {
 		if (pkg.directory != path) continue;
 		for (auto const &rejection : pkg.unsupported) if (rejection.name == name) return rejection.reason;
+	}
+#endif
+	return {};
+}
+
+gb_internal String swift_import_module_name(String directory) {
+#if defined(GB_SYSTEM_OSX)
+	mutex_lock(&swift_import_mutex);
+	defer (mutex_unlock(&swift_import_mutex));
+	for (auto const &pkg : swift_import_packages) {
+		if (pkg.directory == directory) return pkg.module;
 	}
 #endif
 	return {};
