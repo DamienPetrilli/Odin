@@ -104,6 +104,7 @@ main :: proc() {
 	check_typed_errors()
 	check_scalars()
 	check_tasks()
+	assert(fixture.prior_value(41) == 41)
 	assert(fixture.add(17, 9) == 26)
 	assert(fixture.add(0xffff_ffff_ffff_ffff, 9) == 8)
 	assert(fixture.mixed(-41, 0.25) == -40.75)

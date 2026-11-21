@@ -113,6 +113,15 @@ public struct NewValue {
 }
 @available(macOS 15.2.1, iOS 18.2, *)
 public func newNumber(for value: UInt64) -> UInt64 { value }
+@available(macOS, introduced: 12, deprecated: 15.2.1)
+@available(iOS, introduced: 14, deprecated: 18.2)
+public func priorValue(_ value: UInt64) -> UInt64 { value }
+@available(macOS, introduced: 12, obsoleted: 15.2.1)
+@available(iOS, introduced: 14, obsoleted: 18.2)
+public func withdrawnValue(_ value: UInt64) -> UInt64 { value }
+@available(*, deprecated)
+public func retiredValue() -> UInt64 { 42 }
+
 @inline(never) @_alwaysEmitIntoClient public func clientOnly() -> UInt64 { 1 }
 
 // A resilient value exercises a borrowed async receiver. Its storage belongs

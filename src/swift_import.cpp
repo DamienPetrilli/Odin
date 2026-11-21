@@ -116,7 +116,7 @@ struct SwiftImportParameter {
 
 struct SwiftImportFunction {
 	String name, title, signature, symbol, odin_name, base_name, rejection;
-	JsonValue *api, *available_since;
+	JsonValue *api, *available_since, *deprecated_since;
 	SwiftImportNominal *owner;
 	Array<SwiftImportParameter> parameters;
 	SwiftImportType result;
@@ -861,7 +861,22 @@ gb_internal int swift_import_version_part(JsonValue *version, int index) {
 	return part && part->kind == Json_Number ? cast(int)part->number : 0;
 }
 
-gb_internal String swift_import_availability_rejection(JsonValue *symbol, JsonValue **available_since = nullptr) {
+gb_internal bool swift_import_version_after_minimum(JsonValue *version, int const *minimum) {
+	for (int i = 0; i < 3; i++) {
+		int part = swift_import_version_part(version, i);
+		if (part != minimum[i]) return part > minimum[i];
+	}
+	return false;
+}
+
+gb_internal gbString swift_import_append_version(gbString text, JsonValue *version) {
+	text = gb_string_append_fmt(text, "%d.%d", swift_import_version_part(version, 0), swift_import_version_part(version, 1));
+	int patch = swift_import_version_part(version, 2);
+	if (patch) text = gb_string_append_fmt(text, ".%d", patch);
+	return text;
+}
+
+gb_internal String swift_import_availability_rejection(JsonValue *symbol, SwiftImportFunction *fn = nullptr) {
 	char const *domain = selected_subtarget == Subtarget_Default ? "macOS" : "iOS";
 	int minimum[3] = {};
 	sscanf(alloc_cstring(temporary_allocator(), build_context.minimum_os_version_string), "%d.%d.%d", minimum, minimum+1, minimum+2);
@@ -871,30 +886,29 @@ gb_internal String swift_import_availability_rejection(JsonValue *symbol, JsonVa
 		char const *why = nullptr;
 		JsonValue *version = nullptr;
 		JsonValue *introduced = swift_import_member(availability, "introduced");
-		if (introduced && available_since) *available_since = introduced;
+		JsonValue *deprecated = swift_import_member(availability, "deprecated");
+		if (fn) {
+			if (introduced) fn->available_since = introduced;
+			if (deprecated) fn->deprecated_since = deprecated;
+		}
 		if (swift_import_member(availability, "isUnconditionallyUnavailable")) {
 			why = "unavailable on";
 		} else if (swift_import_member(availability, "isUnconditionallyDeprecated")) {
 			why = "deprecated on";
-		} else {
-			for (int i = 0; i < 3; i++) {
-				int part = swift_import_version_part(introduced, i);
-				if (part == minimum[i]) continue;
-				if (part > minimum[i]) {
-					why = "requires";
-					version = introduced;
-				}
-				break;
-			}
-			if (!why && (version = swift_import_member(availability, "obsoleted"))) why = "marked obsolete in";
-			if (!why && (version = swift_import_member(availability, "deprecated"))) why = "marked deprecated in";
+		} else if (introduced && swift_import_version_after_minimum(introduced, minimum)) {
+			why = "requires";
+			version = introduced;
+		} else if ((version = swift_import_member(availability, "obsoleted"))) {
+			// An unguarded import also has to work on systems newer than the minimum.
+			why = "marked obsolete in";
+		} else if (deprecated && !swift_import_version_after_minimum(deprecated, minimum)) {
+			why = "marked deprecated in";
+			version = deprecated;
 		}
 		if (!why) continue;
 		gbString text = gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "%s %s", why, domain);
 		if (version) {
-			text = gb_string_append_fmt(text, " %d.%d", swift_import_version_part(version, 0), swift_import_version_part(version, 1));
-			int patch = swift_import_version_part(version, 2);
-			if (patch) text = gb_string_append_fmt(text, ".%d", patch);
+			text = swift_import_append_version(gb_string_appendc(text, " "), version);
 		}
 		return make_string_c(gb_string_append_fmt(text, " (deployment target %s %.*s)", domain, LIT(build_context.minimum_os_version_string)));
 	}
@@ -1019,11 +1033,13 @@ gb_internal void swift_import_report_function(Array<String> *report, SwiftImport
 	row = gb_string_append_fmt(row, "call %.*s :: proc%.*s\n  Swift: ", LIT(name), LIT(signature));
 	if (fn.owner) row = gb_string_append_fmt(row, "%.*s: ", LIT(fn.owner->swift_name));
 	row = gb_string_append_fmt(row, "%.*s\n", LIT(fn.signature));
+	char const *platform = selected_subtarget == Subtarget_Default ? "macOS" : "iOS";
 	if (fn.available_since) {
-		row = gb_string_append_fmt(row, "  introduced: %s %d.%d", selected_subtarget == Subtarget_Default ? "macOS" : "iOS",
-			swift_import_version_part(fn.available_since, 0), swift_import_version_part(fn.available_since, 1));
-		int patch = swift_import_version_part(fn.available_since, 2);
-		if (patch) row = gb_string_append_fmt(row, ".%d", patch);
+		row = swift_import_append_version(gb_string_append_fmt(row, "  introduced: %s ", platform), fn.available_since);
+		row = gb_string_appendc(row, "\n");
+	}
+	if (fn.deprecated_since) {
+		row = swift_import_append_version(gb_string_append_fmt(row, "  deprecated: %s ", platform), fn.deprecated_since);
 		row = gb_string_appendc(row, "\n");
 	}
 	if (swift_import_has_receiver(fn) || fn.value_receiver) {
@@ -1501,7 +1517,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		fn.is_property = property;
 		fn.is_initializer = initializer;
 		fn.title = implicit_raw ? str_lit("rawValue") : swift_import_string(swift_import_member(symbol, "names"), "title");
-		fn.rejection = swift_import_availability_rejection(symbol, &fn.available_since);
+		fn.rejection = swift_import_availability_rejection(symbol, &fn);
 		isize owner_count = implicit_raw ? components.count : components.count-1;
 		if (owner_count > 0) {
 			gbString owner_name = gb_string_make(permanent_allocator(), "");

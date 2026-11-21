@@ -394,7 +394,11 @@ Full argument-label names distinguish declarations, and a unique supported
 procedure also gets its short name. Unsupported or ambiguous declarations are
 omitted and diagnosed when referenced. The importer verifies both native LLVM
 lowering and SIL ownership conventions; it does not infer ownership from a
-pointer or assume that a Swift constructor borrows its arguments. SDK availability
+pointer or assume that a Swift constructor borrows its arguments. A declaration with a future deprecation version
+can be called below that version. The mapping report shows the platform and
+deprecation version. At or above it the importer skips the declaration. A known
+obsoletion excludes the declaration at any minimum because the application can
+also run on newer systems. SDK availability
 is checked against the deployment target; runtime availability guards are not
 synthesized.
 

@@ -84,7 +84,7 @@ rejected=(RawCollision_raw_value RawCode_replace async_buffer returned_buffer ge
 	unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields
 	unsupported_scalar_argument unsupported_scalar_result narrow_array unsupported_bool_array unsupported_set_result
 	unsupported_optional_set unsupported_bool_set client_only new_number new_number_for_ NewValue
-	NewValue_number EvolvingFailure_Deferred)
+	NewValue_number EvolvingFailure_Deferred retired_value withdrawn_value)
 cat > "$build/rejected.odin" <<'ODIN'
 package rejected
 foreign import fixture "swift:fixture/SwiftImportFixture"
@@ -109,6 +109,9 @@ for name in "${rejected[@]}"; do expect_diagnostic "Swift import: '$name':"; don
 platform=iOS
 introduced=18.2
 if [[ "$sdk" == macosx ]]; then platform=macOS; introduced=15.2.1; fi
+grep -Fq "  deprecated: $platform $introduced" "$build/mappings.txt"
+expect_diagnostic "'retired_value': deprecated on $platform (deployment target $platform 15.0.0)"
+expect_diagnostic "'withdrawn_value': marked obsolete in $platform $introduced (deployment target $platform 15.0.0)"
 for name in new_number new_number_for_ NewValue NewValue_number; do
 	expect_diagnostic "'$name': requires $platform $introduced (deployment target $platform 15.0.0)"
 done
@@ -135,7 +138,8 @@ main :: proc() {
 	_ = fixture.NewValue_number()
 }
 ODIN
-"$ODIN" check "$build/rejected.odin" -file "${platform_target[@]}" -minimum-os-version:"$introduced"
+"$ODIN" check "$build/rejected.odin" -file "${platform_target[@]}" -minimum-os-version:"$introduced" -show-swift-imports > "$build/mappings.txt"
+grep -Fq "lookup fallback prior_value (priorValue(_:)): marked deprecated in $platform $introduced" "$build/mappings.txt"
 rm "$build/rejected.odin"
 
 # Simulator execution is opt-in and uses a caller-owned, booted device.
