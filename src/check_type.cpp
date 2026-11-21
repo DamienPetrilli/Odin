@@ -4219,9 +4219,38 @@ gb_internal bool swift_abi_tuple_needs_layout(Type *type) {
 	return false;
 }
 
-// Swift names the storage behind an indirect result in the sret attribute.
-// Match each scalar and its byte offset, including explicit interior padding.
 #if defined(GB_SYSTEM_OSX)
+gb_internal LLVMTypeRef swift_abi_scalar_llvm_type(LLVMContextRef ctx, Type *type) {
+	type = base_type(type);
+	if (type == t_bool) return LLVMInt1TypeInContext(ctx);
+	if (type == t_f32) return LLVMFloatTypeInContext(ctx);
+	if (type == t_f64) return LLVMDoubleTypeInContext(ctx);
+	return LLVMIntTypeInContext(ctx, cast(unsigned)type_size_of(type)*8);
+}
+
+// Match each scalar and its byte offset, including explicit interior padding.
+gb_internal bool swift_abi_tuple_layout(LLVMTypeRef storage, LLVMTargetDataRef layout, Type *tuple) {
+	if (LLVMGetTypeKind(storage) != LLVMStructTypeKind || LLVMIsOpaqueStruct(storage)) return false;
+	LLVMContextRef ctx = LLVMGetTypeContext(storage);
+	auto fields = tuple->Tuple.variables;
+	isize index = 0;
+	for (unsigned i = 0; i < LLVMCountStructElementTypes(storage); i++) {
+		LLVMTypeRef field = LLVMStructGetTypeAtIndex(storage, i);
+		if (LLVMGetTypeKind(field) == LLVMArrayTypeKind) {
+			if (LLVMGetElementType(field) != LLVMInt8TypeInContext(ctx)) return false;
+			continue;
+		}
+		if (index >= fields.count || LLVMOffsetOfElement(layout, storage, i) != cast(u64)type_offset_of(tuple, index) ||
+		    LLVMGetTypeKind(field) != LLVMStructTypeKind || LLVMIsOpaqueStruct(field) || LLVMCountStructElementTypes(field) != 1) return false;
+		Type *type = base_type(fields[index++]->type);
+		LLVMTypeRef scalar = LLVMStructGetTypeAtIndex(field, 0);
+		if (scalar != swift_abi_scalar_llvm_type(ctx, type) || LLVMABISizeOfType(layout, field) != cast(u64)type_size_of(type)) return false;
+	}
+	if (index != fields.count) return false;
+	u64 size = cast(u64)(type_offset_of(tuple, index-1)+type_size_of(fields[index-1]->type));
+	return LLVMABISizeOfType(layout, storage) == size;
+}
+
 gb_internal LLVMTypeRef swift_abi_tuple_storage(LLVMValueRef fn, LLVMTargetDataRef layout, Type *tuple) {
 	if (!fn || !LLVMCountParams(fn) || LLVMGetFunctionCallConv(fn) != LLVMSwiftCallConv ||
 	    LLVMGetTypeKind(LLVMGetReturnType(LLVMGlobalGetValueType(fn))) != LLVMVoidTypeKind) return nullptr;
@@ -4231,28 +4260,71 @@ gb_internal LLVMTypeRef swift_abi_tuple_storage(LLVMValueRef fn, LLVMTargetDataR
 	LLVMAttributeRef attr = LLVMGetEnumAttributeAtIndex(fn, 1, sret);
 	if (!attr || !LLVMIsTypeAttribute(attr)) return nullptr;
 	LLVMTypeRef storage = LLVMGetTypeAttributeValue(attr);
-	if (LLVMGetTypeKind(storage) != LLVMStructTypeKind || LLVMIsOpaqueStruct(storage)) return nullptr;
-	LLVMContextRef ctx = LLVMGetTypeContext(storage);
-	auto fields = tuple->Tuple.variables;
-	isize index = 0;
-	for (unsigned i = 0; i < LLVMCountStructElementTypes(storage); i++) {
-		LLVMTypeRef field = LLVMStructGetTypeAtIndex(storage, i);
-		if (LLVMGetTypeKind(field) == LLVMArrayTypeKind) {
-			if (LLVMGetElementType(field) != LLVMInt8TypeInContext(ctx)) return nullptr;
-			continue;
+	if (!swift_abi_tuple_layout(storage, layout, tuple)) return nullptr;
+	return swift_import_storage_parameter(fn, 0, LLVMABISizeOfType(layout, storage), type_align_of(tuple), true) ? storage : nullptr;
+}
+
+// The unoptimized probe uses GEP 0, field for its frame slots.
+gb_internal bool swift_abi_frame_field(LLVMValueRef pointer, LLVMTypeRef *frame, unsigned *field) {
+	if (!LLVMIsAGetElementPtrInst(pointer) || LLVMGetNumOperands(pointer) != 3) return false;
+	LLVMValueRef outer = LLVMGetOperand(pointer, 1), index = LLVMGetOperand(pointer, 2);
+	if (!LLVMIsAConstantInt(outer) || LLVMConstIntGetZExtValue(outer) != 0 || !LLVMIsAConstantInt(index)) return false;
+	*frame = LLVMGetGEPSourceElementType(pointer);
+	u64 slot = LLVMConstIntGetZExtValue(index);
+	if (LLVMGetTypeKind(*frame) != LLVMStructTypeKind || LLVMIsOpaqueStruct(*frame) || slot >= LLVMCountStructElementTypes(*frame)) return false;
+	*field = cast(unsigned)slot;
+	return true;
+}
+
+// Inspect the continuation stored into the actual child frame at the probe call.
+// Swift places its resume address in the second pointer-sized field.
+gb_internal bool swift_abi_async_tuple(LLVMValueRef fn, LLVMTargetDataRef layout, Type *tuple) {
+	if (!fn || LLVMCountBasicBlocks(fn)) return false;
+	SwiftABIRecordComponent components[4];
+	isize count = swift_abi_record_components(tuple, components, gb_count_of(components));
+	bool indirect = count > gb_count_of(components);
+	unsigned n = indirect ? 0 : cast(unsigned)count;
+	unsigned async_attr = LLVMGetEnumAttributeKindForName("swiftasync", 10);
+	LLVMContextRef ctx = LLVMGetTypeContext(LLVMGlobalGetValueType(fn));
+	bool verified = false;
+	for (LLVMUseRef use = LLVMGetFirstUse(fn); use; use = LLVMGetNextUse(use)) {
+		LLVMValueRef call = LLVMGetUser(use);
+		if (!LLVMIsACallInst(call) || LLVMGetCalledValue(call) != fn) continue;
+		unsigned frame_index = indirect ? 1u : 0u;
+		if (LLVMGetNumArgOperands(call) <= frame_index) return false;
+		if (indirect) {
+			LLVMValueRef dest = LLVMGetOperand(call, 0);
+			LLVMTypeRef frame;
+			unsigned field;
+			if (!swift_abi_frame_field(dest, &frame, &field) || !swift_abi_tuple_layout(LLVMStructGetTypeAtIndex(frame, field), layout, tuple)) return false;
 		}
-		if (index >= fields.count || LLVMOffsetOfElement(layout, storage, i) != cast(u64)type_offset_of(tuple, index) ||
-		    LLVMGetTypeKind(field) != LLVMStructTypeKind || LLVMIsOpaqueStruct(field) || LLVMCountStructElementTypes(field) != 1) return nullptr;
-		Type *type = base_type(fields[index++]->type);
-		LLVMTypeRef scalar = LLVMStructGetTypeAtIndex(field, 0);
-		LLVMTypeRef expected = type == t_bool ? LLVMInt1TypeInContext(ctx) : type == t_f32 ? LLVMFloatTypeInContext(ctx) :
-		                       type == t_f64 ? LLVMDoubleTypeInContext(ctx) : LLVMIntTypeInContext(ctx, cast(unsigned)type_size_of(type)*8);
-		if (scalar != expected || LLVMABISizeOfType(layout, field) != cast(u64)type_size_of(type)) return nullptr;
+		LLVMValueRef child = LLVMGetOperand(call, frame_index);
+		LLVMValueRef resume = nullptr;
+		for (LLVMValueRef inst = LLVMGetPreviousInstruction(call); inst; inst = LLVMGetPreviousInstruction(inst)) {
+			if (!LLVMIsAStoreInst(inst)) continue;
+			LLVMValueRef addr = LLVMGetOperand(inst, 1);
+			LLVMTypeRef header;
+			unsigned field;
+			if (!swift_abi_frame_field(addr, &header, &field) || LLVMGetOperand(addr, 0) != child || field != 1) continue;
+			if (LLVMOffsetOfElement(layout, header, field) != 8) return false;
+			resume = LLVMGetOperand(inst, 0);
+			break;
+		}
+		if (!resume || !LLVMIsAFunction(resume) || LLVMGetFunctionCallConv(resume) != LLVMGetFunctionCallConv(fn) ||
+		    LLVMGetReturnType(LLVMGlobalGetValueType(resume)) != LLVMVoidTypeInContext(ctx) || LLVMCountParams(resume) != 1+n ||
+		    !LLVMGetEnumAttributeAtIndex(resume, 1, async_attr)) return false;
+		for (unsigned i = 0; i < n; i++) {
+			if (LLVMTypeOf(LLVMGetParam(resume, i+1)) != swift_abi_scalar_llvm_type(ctx, components[i].type) ||
+			    LLVMGetAttributeCountAtIndex(resume, i+2) != 0) return false;
+		}
+		verified = true;
 	}
-	if (index != fields.count) return nullptr;
-	u64 size = cast(u64)(type_offset_of(tuple, index-1)+type_size_of(fields[index-1]->type));
-	if (LLVMABISizeOfType(layout, storage) != size || !swift_import_storage_parameter(fn, 0, size, type_align_of(tuple), true)) return nullptr;
-	return storage;
+	if (verified && indirect) {
+		auto fields = tuple->Tuple.variables;
+		u64 size = cast(u64)(type_offset_of(tuple, fields.count-1)+type_size_of(fields[fields.count-1]->type));
+		return swift_import_storage_parameter(fn, 0, size, type_align_of(tuple), true);
+	}
+	return verified;
 }
 
 // Only Darwin module inspection needs textual LLVM types. Both probes and

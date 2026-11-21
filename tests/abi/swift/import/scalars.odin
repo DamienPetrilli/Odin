@@ -84,6 +84,23 @@ check_optional_width :: proc(values: []$T, $echo: $Echo, $later: $Later) -> int 
 	return 1+len(values)
 }
 
+tuple_received :: proc(task: swift.Task, count: u64, ready: bool) {
+	assert(count == take_expected(task) && ready == (count != 0))
+	scalar_calls += 1
+}
+
+packed_tuple_received :: proc(task: swift.Task, value: u8, ready: bool, third, fourth, fifth: u8) {
+	assert(value == u8(take_expected(task)) && ready == (value != 0))
+	assert(third == 0xfe && fourth == 0x41 && fifth == value+1)
+	scalar_calls += 1
+}
+
+wide_tuple_received :: proc(task: swift.Task, value: u64, weight: f64, low: i64, next: u64, ready: bool) {
+	assert(value == take_expected(task) && ready == (value != 0))
+	assert(transmute(u64)weight == 1<<63 && low == min(i64) && next == value+13)
+	scalar_calls += 1
+}
+
 check_large_tuples :: proc() {
 	bytes := [3]u8{11, 23, 47}
 	a, b, c, d, e := fixture.indirect_tuple(min(int), bytes[1:])
@@ -191,6 +208,16 @@ check_scalars :: proc() {
 	context.allocator = state.backing
 
 	expected := 0
+	for value in ([]u64{0, 255, max(u64)}) {
+		pair := fixture.async_tuple(value, tuple_received) or_else panic("Async result pair")
+		track_task(pair, value)
+		packed := fixture.packed_tuple_later(u8(value), packed_tuple_received) or_else panic("Async packed result")
+		track_task(packed, value)
+		wide := fixture.wide_tuple_later(value, wide_tuple_received) or_else panic("Async indirect result")
+		track_task(wide, value)
+		expected += 3
+	}
+
 	for value in ([]bool{false, true}) {
 		task := fixture.echo_bool_later(value, bool_received) or_else panic("Async Bool")
 		track_task(task, u64(value))

@@ -1265,7 +1265,19 @@ public func packedBytes(_ value: UInt8) -> (UInt8, Bool, UInt8, UInt8, UInt8) {
 public func textBounds(_ text: String) -> (UInt8, UInt16) { (0, 0) }
 public func ownedTuple() -> (String, UInt64) { ("text", 0) }
 public func tupleCaseCollision() -> (pageID: UInt64, page_id: UInt64) { (0, 1) }
-public func asyncTuple() async -> (UInt64, UInt64) { (0, 1) }
+public func asyncTuple(_ count: UInt64) async -> (count: UInt64, ready: Bool) {
+	await Task.yield()
+	return (count, count != 0)
+}
+public func packedTupleLater(_ value: UInt8) async -> (UInt8, Bool, UInt8, UInt8, UInt8) {
+	await Task.yield()
+	return (value, value != 0, 0xfe, 0x41, value &+ 1)
+}
+public func wideTupleLater(_ value: UInt64) async -> (UInt64, Double, Int64, UInt64, Bool) {
+	await Task.yield()
+	return (value, -0.0, .min, value &+ 13, value != 0)
+}
+public func throwingTuple() async throws -> (Int, Bool) { (0, false) }
 
 public func inspectPrefix(_ bytes: UnsafeBufferPointer<UInt8>, _ needle: UnsafePointer<UInt8>) -> (index: Int, found: Bool) {
 	guard let index = bytes.firstIndex(of: needle.pointee) else { return (bytes.count, false) }

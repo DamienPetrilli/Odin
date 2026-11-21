@@ -38,6 +38,11 @@ more than four register components, the caller supplies result storage. Neither
 form requires heap allocation or cleanup. Synchronous pointer and buffer parameters use the same typed
 pointers and borrowed slices with these results. Run with `-show-swift-imports` to see the result names.
 
+A nonthrowing async free function returning numeric or Bool scalars delivers them
+as separate callback parameters. For `asyncTuple(_:) async -> (count: UInt64, ready: Bool)`,
+the callback is `proc(task: swift.Task, count: u64, ready: bool)`. The task owns
+the result storage through completion. A callback can copy each scalar directly.
+
 Swift names become snake case, so `addLater` becomes `add_later`:
 
 ```odin

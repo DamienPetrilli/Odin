@@ -586,16 +586,17 @@ gb_internal bool swift_import_borrowed_parameter(JsonValue *api, Slice<JsonValue
 gb_internal Type *swift_abi_scalar_tuple(char const **odin_names, isize count);
 gb_internal char const *swift_abi_tuple_result_llvm(Type *tuple);
 gb_internal LLVMTypeRef swift_abi_tuple_storage(LLVMValueRef fn, LLVMTargetDataRef layout, Type *tuple);
+gb_internal bool swift_abi_async_tuple(LLVMValueRef fn, LLVMTargetDataRef layout, Type *tuple);
 gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *fn) {
 	auto elements = swift_import_array(api, "children");
 	fn->rejection = str_lit("tuple results require numeric or Bool scalars");
 	if (elements.count < 2) return false;
-	if (fn->is_async || fn->owner) {
-		fn->rejection = str_lit("tuple results currently require a synchronous free function");
+	if (fn->owner || fn->is_throwing) {
+		fn->rejection = str_lit("tuple results currently require a nonthrowing free function");
 		return false;
 	}
 	for (auto const &p : fn->parameters) {
-		if (p.type.nominal) {
+		if (p.type.nominal || p.objc_controller) {
 			fn->rejection = str_lit("tuple results with converted parameters are unsupported");
 			return false;
 		}
@@ -608,7 +609,7 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 	String_Iterator it = {substring(spelling, 1, spelling.len-1)};
 	auto labels = slice_make<String>(temporary_allocator(), elements.count);
 	auto types = slice_make<SwiftImportType>(temporary_allocator(), elements.count);
-	bool named = false;
+	bool named = fn->is_async;
 	for_array(i, elements) {
 		SwiftImportType &type = types[i];
 		if (!swift_import_scalar(swift_import_string(elements[i], "usr"), &type)) return false;
@@ -641,7 +642,7 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 				}
 			}
 			for (auto const &p : fn->parameters) {
-				if (p.name == labels[i]) {
+				if (!fn->is_async && p.name == labels[i]) {
 					fn->rejection = str_lit("tuple result label collides with an Odin parameter name");
 					return false;
 				}
@@ -1985,12 +1986,16 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			fn.is_async || indirect_result || swift_import_empty(fn.result) || !fn.result.llvm ? "void" : swift_import_projected(fn.result) ? alloc_cstring(permanent_allocator(), swift_import_enum_llvm(fn.result.nominal, true)) : fn.result.llvm, LIT(fn.symbol));
 		isize count = 0;
 		if (fn.tuple_result && make_string_c(fn.result.llvm) == "void") {
-			LLVMTypeRef storage = swift_abi_tuple_storage(native, layout, fn.tuple_result);
-			if (!storage) reason = str_lit("unsupported indirect Swift tuple result layout");
-			else {
-				char *spelling = LLVMPrintTypeToString(storage);
-				declaration = gb_string_append_fmt(declaration, "ptr noalias sret(%s)", spelling);
-				LLVMDisposeMessage(spelling);
+			if (fn.is_async) {
+				declaration = gb_string_appendc(declaration, "ptr noalias");
+			} else {
+				LLVMTypeRef storage = swift_abi_tuple_storage(native, layout, fn.tuple_result);
+				if (!storage) reason = str_lit("unsupported indirect Swift tuple result layout");
+				else {
+					char *spelling = LLVMPrintTypeToString(storage);
+					declaration = gb_string_append_fmt(declaration, "ptr noalias sret(%s)", spelling);
+					LLVMDisposeMessage(spelling);
+				}
 			}
 			record_parameters = true;
 			count++;
@@ -2033,6 +2038,8 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		}
 		if (receiver) declaration = gb_string_append_fmt(declaration, "%s%s", count ? ", " : "", fn.is_mutating ? "ptr swiftself" : "ptr noalias swiftself");
 		declaration = gb_string_appendc(declaration, ")");
+		if (!reason.len && fn.is_async && fn.tuple_result && !swift_abi_async_tuple(native, layout, fn.tuple_result))
+			reason = str_lit("unsupported native Swift async tuple continuation or result layout");
 		String exported = concatenate_strings(permanent_allocator(), str_lit(" _"), fn.symbol);
 		char *native_declaration = record_parameters && native ? LLVMPrintValueToString(native) : nullptr;
 		defer (if (native_declaration) LLVMDisposeMessage(native_declaration));
@@ -2227,8 +2234,15 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		}
 		source = gb_string_append_fmt(source, "@(require_results)\n%.*s :: proc", LIT(fn.odin_name));
 		isize signature_start = gb_string_length(source);
-		source = gb_string_append_fmt(source, "(%s%scompletion: proc(swift.Task", params, gb_string_length(params) ? ", " : "");
-		if (fn.result.odin) source = gb_string_append_fmt(source, ", %s", fn.result.odin);
+		source = gb_string_append_fmt(source, "(%s%scompletion: proc(", params, gb_string_length(params) ? ", " : "");
+		if (fn.tuple_result) {
+			String results = make_string_c(fn.result.odin);
+			results = substring(results, 1, results.len-1);
+			source = gb_string_append_fmt(source, "task: swift.Task, %.*s", LIT(results));
+		} else {
+			source = gb_string_appendc(source, "swift.Task");
+			if (fn.result.odin) source = gb_string_append_fmt(source, ", %s", fn.result.odin);
+		}
 		source = gb_string_appendc(source, ")) -> (task: swift.Task, ok: bool) #optional_ok");
 		swift_import_report_function(report, fn, fn.odin_name, source, signature_start);
 		source = gb_string_appendc(source, " {\n");

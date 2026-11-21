@@ -6096,16 +6096,16 @@ gb_internal bool check_builtin_procedure(CheckerContext *c, Operand *operand, As
 		Type *ct = base_type(callback.type);
 		if (ct == nullptr || ct->kind != Type_Proc || ct->Proc.calling_convention != ProcCC_Odin ||
 		    ct->Proc.is_polymorphic || ct->Proc.variadic || ct->Proc.result_count != 0 ||
-		    ct->Proc.param_count < 1 || ct->Proc.param_count > 2) {
-			error(ce->args[1], "Swift async completion must be an Odin procedure taking a task handle and an optional scalar result");
+		    ct->Proc.param_count < 1) {
+			error(ce->args[1], "Swift async completion must be an Odin procedure taking a task handle followed by any scalar results");
 			return false;
 		}
 		if (base_type(ct->Proc.params->Tuple.variables[0]->type) != t_rawptr) {
 			error(ce->args[1], "Swift async completion task handle must have a rawptr base type");
 			return false;
 		}
-		if (ct->Proc.param_count == 2) {
-			Type *rt = base_type(ct->Proc.params->Tuple.variables[1]->type);
+		for (isize i = 1; i < ct->Proc.param_count; i++) {
+			Type *rt = base_type(ct->Proc.params->Tuple.variables[i]->type);
 			if (!is_swift_abi_numeric_scalar(rt)) {
 				error(ce->args[1], "Swift async result must be a supported Swift numeric scalar or bool");
 				return false;
