@@ -274,6 +274,16 @@ gb_internal void print_doc_package(CheckerInfo *info, AstPackage *pkg) {
 			array_add(&entities, e);
 		}
 
+		// Cross-package aliases in the scope table point at the other package's
+		// entity. Use the local declaration for its spelling, location and docs.
+		for (Entity *e : info->entities) {
+			if (e->pkg == pkg && (e->flags & EntityFlag_Overridden) && e->aliased_of &&
+			    e->aliased_of->pkg != pkg && scope_lookup_current(pkg->scope, entity_interned_name(e)) == e->aliased_of &&
+			    is_entity_exported(e, true) && is_entity_exported(e->aliased_of, true)) {
+				array_add(&entities, e);
+			}
+		}
+
 		bool in_src_order = build_context.cmd_doc_flags & CmdDocFlag_InSourceOrder;
 
 		if (in_src_order) {
@@ -321,6 +331,13 @@ gb_internal void print_doc_package(CheckerInfo *info, AstPackage *pkg) {
 			GB_ASSERT(type_expr != nullptr || init_expr != nullptr);
 
 			print_doc_line_no_newline(2, e->token.string);
+			if (e->aliased_of && e->aliased_of->kind == Entity_Procedure && e->aliased_of->pkg != pkg) {
+				gbString signature = type_to_string(e->aliased_of->type);
+				gb_printf(" :: %s\n", signature);
+				gb_string_free(signature);
+				if (show_docs) print_doc_comment_group_string(3, docs);
+				continue;
+			}
 			if (type_expr != nullptr) {
 				gbString t = expr_to_string(type_expr);
 				gb_printf(": %s ", t);

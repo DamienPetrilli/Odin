@@ -1198,7 +1198,8 @@ gb_internal void odin_doc_write_docs(OdinDocWriter *w) {
 		}
 
 		OdinDocPkg doc_pkg = {};
-		doc_pkg.fullpath = odin_doc_write_string(w, pkg->fullpath);
+		String generated = swift_import_doc_path(pkg->fullpath);
+		doc_pkg.fullpath = odin_doc_write_string(w, generated.len ? generated : pkg->fullpath);
 		doc_pkg.name     = odin_doc_write_string(w, pkg->name);
 		doc_pkg.flags    = pkg_flags;
 		doc_pkg.docs     = odin_doc_pkg_doc_string(w, pkg);
@@ -1214,7 +1215,8 @@ gb_internal void odin_doc_write_docs(OdinDocWriter *w) {
 			AstFile *file = pkg->files[j];
 			OdinDocFile doc_file = {};
 			doc_file.pkg = pkg_index;
-			doc_file.name = odin_doc_write_string(w, file->fullpath);
+			String path = generated.len ? concatenate3_strings(temporary_allocator(), generated, str_lit("/"), filename_without_directory(file->fullpath)) : file->fullpath;
+			doc_file.name = odin_doc_write_string(w, path);
 			OdinDocFileIndex file_index = odin_doc_write_item(w, &w->files, &doc_file);
 			map_set(&w->file_cache, file, file_index);
 			array_add(&file_indices, file_index);

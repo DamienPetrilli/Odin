@@ -2719,6 +2719,20 @@ gb_internal String swift_import_module_name(String directory) {
 	return {};
 }
 
+// Documentation outlives the temporary source produced during inspection.
+gb_internal String swift_import_doc_path(String directory) {
+#if defined(GB_SYSTEM_OSX)
+	for (auto const &pkg : swift_import_packages) {
+		if (pkg.directory != directory) continue;
+		gbString path = gb_string_make(permanent_allocator(), "");
+		if (pkg.framework) path = gb_string_append_fmt(path, "swift:%.*s", LIT(pkg.module));
+		else path = gb_string_append_fmt(path, "%.*s/%.*s.swiftmodule", LIT(pkg.path), LIT(pkg.module));
+		return make_string_c(gb_string_append_fmt(path, "/%.*s", LIT(build_context.metrics.target_triplet)));
+	}
+#endif
+	return {};
+}
+
 gb_internal void swift_import_cleanup(void) {
 #if defined(GB_SYSTEM_OSX)
 	for (String directory : swift_import_directories) {

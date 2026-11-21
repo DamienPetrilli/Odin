@@ -45,6 +45,14 @@ trap 'rm -rf -- "$build"' EXIT
 if [[ ${2:-debug} == debug ]]; then
 	storekit=(build "$here/storekit.odin" -file -vet -vet-tabs -strict-style -vet-style -warnings-as-errors)
 	"$ODIN" "${storekit[@]}" "${odin_target[@]}" -out:"$build/storekit"
+	if [[ "$sdk" == macosx ]]; then
+		package="$here/../../../vendor/darwin/StoreKit"
+		"$ODIN" doc "$package" "${odin_target[@]}" > "$build/storekit.txt"
+		grep -Eq '[[:space:]]products :: proc\(' "$build/storekit.txt"
+		grep -Eq '[[:space:]]finish :: proc\(' "$build/storekit.txt"
+		"$ODIN" doc "$package" "${odin_target[@]}" -all-packages -doc-format -out:"$build/storekit-doc"
+		grep -aFq 'swift:StoreKit/arm64-apple-macosx' "$build/storekit-doc.odin-doc"
+	fi
 	if [[ "$sdk" == macosx ]] && xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1; then
 		"$ODIN" "${storekit[@]}" -target:darwin_arm64 -subtarget:iphonesimulator \
 			-minimum-os-version:15.0 -out:"$build/storekit-simulator"
