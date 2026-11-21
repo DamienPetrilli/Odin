@@ -3,7 +3,7 @@
 
 struct SwiftExportProcedure {
 	Entity *entity;
-	String name, symbol;
+	String name, symbol, link_alias;
 };
 
 struct SwiftExportSymbol {
@@ -17,6 +17,7 @@ gb_global Array<Type *> swift_export_types;
 gb_global String swift_export_directory;
 gb_global Ast *swift_export_node;
 gb_global bool swift_export_has_uuid;
+gb_global bool swift_export_has_string;
 gb_global String swift_export_uuid_getter;
 gb_global String swift_export_uuid_initializer;
 
@@ -74,6 +75,7 @@ gb_internal Type *swift_export_enum_tag_type(Type *type) {
 gb_internal String swift_export_type_name(Type *type, bool escaped = false) {
 	if (char const *name = swift_export_scalar(type)) return make_string_c(name);
 	if (is_swift_uuid_type(type)) return str_lit("Foundation.UUID");
+	if (type == t_string) return str_lit("Swift.String");
 	if (is_type_slice(type)) {
 		gbString name = gb_string_append_fmt(gb_string_make(permanent_allocator(), ""),
 			"Swift.UnsafeMutableBufferPointer<%s>", swift_export_scalar(base_type(type)->Slice.elem));
@@ -91,6 +93,10 @@ gb_internal GB_COMPARE_PROC(swift_export_enum_value_compare) {
 
 gb_internal bool swift_export_check_type(Type *type, bool parameter) {
 	if (swift_export_scalar(type)) return true;
+	if (parameter && type == t_string) {
+		swift_export_has_string = true;
+		return true;
+	}
 	if (is_swift_uuid_type(type)) {
 		swift_export_has_uuid = true;
 		return true;
@@ -207,8 +213,10 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 		bool valid = !type->Proc.is_polymorphic && !type->Proc.variadic && !type->Proc.c_vararg &&
 		             !type->Proc.diverging && !type->Proc.return_by_pointer &&
 		             type->Proc.calling_convention == ProcCC_Swift;
+		bool borrows_string = false;
 		for (isize i = 0; i < type->Proc.param_count; i++) {
 			Entity *param = type->Proc.params->Tuple.variables[i];
+			borrows_string |= param->type == t_string;
 			valid &= !(param->flags & EntityFlags_SwiftABI) && swift_export_check_type(param->type, true);
 		}
 		for (isize i = 0; i < type->Proc.result_count; i++) {
@@ -225,13 +233,20 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 			}
 		}
 		if (!valid) {
-			error(e->token, "Swift export: expected a synchronous Swift procedure without ABI parameter attributes, with supported numeric scalars, bool, integer enums, flat scalar structs, uuid.Identifier, or borrowed scalar slice parameters, and supported result types");
+			error(e->token, "Swift export: expected a synchronous Swift procedure without ABI parameter attributes, with supported numeric scalars, bool, integer enums, flat scalar structs, uuid.Identifier, or borrowed string and scalar slice parameters, and supported result types");
 			continue;
 		}
 		SwiftExportProcedure proc = {};
 		proc.entity = e;
 		proc.name = swift_export_name(e->token.string, false);
 		proc.symbol = make_string_c(gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "__odin_swift_%.*s_%.*s", LIT(build_context.swift_module_name), LIT(proc.name)));
+		if (borrows_string) {
+			// The body takes Odin UTF-8. Expose the native Swift entry under
+			// both the module name and the requested linker name.
+			proc.link_alias = e->Procedure.link_name.len ? e->Procedure.link_name : e->token.string;
+			e->Procedure.link_name = concatenate_strings(permanent_allocator(), proc.symbol, str_lit(".body"));
+			e->Procedure.is_export = false;
+		}
 		for (auto const &other : swift_export_procedures) {
 			if (other.name == proc.name) error(e->token, "Swift export: name '%.*s' collides after case conversion", LIT(proc.name));
 		}
@@ -338,6 +353,9 @@ gb_internal bool swift_export_check_types() {
 		source = gb_string_appendc(source, "import Foundation\n");
 		source = swift_import_uuid_probe(source, &uuid, 0);
 	}
+	if (swift_export_has_string) {
+		source = gb_string_appendc(source, "@_silgen_name(\"odin_swift_export_string\") public func string_probe(_ value: Swift.String) {}\n");
+	}
 	auto records = array_make<SwiftImportNominal>(temporary_allocator(), swift_export_types.count);
 	for_array(i, swift_export_types) {
 		Type *type = swift_export_types[i];
@@ -399,7 +417,7 @@ gb_internal bool swift_export_check_types() {
 	array_add(&args, swift_import_path(dir, "Types.ll"));
 	if (!swift_import_exec(swift_export_node, dir, args, nullptr, true)) return false;
 	String sil = {};
-	if (swift_export_has_uuid) {
+	if (swift_export_has_uuid || swift_export_has_string) {
 		for (auto &arg : args) {
 			if (arg == "-emit-ir") arg = str_lit("-emit-silgen");
 			if (arg == swift_import_path(dir, "Types.ll")) arg = swift_import_path(dir, "Types.sil");
@@ -421,6 +439,17 @@ gb_internal bool swift_export_check_types() {
 	defer (LLVMDisposeModule(module));
 	LLVMTargetDataRef data = LLVMCreateTargetData(LLVMGetDataLayoutStr(module));
 	defer (LLVMDisposeTargetData(data));
+	if (swift_export_has_string) {
+		LLVMValueRef probe = LLVMGetNamedFunction(module, "odin_swift_export_string");
+		String signature = str_lit(" @odin_swift_export_string : $@convention(thin) (@guaranteed String) -> () {");
+		if (!probe || LLVMGetFunctionCallConv(probe) != LLVMSwiftCallConv || LLVMCountParams(probe) != 2 ||
+		    LLVMTypeOf(LLVMGetParam(probe, 0)) != LLVMInt64TypeInContext(context) ||
+		    LLVMGetTypeKind(LLVMTypeOf(LLVMGetParam(probe, 1))) != LLVMPointerTypeKind ||
+		    !swift_import_has_line(sil, signature, false)) {
+			error(swift_export_node, "Swift export: unsupported native String lowering or ownership");
+			return false;
+		}
+	}
 	if (swift_export_has_uuid) {
 		if (!swift_import_uuid_layout(module, sil, &uuid, 0)) {
 			error(swift_export_node, "Swift export: unsupported native UUID lowering or ownership");

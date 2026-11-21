@@ -112,7 +112,14 @@ or array exports. Low-level handwritten `foreign` UUID declarations are rejected
 use the importer for calls into Swift. A module or exported type named `Foundation`
 is rejected when UUID is present because it would shadow the required module.
 
-Strings, owned collections, slice results, closures, generics, async exports,
+A synchronous exported `string` parameter appears as `Swift.String`. The
+Odin procedure borrows its UTF-8 bytes until it returns. Small strings use
+the entry's inline storage. Large contiguous strings use Swift's buffer.
+A foreign string requiring transcoding uses temporary storage released by
+the entry after the call. Clone a string that must outlive the procedure.
+Embedded zero bytes are preserved.
+
+String results, owned collections, slice results, closures, generics, async exports,
 and throwing exports are outside this subset and receive diagnostics. Swift
 calling Odin is a separate direction from the richer existing Swift importer.
 Default argument values are not exported; Swift callers supply every argument.

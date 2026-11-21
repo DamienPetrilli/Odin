@@ -1610,7 +1610,20 @@ gb_internal void check_proc_decl(CheckerContext *ctx, Entity *e, DeclInfo *d) {
 	bool is_export  = e->Procedure.is_export;
 	if (pt->calling_convention == ProcCC_Swift) {
 		bool uuid = pt->result_count == 1 && is_swift_uuid_type(pt->results->Tuple.variables[0]->type);
-		for (isize i = 0; i < pt->param_count; i++) uuid |= is_swift_uuid_type(pt->params->Tuple.variables[i]->type);
+		bool string_parameter = false;
+		for (isize i = 0; i < pt->param_count; i++) {
+			Type *type = pt->params->Tuple.variables[i]->type;
+			uuid |= is_swift_uuid_type(type);
+			string_parameter |= type == t_string;
+		}
+		if (string_parameter) {
+			if (is_foreign || !is_export || build_context.build_mode != BuildMode_StaticLibrary || e->pkg != ctx->info->init_package) {
+				error(e->token, "Swift string parameters require an @(export) procedure in the initial package of a static library");
+			} else if (build_context.metrics.arch == TargetArch_arm64 && build_context.metrics.os == TargetOs_darwin) {
+				add_package_dependency(ctx, "runtime", "swift_string_borrow");
+				add_package_dependency(ctx, "runtime", "swift_string_end_borrow");
+			}
+		}
 		if (uuid && (is_foreign || !is_export || build_context.build_mode != BuildMode_StaticLibrary || e->pkg != ctx->info->init_package)) {
 			error(e->token, "Swift UUID values require an @(export) procedure in the initial package of a static library; use foreign import for Swift calls");
 		}

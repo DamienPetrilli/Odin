@@ -53,8 +53,18 @@ if grep -Eq ' T _main$' "$build/archive-symbols.log"; then
 	exit 1
 fi
 "${swiftc[@]}" -I "$build" "$here/main.swift" "$build/libOdinExportFixture.a" "$build/reply/SwiftReply.o" -o "$build/exports"
+# Both linker spellings must enter with native Swift String registers.
+for names in 'text_edges textEdges' 'odin_same_utf8 sameUtf8'; do
+	read -r raw module <<< "$names"
+	xcrun nm -gU "$build/exports" | awk -v raw="_$raw" -v module="___odin_swift_OdinExportFixture_$module" '
+		$3 == raw { a = $1 }
+		$3 == module { b = $1 }
+		END { exit !(a && b && a == b) }
+	'
+done
 # The Swift client must target Odin's native entry points directly.
 "${swiftc[@]}" -I "$build" -emit-ir "$here/main.swift" -o "$build/client.ll"
+grep -Eq 'call swiftcc .*@__odin_swift_OdinExportFixture_textEdges\(i64 [^,]+, ptr ' "$build/client.ll"
 grep -Eq 'call swiftcc .*@__odin_swift_OdinExportFixture_addNumbers' "$build/client.ll"
 grep -Eq 'call swiftcc \{ i64, i64 \} @__odin_swift_OdinExportFixture_updateAny' "$build/client.ll"
 grep -Eq 'call swiftcc \{ i64, double \} @__odin_swift_OdinExportFixture_measurePair' "$build/client.ll"
@@ -283,4 +293,22 @@ for kind in FOREIGN UNEXPORTED LOOKALIKE MODULE SHADOW; do
 	grep -q "$diagnostic" "$build/rejected-uuid.log" || { cat "$build/rejected-uuid.log" >&2; exit 1; }
 	test ! -e "$build/OdinRejectedUuids.swiftmodule"
 done
+
+# Swift String storage can only be borrowed at a generated module entry.
+cat > "$build/invalid-string.odin" <<'ODIN'
+package rejected_strings
+foreign {
+	read_text :: proc "swift" (value: string) ---
+}
+Callback :: proc "swift" (text: string)
+private_text :: proc "swift" (text: string) {}
+ODIN
+if "$ODIN" build "$build/invalid-string.odin" -file -build-mode:static "${odin_target[@]}" \
+	-out:"$build/rejected-string.a" > "$build/string-errors.log" 2>&1; then
+	echo "Expected raw Swift String signatures to fail" >&2
+	exit 1
+fi
+grep -Fq 'require a synchronous exported procedure body' "$build/string-errors.log"
+grep -Fq 'require an @(export) procedure' "$build/string-errors.log"
+test ! -e "$build/OdinRejectedStrings.swiftmodule"
 echo "Swift export checks passed ($sdk, $mode)"

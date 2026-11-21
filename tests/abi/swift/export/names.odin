@@ -115,3 +115,6 @@ finalize :: proc "swift" () -> u64 { return 22 }
 
 @(export)
 _leading_name :: proc "swift" () -> u64 { return 33 }
+
+@(export)
+text_length :: proc "swift" (value: string) -> int { return len(value) }

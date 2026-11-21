@@ -214,3 +214,24 @@ precondition(pair.lastIndex == Int64.max && pair.totalWeight == -0.25)
 let components = wordComponents(.max, -0.0, .min, .infinity)
 precondition(components.0 == UInt64.max && components.1.bitPattern == (-0.0 as Double).bitPattern)
 precondition(components.2 == Int.min && components.3 == .infinity)
+
+// The Odin body sees borrowed UTF-8, including embedded NULs and strings
+// whose native Swift storage needs transcoding. Exercise two simultaneous borrows.
+func checkText(_ text: String) {
+	var bytes = Array(text.utf8)
+	let rebuilt = String(decoding: bytes, as: UTF8.self)
+	let edges = bytes.isEmpty ? 0 : bytes.count + Int(bytes.first!) + Int(bytes.last!)
+	precondition(textEdges(text) == edges)
+	bytes.withUnsafeMutableBufferPointer { buffer in
+		precondition(sameUtf8(text, rebuilt, buffer))
+		precondition(sameUtf8(text, text, buffer))
+	}
+}
+for n in 0...32 { checkText(String(repeating: "x", count: n)) }
+checkText("a\0é🦉")
+checkText(String(repeating: "日本語\0🦉", count: 1024))
+let units = [UInt16](repeating: 0x263a, count: 200)
+units.withUnsafeBufferPointer {
+	let foreign = NSString(characters: $0.baseAddress!, length: $0.count) as String
+	checkText(foreign)
+}

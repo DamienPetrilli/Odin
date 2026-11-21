@@ -1,40 +1,17 @@
 #+build darwin, arm64
 package darwin_Swift
 
+import "base:runtime"
 import "core:mem"
 
-// Native register representation, used only by compiler-generated calls.
-// Assignments alias its reference. Use string_destroy exactly once per owner.
-Native_String :: struct {
-	bits: u64,
-	object: rawptr,
-}
-
-#assert(size_of(Native_String) == 16 && offset_of(Native_String, object) == 8)
-
-@(private)
-UTF8_Buffer :: struct {
-	bytes: u64,
-	count: i64,
-}
-
-@(private)
-UTF8_Copy_Result :: struct {
-	count: i64,
-	is_nil: u8,
-}
+// Assignments alias the Swift reference. Destroy each owner exactly once.
+Native_String :: runtime.Swift_String
 
 @(private)
 foreign {
 	// These standard-library ABI entry points copy bytes, not String storage.
 	@(link_name="$sSS12_tryFromUTF8ySSSgSRys5UInt8VGFZ")
 	string_try_from_utf8 :: proc "swift" (bytes: u64, count: i64) -> Native_String ---
-	@(link_name="$sSS8UTF8ViewV5countSivg")
-	string_utf8_count :: proc "swift" (value: Native_String) -> i64 ---
-	@(link_name="$ss11_StringGutsV8copyUTF84intoSiSgSrys5UInt8VG_tF")
-	string_copy_utf8 :: proc "swift" (bytes: u64, capacity: i64, value: Native_String) -> UTF8_Copy_Result ---
-	@(link_name="$ss11_StringGutsV29_largeContiguousUTF8CodeUnitsSRys5UInt8VGvg")
-	string_contiguous_utf8 :: proc "swift" (value: Native_String) -> UTF8_Buffer ---
 	@(link_name="swift_bridgeObjectRelease")
 	string_release :: proc "c" (object: rawptr) ---
 }
@@ -66,12 +43,12 @@ string_to_odin :: proc(value: Native_String) -> (result: string, ok: bool) #opti
 		inline_value = value
 		bytes = &inline_value
 	} else if flags & 0x1000_0000_0000_0000 == 0 {
-		buffer := string_contiguous_utf8(value)
+		buffer := runtime.swift_string_contiguous_utf8(value)
 		length = buffer.count
 		bytes = rawptr(uintptr(buffer.bytes))
 		if length > 0 && bytes == nil { return }
 	} else {
-		length = string_utf8_count(value)
+		length = runtime.swift_string_utf8_count(value)
 	}
 	if length < 0 {
 		return
@@ -88,7 +65,7 @@ string_to_odin :: proc(value: Native_String) -> (result: string, ok: bool) #opti
 		mem.copy_non_overlapping(storage, bytes, int(length))
 		return string(storage[:int(length)]), true
 	}
-	copied := string_copy_utf8(u64(uintptr(storage)), length, value)
+	copied := runtime.swift_string_copy_utf8(u64(uintptr(storage)), length, value)
 	if copied.is_nil & 1 != 0 || copied.count != length {
 		mem.free(storage)
 		return

@@ -4386,6 +4386,15 @@ gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc
 				if (param->flags & EntityFlag_ByPtr) {
 					error(param->token, "'#by_ptr' cannot be used with the \"swift\" calling convention");
 					success = false;
+				} else if (param->type == t_string) {
+					// A module entry borrows UTF-8 for the body. Raw foreign
+					// declarations and callback signatures have no such entry.
+					// check_proc_decl checks @(export) after reading the attributes.
+					if (!c->decl || !c->decl->proc_lit || c->decl->proc_lit->ProcLit.type != proc_type_node ||
+					    !c->decl->proc_lit->ProcLit.body) {
+						error(param->token, "Swift string parameters require a synchronous exported procedure body");
+						success = false;
+					}
 				} else if (!is_type_supported_by_swift_abi(param->type) && !is_swift_abi_slice_parameter(param->type)) {
 					error(param->token, "Unsupported parameter type for the \"swift\" calling convention");
 					success = false;

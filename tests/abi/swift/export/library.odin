@@ -152,3 +152,14 @@ measure_pair :: proc "swift" (index: i64, weight: f64) -> (last_index: i64, tota
 word_components :: proc "swift" (x: u64, y: f64, z: int, w: f64) -> (u64, f64, int, f64) {
 	return x, y, z, w
 }
+
+@(export)
+text_edges :: proc "swift" (text: string) -> int {
+	if len(text) == 0 { return 0 }
+	return len(text) + int(text[0]) + int(text[len(text)-1])
+}
+
+@(export, link_name="odin_same_utf8")
+same_utf8 :: proc "swift" (a, b: string, expected: []u8) -> bool {
+	return a == b && a == string(expected)
+}

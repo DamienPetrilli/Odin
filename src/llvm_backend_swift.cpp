@@ -366,6 +366,9 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 			Type *type = original->Proc.params->Tuple.variables[i]->type;
 			if (is_swift_uuid_type(type)) {
 				array_add(&params, t_rawptr);
+			} else if (type == t_string) {
+				array_add(&params, t_u64);
+				array_add(&params, t_rawptr);
 			} else if (is_type_enum(type)) {
 				if (Type *tag = swift_export_enum_tag_type(type)) array_add(&params, tag);
 			} else if (is_type_slice(type)) {
@@ -389,9 +392,13 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 		lbProcedure *p = lb_create_dummy_procedure(m, exported.symbol, type);
 		p->is_export = true;
 		LLVMSetLinkage(p->value, LLVMExternalLinkage);
+		if (exported.link_alias.len) {
+			LLVMAddAlias2(m->mod, LLVMGlobalGetValueType(p->value), 0, p->value, alloc_cstring(permanent_allocator(), exported.link_alias));
+		}
 		if (build_context.sanitizer_flags & SanitizerFlag_Address) lb_add_attribute_to_proc(m, p->value, "sanitize_address");
 		lb_begin_procedure_body(p);
 		auto args = array_make<lbValue>(temporary_allocator());
+		auto string_cleanups = array_make<lbValue>(temporary_allocator());
 		isize index = uuid_result ? 1 : 0;
 		for (isize i = 0; i < original->Proc.param_count; i++) {
 			Type *param_type = original->Proc.params->Tuple.variables[i]->type;
@@ -401,6 +408,16 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 			}
 			if (is_swift_uuid_type(param_type)) {
 				value = lb_swift_export_uuid_read(p, param_type, value);
+			} else if (param_type == t_string) {
+				lbValue object = lb_emit_load(p, lb_find_value_from_entity(m, tuple->Tuple.variables[index++]));
+				lbValue borrow = lb_lookup_runtime_procedure(m, str_lit("swift_string_borrow"));
+				Type *ptr = base_type(borrow.type)->Proc.params->Tuple.variables[0]->type;
+				lbAddr native = lb_add_local_generated(p, type_deref(ptr), false);
+				lb_emit_store(p, lb_emit_struct_ep(p, native.addr, 0), value);
+				lb_emit_store(p, lb_emit_struct_ep(p, native.addr, 1), object);
+				value = lb_emit_call(p, borrow, array_make_from_ptr(&native.addr, 1, 1));
+				array_add(&string_cleanups, object);
+				array_add(&string_cleanups, value);
 			} else if (is_type_enum(param_type)) {
 				value = lb_swift_export_enum(p, param_type, value, false);
 			} else if (is_type_slice(param_type)) {
@@ -413,6 +430,9 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 			array_add(&args, value);
 		}
 		lbValue result = lb_emit_call(p, lb_find_procedure_value_from_entity(m, exported.entity), args);
+		for (isize i = 0; i < string_cleanups.count; i += 2) {
+			lb_emit_runtime_call(p, "swift_string_end_borrow", array_slice(string_cleanups, i, i+2));
+		}
 		if (is_type_enum(result_type)) result = lb_swift_export_enum(p, result_type, result, true);
 		if (uuid_result) {
 			lbValue destination = lb_emit_load(p, lb_find_value_from_entity(m, tuple->Tuple.variables[0]));
