@@ -44,6 +44,14 @@ read_cycle_counter_frequency :: proc() -> i64 ---
 return_address :: proc(#const level: u32 = 0) -> rawptr ---
 // The address of the stack frame of the procedure at `level`. A level above 0 is not allowed on wasm targets.
 frame_address  :: proc(#const level: u32 = 0) -> rawptr ---
+// The current value of the stack pointer
+stack_pointer  :: proc() -> rawptr ---
+// The address of the slot holding the current procedure's return address. amd64, i386, and arm64 targets only.
+address_of_return_address :: proc() -> ^rawptr ---
+
+// Swift async
+
+// The address of the slot holding the current Swift async frame pointer.
 swift_async_context_addr :: proc() -> ^rawptr ---
 
 // Used by generated Swift bindings. Returns an owned native task reference,
@@ -53,11 +61,6 @@ swift_async_call :: proc($symbol: string, completion: $P, ..any) -> rawptr ---
 // The projection consumes the native error and produces the final callback argument.
 swift_async_throwing_call :: proc($symbol: string, completion: $P, project_error: $E, ..any) -> rawptr ---
 swift_async_method_call :: proc($symbol: string, completion: $P, receiver: $R, ..any) -> rawptr ---
-
-// The current value of the stack pointer
-stack_pointer  :: proc() -> rawptr ---
-// The address of the slot holding the current procedure's return address. amd64, i386, and arm64 targets only.
-address_of_return_address :: proc() -> ^rawptr ---
 
 count_ones           :: proc(x: $T) -> T where type_is_integer(T) || type_is_simd_vector(T) ---
 count_zeros          :: proc(x: $T) -> T where type_is_integer(T) || type_is_simd_vector(T) ---
