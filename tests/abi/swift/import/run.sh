@@ -85,7 +85,7 @@ if [[ "$sdk" != macosx ]]; then cp "$here/controller.odin" "$build/names/"; fi
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/names-test"
 
 # Check rejections in one invocation on every target, including link-only iOS runs.
-rejected=(text_bounds owned_tuple tuple_case_collision throwing_tuple ArrayRecord_recursive_result BoolTail_toggle TextRecord_clear RawCollision_raw_value RawCode_replace async_buffer returned_buffer generic throwing isolated_sync overloaded future inout_value typed_throwing
+rejected=(text_bounds owned_tuple tuple_case_collision throwing_tuple ArrayRecord_recursive_result TextRecord_clear RawCollision_raw_value RawCode_replace async_buffer returned_buffer generic throwing isolated_sync overloaded future inout_value typed_throwing
 	unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields
 	unsupported_scalar_argument unsupported_scalar_result narrow_array unsupported_bool_array unsupported_set_result
 	unsupported_optional_set unsupported_bool_set client_only new_number new_number_for_ NewValue
@@ -127,7 +127,7 @@ done
 expect_diagnostic "'EvolvingFailure_Deferred': requires $platform 99.0 (deployment target $platform 15.0.0)"
 expect_diagnostic "'RawCollision_raw_value': ambiguous Swift binding"
 expect_diagnostic "'ArrayRecord_recursive_result': unsupported result type 'SwiftImportFixture.RecursivePayload'"
-for name in RawCode_replace BoolTail_toggle TextRecord_clear; do
+for name in RawCode_replace TextRecord_clear; do
 	expect_diagnostic "'$name': mutating a projected Swift receiver requires write-back to the Odin value"
 done
 expect_diagnostic "'async_buffer': a borrowed Swift pointer or buffer cannot be captured across suspension"

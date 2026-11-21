@@ -1188,6 +1188,23 @@ gb_internal GB_COMPARE_PROC(swift_import_report_compare) {
 	return string_compare(*cast(String const *)a, *cast(String const *)b);
 }
 
+// Odin accepts any nonzero byte for true. Swift requires zero or one.
+gb_internal gbString swift_import_emit_inout_bools(gbString source, SwiftImportFunction const &fn, char const *receiver, bool after_call) {
+	if (!fn.record_inout) return source;
+	for (auto const &field : fn.owner->fields) {
+		if (make_string_c(field.type.odin) != "bool") continue;
+		if (after_call) {
+			// The exclusive borrow has ended with a valid Swift value. Let
+			// LLVM eliminate repeated checks until Odin next writes the field.
+			source = gb_string_append_fmt(source, "\t_swift_assume(transmute(u8)%s.%.*s <= 1)\n", receiver, LIT(field.name));
+		} else {
+			source = gb_string_append_fmt(source, "%sif transmute(u8)%s.%.*s > 1 { %s.%.*s = true }\n",
+			                              fn.is_async ? "\t\t" : "\t", receiver, LIT(field.name), receiver, LIT(field.name));
+		}
+	}
+	return source;
+}
+
 gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImportFunction const &fn, String native_name, Array<String> *report) {
 	bool receiver = swift_import_has_receiver(fn);
 	bool indirect_result = swift_import_indirect(fn.result);
@@ -1301,8 +1318,10 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		else if (projected_result && fn.result.nominal->is_uuid) source = gb_string_appendc(source, "\t_swift_result_temporary: swift.Value_Temporary = ---\n\t_swift_storage := swift.value_temporary_from_layout(&_swift_result_temporary, _swift_uuid_layout) or_return\n\tdefer if !_swift_uuid_layout.inline_temporary { swift.value_free_uninitialized(_swift_storage) }\n");
 		else if (projected_result && !fixed_result) source = gb_string_append_fmt(source, "\t_swift_result_temporary: swift.Value_Temporary = ---\n\t_swift_storage := swift.value_temporary(&_swift_result_temporary, _swift_%.*s_metadata(0).type) or_return\n\tdefer swift.value_temporary_free(&_swift_result_temporary, _swift_storage)\n", LIT(fn.result.nominal->name));
 		else if (allocated_result) source = gb_string_append_fmt(source, "\t_swift_storage := swift.value_allocate(_swift_%.*s_metadata(0).type) or_return\n", LIT(fn.result.nominal->name));
+		source = swift_import_emit_inout_bools(source, fn, "receiver", false);
 		char const *assignment = !fn.result.odin || indirect_result || empty_result ? "" : projected_result ? "_swift_storage = " : owned_result ? "(cast(^rawptr)_swift_storage)^ = " : "_swift_value := ";
 		source = gb_string_append_fmt(source, "\t%s_swift_%.*s_native(%s%s%s)\n", assignment, LIT(native_name), indirect_result ? (fixed_result ? "&_swift_storage" : "_swift_storage") : "", indirect_result && gb_string_length(arguments) ? ", " : "", arguments);
+		source = swift_import_emit_inout_bools(source, fn, "receiver", true);
 		if (consumes) source = gb_string_appendc(source, "\t_swift_called = true\n");
 		if (release_inputs) source = gb_string_appendc(source, release_inputs);
 		if (projected_result) {
@@ -1330,14 +1349,15 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	if (receiver) source = gb_string_appendc(source, " || receiver == nil");
 	for (auto const &param : fn.parameters) if (param.objc_controller || (param.type.nominal && !param.type.nominal->projected && !param.empty_set && !swift_import_kind(param.type, SwiftImportValue_String) && !swift_import_slice(param.type.nominal) && !swift_import_kind(param.type, SwiftImportValue_Set))) source = gb_string_append_fmt(source, " || %.*s == nil", LIT(param.name));
 	source = gb_string_appendc(source, " { return }\n\tCapture :: struct {\n\t\tcompletion: type_of(completion),\n");
-	if (receiver) source = gb_string_appendc(source, "\t\treceiver: rawptr,\n");
+	if (fn.record_inout) source = gb_string_append_fmt(source, "\t\treceiver: ^%.*s,\n", LIT(fn.owner->name));
+	else if (receiver) source = gb_string_appendc(source, "\t\treceiver: rawptr,\n");
 	for_array(i, fn.parameters) if (!fn.parameters[i].empty_set) source = gb_string_append_fmt(source, "\t\targ%td: %s,\n", i, swift_import_slice(fn.parameters[i].type.nominal) ? "swift.Native_Array" : swift_import_kind(fn.parameters[i].type, SwiftImportValue_Set) ? "swift.Native_Set" : swift_import_native_type(fn.parameters[i].type));
 	if (fn.is_collection) source = gb_string_appendc(source, "\t\tcollection_metadata, collection_witness: rawptr,\n");
 	if (fn.result.odin) source = gb_string_append_fmt(source, "\t\tresult: %s,\n", swift_import_native_type(fn.result));
 	if (fn.is_throwing) source = gb_string_appendc(source, "\t\terror: swift.Error,\n");
 	source = gb_string_appendc(source, "\t}\n\t_swift_capture := Capture{completion = completion}\n");
 	if (receiver) {
-		if (fn.is_mutating) source = gb_string_appendc(source, "\t_swift_capture.receiver = rawptr(receiver)\n");
+		if (fn.is_mutating) source = gb_string_appendc(source, "\t_swift_capture.receiver = receiver\n");
 		else source = gb_string_append_fmt(source, "\t_swift_capture.receiver = swift.value_copy(rawptr(receiver), _swift_%.*s_metadata(0).type) or_return\n\tdefer if !ok { swift.value_destroy(_swift_capture.receiver, _swift_%.*s_metadata(0).type) }\n", LIT(fn.owner->name), LIT(fn.owner->name));
 	}
 	for_array(i, fn.parameters) {
@@ -1365,6 +1385,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	if (allocated_result) source = gb_string_append_fmt(source, "\t_swift_capture.result = swift.value_allocate(_swift_%.*s_metadata(0).type) or_return\n\tdefer if !ok { swift.value_free_uninitialized(_swift_capture.result) }\n", LIT(fn.result.nominal->name));
 	source = gb_string_appendc(source, "\tentry :: proc \"swift/async\" (#swift_async frame: rawptr, #swift_self _: rawptr) {\n");
 	if (entry_needs_capture) source = gb_string_appendc(source, "\t\tcapture := cast(^Capture)runtime.swift_async_payload(frame)\n");
+	source = swift_import_emit_inout_bools(source, fn, "capture.receiver", false);
 	source = gb_string_appendc(source, "\t\tchild := runtime.swift_async_prepare(frame, rawptr(resumed))\n");
 	source = gb_string_append_fmt(source, "\t\t#must_tail _swift_%.*s_native(%scast(^runtime.Swift_Async_Frame)child%s%s)\n\t}\n", LIT(native_name), indirect_result ? (fixed_result ? "&capture.result, " : "capture.result, ") : "", gb_string_length(arguments) ? ", " : "", arguments);
 	source = gb_string_appendc(source, "\tresumed :: proc \"swift/async\" (#swift_async child: ^runtime.Swift_Async_Frame");
@@ -1956,12 +1977,9 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		String &reason = fn.rejection;
 		auto api_types = swift_import_array(fn.api, "children");
 		if (receiver && fn.owner->projected && fn.is_mutating) {
-			// Borrow storage directly only when every bit pattern of each Odin
-			// field is a valid Swift value. Bool and owned fields need conversion.
+			// Plain records can use their actual address. Owned fields require
+			// a separate Swift value and explicit write-back.
 			fn.record_inout = fn.owner->is_record && fn.owner->size != 0 && !fn.owner->owns;
-			for (auto const &field : fn.owner->fields) {
-				if (make_string_c(field.type.odin) == "bool") fn.record_inout = false;
-			}
 			if (!fn.record_inout) reason = str_lit("mutating a projected Swift receiver requires write-back to the Odin value");
 		} else if (fn.owner && !fn.is_static && !fn.owner->supported) {
 			reason = str_lit("unsupported Swift receiver representation");
@@ -2192,6 +2210,12 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		"@(require, extra_linker_flags=%.*s)\n"
 		"foreign import swift_library {\n\t%.*s,\n\t\"system:swiftCore\",\n\t\"system:swift_Concurrency\",\n}\n\n",
 		LIT(quoted_flags), LIT(quoted_library));
+	for (auto const &fn : functions) {
+		if (fn.record_inout && !fn.is_async) {
+			source = gb_string_appendc(source, "@(private)\nforeign _ {\n\t@(link_name=\"llvm.assume\")\n\t_swift_assume :: proc \"c\" (condition: bool) ---\n}\n\n");
+			break;
+		}
+	}
 	source = swift_import_emit_enum_tags(source, types);
 	for (auto type : types) {
 		if (type->supported) {

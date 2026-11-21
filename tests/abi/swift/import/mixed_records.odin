@@ -46,11 +46,26 @@ bool_mixed_checked :: proc(task: swift.Task, value: fixture.BoolMixed, error: fi
 	mixed_record_calls += 1
 }
 
+mutated_tail_received :: proc(task: swift.Task, flag: bool) {
+	assert(take_expected(task) == 0 && !flag)
+	mixed_record_calls += 1
+}
+
 check_mixed_records :: proc() {
 	flags := [?]bool{true, false, true}
 	assert(fixture.count_true(flags[:]) == 2)
 	for byte in 0..=255 {
 		value := transmute(bool)u8(byte)
+		item := fixture.BoolTail{17, value}
+		fixture.BoolTail_toggle(&item)
+		assert(transmute(u8)item.flag == u8(byte == 0) && item.count == 17)
+		item.flag = transmute(bool)u8(254)
+		fixture.BoolTail_toggle(&item)
+		assert(transmute(u8)item.flag == 0)
+		mixed := fixture.BoolMixed{false, value, 17, 0.5, transmute(bool)u8(128)}
+		fixture.BoolMixed_select_flag(&mixed)
+		assert(transmute(u8)mixed.a == u8(byte != 0) && transmute(u8)mixed.b == u8(byte != 0))
+		assert(transmute(u8)mixed.c == 1 && mixed.count == 17 && mixed.fraction == 0.5)
 		got, present := fixture.optional_bool(value).?
 		assert(present && transmute(u8)got == u8(byte != 0))
 	}
@@ -169,12 +184,20 @@ check_mixed_records :: proc() {
 		task = fixture.checked_bool_mixed_later(mixed, flag, bool_mixed_checked) or_else panic("Async checked record")
 		track_task(task, u64(flag))
 	}
+	item := fixture.BoolTail{41, transmute(bool)u8(128)}
+	failed_task, started := fixture.BoolTail_toggle_later(&item, nil)
+	assert(!started && failed_task == nil && transmute(u8)item.flag == 128)
+	task = fixture.BoolTail_toggle_later(&item, mutated_tail_received) or_else panic("Async Bool record mutation")
+	track_task(task)
+	swift.task_cancel(task)
+
 	mixed.a = false
 	wide.flag = false
 	deadline := time.tick_now()
-	for mixed_record_calls != 7 {
+	for mixed_record_calls != 8 {
 		assert(time.tick_since(deadline) < 5*time.Second)
 		_ = cf.RunLoopRunInMode(cf.kRunLoopDefaultMode, 0.01, false)
 	}
+	assert(transmute(u8)item.flag == 0 && item.count == 42)
 	assert(state.allocations == state.frees && fixture.live_value_count() == 0)
 }

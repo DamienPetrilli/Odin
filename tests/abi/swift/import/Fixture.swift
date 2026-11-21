@@ -835,6 +835,12 @@ public func echoBoolHead(_ value: BoolHead) -> BoolHead { value }
 }
 extension BoolTail {
 	public mutating func toggle() { flag.toggle() }
+	public mutating func toggleLater() async -> Bool {
+		await Task.yield()
+		flag.toggle()
+		count &+= 1
+		return flag
+	}
 }
 public func echoBoolTail(_ value: BoolTail) -> BoolTail { value }
 @frozen public struct BoolMixed {
@@ -843,6 +849,11 @@ public func echoBoolTail(_ value: BoolTail) -> BoolTail { value }
 	public var count: Int
 	public var fraction: Double
 	public var c: Bool
+}
+extension BoolMixed {
+	public mutating func selectFlag() {
+		a = b && c
+	}
 }
 public func echoBoolMixed(_ value: BoolMixed) -> BoolMixed { value }
 @frozen public struct BoolWide {

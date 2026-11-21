@@ -815,7 +815,7 @@ values and any earlier converted arguments; no callback runs after a failed star
 See `sets.odin` for duplicate removal, custom equality with colliding hashes,
 input preservation, consuming initialization, failure cleanup and async lifetimes.
 
-A mutating method on a nonempty, verified frozen numeric record borrows the
+A mutating method on a nonempty, verified frozen scalar record borrows the
 caller's record in place. Pass a pointer to the record or a slice element:
 
 ```odin
@@ -826,5 +826,8 @@ The address must be non-nil, naturally aligned and exclusively accessible
 during the call. For an async method, hold that exclusive borrow through the
 completion, including after requesting cancellation. Growing a dynamic array
 can invalidate its element addresses. A failed start takes no borrow.
-Records containing Swift-owned fields or Bool and projected enums require
-conversion before mutable access can be supported.
+For a stored `bool`, the importer converts every nonzero Odin byte to Swift
+`true` in place before Swift reads the receiver. Changes are visible in the
+original record when the call completes, including when an async method throws.
+Records with Swift-owned fields and projected enums still require conversion
+before mutable access can be supported.
