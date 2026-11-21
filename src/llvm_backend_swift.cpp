@@ -393,7 +393,7 @@ gb_internal bool lb_swift_optional_forwards_input(lbModule *m, Entity *entity, T
 	}
 	lbModule *owner = lb_module_of_entity(m->gen, entity, m);
 	LLVMValueRef body = LLVMGetNamedFunction(owner->mod, alloc_cstring(temporary_allocator(), entity->Procedure.link_name));
-	if (!body || LLVMIsDeclaration(body) || LLVMCountParams(body) != 1+proc->Proc.param_count) return false;
+	if (!body || LLVMIsDeclaration(body) || LLVMCountParams(body) != 1u+cast(unsigned)proc->Proc.param_count) return false;
 	unsigned sret = LLVMGetEnumAttributeKindForName("sret", 4);
 	if (!LLVMGetEnumAttributeAtIndex(body, 1, sret)) return false;
 	LLVMValueRef dest = LLVMGetParam(body, 0);

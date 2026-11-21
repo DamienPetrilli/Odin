@@ -354,8 +354,49 @@ gb_internal gbString swift_export_emit_struct(gbString source, Type *type) {
 }
 
 #if defined(GB_SYSTEM_OSX)
-// Inspect the SDK's native calling sequence and its constant case encodings.
-// The optimizer may leave padding unspecified; only the case bit is read.
+#include <llvm-c/Transforms/PassBuilder.h>
+
+// Read the constant stores made by Swift's assignment to an inout Optional.
+// A Swift global may be initialized lazily, even when its value is a literal.
+gb_internal bool swift_export_optional_case(LLVMTargetDataRef data, LLVMValueRef function, Type *element, isize index) {
+	if (!function || LLVMCountParams(function) != 1 || LLVMCountBasicBlocks(function) != 1) return false;
+	auto block = LLVMGetFirstBasicBlock(function);
+	auto dest = LLVMGetParam(function, 0);
+	unsigned size = cast(unsigned)type_size_of(element);
+	unsigned extent = size + (element != t_bool);
+	u8 bytes[9] = {}, known[9] = {};
+	for (auto inst = LLVMGetFirstInstruction(block); inst; inst = LLVMGetNextInstruction(inst)) {
+		switch (LLVMGetInstructionOpcode(inst)) {
+		case LLVMGetElementPtr: case LLVMRet: break;
+		case LLVMStore: {
+			auto ptr = LLVMGetOperand(inst, 1);
+			u64 offset = 0;
+			auto value = LLVMGetOperand(inst, 0);
+			if (!swift_import_pointer_offset(data, ptr, dest, &offset) || !LLVMIsAConstantInt(value)) return false;
+			unsigned bits = LLVMGetIntTypeWidth(LLVMTypeOf(value));
+			if (!bits || bits > 64 || offset >= extent || (bits+7)/8 > extent-offset) return false;
+			u64 raw = LLVMConstIntGetZExtValue(value);
+			for (unsigned bit = 0; bit < bits; bit += 8) {
+				unsigned byte = cast(unsigned)offset + bit/8;
+				known[byte] = cast(u8)((1u << gb_min(8u, bits-bit))-1);
+				bytes[byte] = cast(u8)(raw >> bit) & known[byte];
+			}
+			break;
+		}
+		default: return false;
+		}
+	}
+	if (element == t_bool) return known[0] == 0xff && bytes[0] == (index == 0 ? 2 : index-1);
+	if (!(known[size]&1) || (bytes[size]&1) != (index == 0)) return false;
+	if (index == 0) return true; // The absent case has no payload.
+	u64 one = element == t_f32 ? 0x3f800000ull : element == t_f64 ? 0x3ff0000000000000ull : 1;
+	u64 expected = index == 2 ? one : 0;
+	for (unsigned i = 0; i < size; i++) {
+		if (known[i] != 0xff || bytes[i] != cast(u8)(expected >> (8*i))) return false;
+	}
+	return true;
+}
+
 gb_internal bool swift_export_check_optional(LLVMModuleRef module, LLVMTargetDataRef data, Type *element, isize index) {
 	auto name = [&](char const *suffix) -> char const * {
 		return gb_string_append_fmt(gb_string_make(temporary_allocator(), ""), "odin_swift_optional_%td_%s", index, suffix);
@@ -365,40 +406,34 @@ gb_internal bool swift_export_check_optional(LLVMModuleRef module, LLVMTargetDat
 	unsigned bits = cast(unsigned)type_size_of(element)*8;
 	LLVMTypeRef word = LLVMIntTypeInContext(context, element == t_bool ? 8 : gb_min(bits*2, 64));
 	bool wide = bits == 64;
-	if (!function || LLVMGetFunctionCallConv(function) != LLVMSwiftCallConv || LLVMCountParams(function) != (wide ? 2u : 1u) ||
-	    LLVMTypeOf(LLVMGetParam(function, 0)) != word) return false;
-	LLVMTypeRef result = LLVMGetReturnType(LLVMGlobalGetValueType(function));
-	if (wide) {
-		LLVMTypeRef tag = LLVMInt8TypeInContext(context);
-		if (LLVMTypeOf(LLVMGetParam(function, 1)) != tag || LLVMGetTypeKind(result) != LLVMStructTypeKind ||
-		    LLVMCountStructElementTypes(result) != 2 || LLVMStructGetTypeAtIndex(result, 0) != word ||
-		    LLVMStructGetTypeAtIndex(result, 1) != tag) return false;
-	} else if (result != word) {
+	bool valid = function && LLVMGetFunctionCallConv(function) == LLVMSwiftCallConv &&
+	             LLVMCountParams(function) == (wide ? 2u : 1u) && LLVMTypeOf(LLVMGetParam(function, 0)) == word;
+	if (valid) {
+		LLVMTypeRef result = LLVMGetReturnType(LLVMGlobalGetValueType(function));
+		if (wide) {
+			LLVMTypeRef tag = LLVMInt8TypeInContext(context);
+			valid = LLVMTypeOf(LLVMGetParam(function, 1)) == tag && LLVMGetTypeKind(result) == LLVMStructTypeKind &&
+			        LLVMCountStructElementTypes(result) == 2 && LLVMStructGetTypeAtIndex(result, 0) == word &&
+			        LLVMStructGetTypeAtIndex(result, 1) == tag;
+		} else valid = result == word;
+	}
+	if (!valid) {
+		char *type = function ? LLVMPrintTypeToString(LLVMGlobalGetValueType(function)) : nullptr;
+		error(swift_export_node, "Swift export: unsupported native Optional lowering for %s: %s",
+		      swift_export_scalar(element), type ? type : "missing Swift identity probe");
+		if (type) LLVMDisposeMessage(type);
 		return false;
 	}
 
 	char const *cases[] = {"none", "zero", "one"};
-	u64 one = element == t_f32 ? 0x3f800000ull : element == t_f64 ? 0x3ff0000000000000ull : 1;
 	for (isize i = 0; i < gb_count_of(cases); i++) {
-		LLVMValueRef global = LLVMGetNamedGlobal(module, name(cases[i]));
-		if (!global || !LLVMIsGlobalConstant(global)) return false;
-		LLVMValueRef value = LLVMGetInitializer(global);
-		if (!value) return false;
-		if (element == t_bool) {
-			if (!LLVMIsAConstantInt(value) || LLVMTypeOf(value) != word ||
-			    LLVMConstIntGetZExtValue(value) != (i == 0 ? 2u : i-1)) return false;
-			continue;
-		}
-		LLVMTypeRef layout = LLVMTypeOf(value);
-		if (LLVMGetTypeKind(layout) != LLVMStructTypeKind || LLVMCountStructElementTypes(layout) != 2 ||
-		    LLVMStructGetTypeAtIndex(layout, 0) != LLVMIntTypeInContext(context, bits) ||
-		    LLVMStructGetTypeAtIndex(layout, 1) != LLVMInt1TypeInContext(context) ||
-		    LLVMOffsetOfElement(data, layout, 1) != bits/8) return false;
-		LLVMValueRef tag = LLVMGetAggregateElement(value, 1);
-		if (!tag || !LLVMIsAConstantInt(tag) || LLVMConstIntGetZExtValue(tag) != (i == 0)) return false;
-		if (i != 0) {
-			LLVMValueRef payload = LLVMGetAggregateElement(value, 0);
-			if (!payload || !LLVMIsAConstantInt(payload) || LLVMConstIntGetZExtValue(payload) != (i == 2 ? one : 0)) return false;
+		auto probe = LLVMGetNamedFunction(module, name(cases[i]));
+		if (!swift_export_optional_case(data, probe, element, i)) {
+			char *ir = probe ? LLVMPrintValueToString(probe) : nullptr;
+			error(swift_export_node, "Swift export: unsupported native Optional %s case for %s\n%s",
+			      cases[i], swift_export_scalar(element), ir ? ir : "missing Swift case probe");
+			if (ir) LLVMDisposeMessage(ir);
+			return false;
 		}
 	}
 	return true;
@@ -424,9 +459,9 @@ gb_internal bool swift_export_check_types() {
 		char const *type = swift_export_scalar(element);
 		source = gb_string_append_fmt(source,
 			"@_silgen_name(\"odin_swift_optional_%td_identity\") public func optional_%td(_ value: %s?) -> %s? { value }\n"
-			"@_silgen_name(\"odin_swift_optional_%td_none\") public let optional_none_%td: %s? = nil\n"
-			"@_silgen_name(\"odin_swift_optional_%td_zero\") public let optional_zero_%td: %s? = %s\n"
-			"@_silgen_name(\"odin_swift_optional_%td_one\") public let optional_one_%td: %s? = %s\n",
+			"@_silgen_name(\"odin_swift_optional_%td_none\") public func optional_none_%td(_ p: inout %s?) { p = nil }\n"
+			"@_silgen_name(\"odin_swift_optional_%td_zero\") public func optional_zero_%td(_ p: inout %s?) { p = %s }\n"
+			"@_silgen_name(\"odin_swift_optional_%td_one\") public func optional_one_%td(_ p: inout %s?) { p = %s }\n",
 			i, i, type, type, i, i, type, i, i, type, element == t_bool ? "false" : "0",
 			i, i, type, element == t_bool ? "true" : "1");
 	}
@@ -513,12 +548,6 @@ gb_internal bool swift_export_check_types() {
 	defer (LLVMDisposeModule(module));
 	LLVMTargetDataRef data = LLVMCreateTargetData(LLVMGetDataLayoutStr(module));
 	defer (LLVMDisposeTargetData(data));
-	for_array(i, swift_export_optional_types) {
-		if (!swift_export_check_optional(module, data, swift_export_optional_types[i], i)) {
-			error(swift_export_node, "Swift export: unsupported native Optional lowering or cases for %s", swift_export_scalar(swift_export_optional_types[i]));
-			return false;
-		}
-	}
 	if (swift_export_has_string) {
 		LLVMValueRef probe = LLVMGetNamedFunction(module, "odin_swift_export_string");
 		String signature = str_lit(" @odin_swift_export_string : $@convention(thin) (@guaranteed String) -> () {");
@@ -589,6 +618,21 @@ gb_internal bool swift_export_check_types() {
 			}
 		}
 		if (!valid) error(type->Named.type_name->token, "Swift export: unsupported native enum lowering for '%.*s'", LIT(type->Named.name));
+	}
+	if (swift_export_optional_types.count) {
+		// Inspect the other probes first. Canonicalize only after their
+		// unoptimized bodies have supplied the record and enum layouts.
+		auto options = LLVMCreatePassBuilderOptions();
+		defer (LLVMDisposePassBuilderOptions(options));
+		if (auto failure = LLVMRunPasses(module, "sroa,instcombine", nullptr, options)) {
+			char *message = LLVMGetErrorMessage(failure);
+			error(swift_export_node, "Swift export: cannot inspect Optional cases: %s", message);
+			LLVMDisposeErrorMessage(message);
+			return false;
+		}
+		for_array(i, swift_export_optional_types) {
+			if (!swift_export_check_optional(module, data, swift_export_optional_types[i], i)) return false;
+		}
 	}
 	return !any_errors();
 #endif
