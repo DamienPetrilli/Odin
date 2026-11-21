@@ -71,6 +71,12 @@ symbols, ownership, lowering, and runtime search paths. Temporary Swift inspecti
 source, SIL and LLVM IR are build inputs only; none is linked into the application.
 They are removed unless `-keep-temp-files` is enabled.
 
+## Inspecting the bindings
+
+Run `odin check app -show-swift-imports` with the same target and minimum OS version as the application. Standard output lists each inspected module, the accepted Swift declarations and their Odin procedure signatures, short aliases, projected types, and reasons for skipped bindings. The report uses the declarations emitted for that target, including both forms of a defaulted Set argument. Declarations absent from Swift's module inspection data cannot appear in the report.
+
+Each async entry describes ownership of the returned task, the callback's borrowed handle, and any result cleanup. Use the allocator that owns a returned string or slice. A lookup fallback explains what happens when no accepted binding matches a selector. A rejected overload can share a selector with a callable overload.
+
 ## Names
 
 Swift type identity comes from compiler identifiers, not display names. A user
@@ -96,8 +102,11 @@ conversion separately from Swift `throws` and from acceptance of the start.
 `Bool`, `Int` and `UInt` use native Odin `bool`, `int` and `uint`, including
 scalar async completions, getters and optionals. Int and UInt are 64-bit on the
 supported Darwin arm64 target. Int/UInt arrays use `[]int`/`[]uint` with the same
-copy/ownership rules as the other scalar arrays. Bool arrays remain outside this subset. Narrow integer and Float signatures
-are also unsupported; diagnostics name the rejected parameter or result type.
+copy/ownership rules as the other scalar arrays. Bool arrays remain outside this subset.
+
+Swift `Float` and signed and unsigned 8-, 16-, and 32-bit integers import directly
+as `f32`, `i8/u8`, `i16/u16`, and `i32/u32` in synchronous and asynchronous
+procedures. Their aggregate and buffer mappings need separate layout checks.
 
 Copyable, escapable resilient structs use typed addresses backed by Swift
 metadata. Struct constructors, methods, getters and nested types are supported when

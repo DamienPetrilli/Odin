@@ -188,3 +188,13 @@ for seed in 0..<256 {
 	precondition(identifierChecksum(id) == bytes.enumerated().reduce(UInt64(0)) { $0 + UInt64($1.element)*UInt64($1.offset+1) })
 }
 print("Native UUID export/import round trips passed")
+
+for value: Int8 in [.min, .max, 1] { precondition(identityI8(value) == value) }
+for value: UInt8 in [.min, .max, 1] { precondition(identityU8(value) == value) }
+for value: Int16 in [.min, .max, 1] { precondition(identityI16(value) == value) }
+for value: UInt16 in [.min, .max, 1] { precondition(identityU16(value) == value) }
+for value: Int32 in [.min, .max, 1] { precondition(identityI32(value) == value) }
+for value: UInt32 in [.min, .max, 1] { precondition(identityU32(value) == value) }
+for bits: UInt32 in [0, 0x80000000, 0x00000001, 0x7f800000, 0x7fc01234] {
+	precondition(identityF32(Float(bitPattern: bits)).bitPattern == bits)
+}

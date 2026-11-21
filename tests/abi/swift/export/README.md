@@ -49,7 +49,8 @@ reflection. Application procedures execute in Odin.
 
 ## Values and memory
 
-This subset supports `proc "swift"` with `i64`, `u64`, `int`, `uint`, `f64`, `bool`, and flat
+This subset supports `proc "swift"` with 8-, 16-, 32-, and 64-bit signed and unsigned
+integer scalars, `int`, `uint`, `f32`, `f64`, `bool`, and flat
 named structs containing `bool`, `i64`, `u64`, `int`, `uint`, and `f64`. A procedure returns at most one
 such value. Struct fields preserve their order and offsets. Swift value size,
 array stride and register/indirect lowering are checked separately. Packed, aligned, nested, or nontrivial structs

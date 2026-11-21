@@ -4126,7 +4126,14 @@ gb_internal void check_procedure_param_polymorphic_type(CheckerContext *ctx, Typ
 	}
 }
 
-gb_internal bool is_swift_abi_scalar(Type *type) {
+gb_internal bool is_swift_abi_numeric_scalar(Type *type) {
+	type = base_type(type);
+	return type == t_bool || type == t_int || type == t_uint || type == t_f32 || type == t_f64 ||
+	       type == t_i8 || type == t_i16 || type == t_i32 || type == t_i64 ||
+	       type == t_u8 || type == t_u16 || type == t_u32 || type == t_u64;
+}
+
+gb_internal bool is_swift_abi_word_field(Type *type) {
 	type = base_type(type);
 	return type == t_i64 || type == t_u64 || type == t_int || type == t_uint || type == t_f64 || is_type_pointer(type) || is_type_multi_pointer(type);
 }
@@ -4209,7 +4216,7 @@ gb_internal bool is_swift_uuid_type(Type *type) {
 gb_internal bool is_type_supported_by_swift_abi(Type *type) {
 	if (is_swift_uuid_type(type)) return true;
 	type = base_type(type);
-	if (type == t_bool || type == t_u8 || type == t_u16 || type == t_u32 || is_swift_abi_scalar(type) || is_swift_abi_enum(type)) {
+	if (is_swift_abi_numeric_scalar(type) || is_type_pointer(type) || is_type_multi_pointer(type) || is_swift_abi_enum(type)) {
 		return true;
 	}
 	if (type == nullptr) {
@@ -4233,7 +4240,7 @@ gb_internal bool is_type_supported_by_swift_abi(Type *type) {
 	// Nested records and custom layout remain excluded. Native Swift calls
 	// gather narrow fields; ordinary Odin/C aggregate handling is unchanged.
 	for (Entity *field : s.fields) {
-		if (!is_swift_abi_scalar(field->type) && !is_swift_abi_narrow_field(field->type)) return false;
+		if (!is_swift_abi_word_field(field->type) && !is_swift_abi_narrow_field(field->type)) return false;
 	}
 	return true;
 }

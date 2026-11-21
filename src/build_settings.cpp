@@ -588,6 +588,7 @@ struct BuildContext {
 
 	bool   ignore_unused_defineables;
 	bool   show_system_calls;
+	bool   show_swift_imports;
 	bool   keep_temp_files;
 	bool   ignore_unknown_attributes;
 	bool   no_bounds_check;

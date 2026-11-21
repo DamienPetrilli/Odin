@@ -50,7 +50,14 @@ cp "$here/scalars.odin" "$build/scalars.odin"
 # Odin imports, checks and links the Swift module in a single invocation.
 "$ODIN" build "$build" \
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do \
-	"${odin_target[@]}" "${odin_opt[@]}" -out:"$build/import"
+	"${odin_target[@]}" "${odin_opt[@]}" -out:"$build/import" -show-swift-imports > "$build/mappings.txt"
+grep -Fq 'call add_later :: proc(value: u64, delta: u64, completion: proc(swift.Task, u64))' "$build/mappings.txt"
+grep -Fq 'type SwiftImportFixture.`TextRecord` -> TextRecord (struct, frozen)' "$build/mappings.txt"
+grep -Fq 'owned result: delete(result, allocator)' "$build/mappings.txt"
+grep -Fq 'exclusive borrow through completion' "$build/mappings.txt"
+grep -Fq 'final bool reports result conversion' "$build/mappings.txt"
+grep -Fq 'skipped future: func future()' "$build/mappings.txt"
+grep -Fq 'lookup fallback future (future()): requires' "$build/mappings.txt"
 xcrun nm "$build/import" > "$build/symbols.txt"
 if grep -q OdinSwiftImportProbe "$build/symbols.txt"; then
 	echo "Unexpected Swift inspection code in the application" >&2
@@ -71,9 +78,9 @@ if [[ "$sdk" != macosx ]]; then cp "$here/controller.odin" "$build/names/"; fi
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/names-test"
 
 # Check rejections in one invocation on every target, including link-only iOS runs.
-rejected=(narrow generic throwing isolated_sync overloaded future inout_value typed_throwing
+rejected=(generic throwing isolated_sync overloaded future inout_value typed_throwing
 	unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields
-	unsupported_scalar_argument unsupported_scalar_result unsupported_bool_array unsupported_set_result
+	unsupported_scalar_argument unsupported_scalar_result narrow_array optional_float unsupported_bool_array unsupported_set_result
 	unsupported_optional_set unsupported_bool_set client_only new_number new_number_for_ NewValue
 	NewValue_number EvolvingFailure_Deferred)
 cat > "$build/rejected.odin" <<'ODIN'
@@ -106,8 +113,10 @@ done
 expect_diagnostic "'EvolvingFailure_Deferred': requires $platform 99.0 (deployment target $platform 15.0.0)"
 expect_diagnostic "'client_only': unsupported Swift attribute '@_alwaysEmitIntoClient'"
 expect_diagnostic "'isolated_sync': synchronous @MainActor calls require actor isolation"
-expect_diagnostic "'unsupported_scalar_argument': parameter 'value' has unsupported type or modifier 'Swift.Float'"
-expect_diagnostic "'unsupported_scalar_result': unsupported result type 'Swift.Float'"
+expect_diagnostic "'unsupported_scalar_argument': parameter 'value' has unsupported type or modifier 'Swift.Float16'"
+expect_diagnostic "'unsupported_scalar_result': unsupported result type 'Swift.Float16'"
+expect_diagnostic "'narrow_array': unsupported result type '[Swift.Int16]'"
+expect_diagnostic "'optional_float': unsupported result type 'Swift.Float?'"
 expect_diagnostic "'unsupported_bool_array': unsupported result type '[Swift.Bool]'"
 expect_diagnostic "'recursive_payload': unsupported result type 'SwiftImportFixture.RecursivePayload'"
 expect_diagnostic "func overloaded(_ value: UInt64) -> UInt64"
@@ -226,9 +235,9 @@ fi
 for diagnostic in \
 	'requires a constant Swift link name' \
 	'completion task handle must have a rawptr base type' \
-	'result must be bool, int, uint, i64, u64, or f64' \
+	'result must be a supported Swift numeric scalar or bool' \
 	'completion must be an Odin procedure' \
-	'arguments must be bool, int, uint, i64, u64, or f64' \
+	'arguments must be a supported Swift numeric scalar or bool' \
 	'receiver must be a pointer to a live Swift value' \
 	'requires an Odin context'; do
 	if ! grep -Fq "$diagnostic" "$build/invalid.log"; then

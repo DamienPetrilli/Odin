@@ -38,6 +38,28 @@ ints_received :: proc(task: swift.Task, values: []int, converted: bool) {
 	scalar_calls += 1
 }
 
+scalar_bits :: proc(value: $T) -> u64 {
+	when T == f32 {
+		return u64(transmute(u32)value)
+	} else {
+		return u64(value)
+	}
+}
+
+width_received :: proc(task: swift.Task, value: $T) {
+	assert(scalar_bits(value) == take_expected(task))
+	scalar_calls += 1
+}
+
+check_width :: proc(values: []$T, $echo: $Echo, $later: $Later) -> int {
+	for value in values {
+		assert(scalar_bits(echo(value)) == scalar_bits(value))
+		task := later(value, width_received) or_else panic("Async scalar width")
+		track_task(task, scalar_bits(value))
+	}
+	return len(values)
+}
+
 check_scalars :: proc() {
 	#assert(size_of(int) == 8 && size_of(uint) == 8 && size_of(bool) == 1)
 	#assert(size_of(fixture.NativeWords) == 16 && offset_of(fixture.NativeWords, unsigned) == 8)
@@ -128,6 +150,13 @@ check_scalars :: proc() {
 	track_task(task)
 	expected += 1
 	input[0] = 0
+	expected += check_width([]i8{min(i8), max(i8), 1}, fixture.echo_int8, fixture.echo_int8_later)
+	expected += check_width([]u8{min(u8), max(u8), 1}, fixture.echo_uint8, fixture.echo_uint8_later)
+	expected += check_width([]i16{min(i16), max(i16), 1}, fixture.echo_int16, fixture.echo_int16_later)
+	expected += check_width([]u16{min(u16), max(u16), 1}, fixture.echo_uint16, fixture.echo_uint16_later)
+	expected += check_width([]i32{min(i32), max(i32), 1}, fixture.echo_int32, fixture.echo_int32_later)
+	expected += check_width([]u32{min(u32), max(u32), 1}, fixture.echo_uint32, fixture.echo_uint32_later)
+	expected += check_width([]f32{0, -1.25, transmute(f32)u32(0x80000000), transmute(f32)u32(0x7fc01234)}, fixture.echo_float, fixture.echo_float_later)
 	deadline := time.tick_now()
 	for scalar_calls != expected {
 		assert(time.tick_since(deadline) < 5*time.Second)

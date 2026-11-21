@@ -25,7 +25,7 @@ gb_internal void swift_import_struct_fields(SwiftImportNominal *type, JsonValue 
 		SwiftImportField item = {};
 		item.swift_name = swift_import_string(field, "name");
 		if (!swift_import_identifier(item.swift_name) || children.count != 1 ||
-		    !swift_import_api_type(children[0], &item.type, types) ||
+		    !swift_import_api_type(children[0], &item.type, types) || item.type.scalar_only ||
 		    (item.type.nominal && !swift_import_kind(item.type, SwiftImportValue_String))) return;
 		item.name = swift_import_name(item.swift_name, true);
 		array_add(&type->fields, item);

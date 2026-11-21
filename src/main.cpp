@@ -425,6 +425,7 @@ enum BuildFlagKind {
 	BuildFlag_ShowUnused,
 	BuildFlag_ShowUnusedWithLocation,
 	BuildFlag_ShowMoreTimings,
+	BuildFlag_ShowSwiftImports,
 	BuildFlag_ShowImportGraph,
 	BuildFlag_ExportTimings,
 	BuildFlag_ExportTimingsFile,
@@ -629,6 +630,7 @@ gb_internal bool parse_build_flags(Array<String> args) {
 	add_flag(&build_flags, BuildFlag_OptimizationMode,        str_lit("o"),                         BuildFlagParam_String,  Command__does_build);
 	add_flag(&build_flags, BuildFlag_ShowTimings,             str_lit("show-timings"),              BuildFlagParam_None,    Command__does_check);
 	add_flag(&build_flags, BuildFlag_ShowMoreTimings,         str_lit("show-more-timings"),         BuildFlagParam_None,    Command__does_check);
+	add_flag(&build_flags, BuildFlag_ShowSwiftImports,         str_lit("show-swift-imports"),        BuildFlagParam_None,    Command__does_check);
 	add_flag(&build_flags, BuildFlag_ShowImportGraph,         str_lit("show-import-graph"),         BuildFlagParam_None,    Command__does_check);
 	add_flag(&build_flags, BuildFlag_ExportTimings,           str_lit("export-timings"),            BuildFlagParam_String,  Command__does_check);
 	add_flag(&build_flags, BuildFlag_ExportTimingsFile,       str_lit("export-timings-file"),       BuildFlagParam_String,  Command__does_check);
@@ -995,6 +997,10 @@ gb_internal bool parse_build_flags(Array<String> args) {
 							GB_ASSERT(value.kind == ExactValue_Invalid);
 							build_context.show_timings = true;
 							build_context.show_more_timings = true;
+							break;
+						case BuildFlag_ShowSwiftImports:
+							GB_ASSERT(value.kind == ExactValue_Invalid);
+							build_context.show_swift_imports = true;
 							break;
 						case BuildFlag_ShowImportGraph:
 							GB_ASSERT(value.kind == ExactValue_Invalid);
@@ -3487,6 +3493,10 @@ gb_internal int print_show_help(String const arg0, String command, String option
 
 		if (print_flag("-show-system-calls")) {
 			print_usage_line(2, "Prints the whole command and arguments for calls to external tools like linker and assembler.");
+		}
+
+		if (print_flag("-show-swift-imports")) {
+			print_usage_line(2, "Shows imported Swift signatures, Odin types, ownership and skipped bindings for the target.");
 		}
 
 		if (print_flag("-show-import-graph")) {

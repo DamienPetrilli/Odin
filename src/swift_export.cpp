@@ -37,18 +37,7 @@ gb_internal String swift_export_name(String name, bool upper) {
 	return make_string_c(result);
 }
 
-gb_internal char const *swift_export_scalar(Type *type) {
-	if (type == t_i64)  return "Swift.Int64";
-	if (type == t_u64)  return "Swift.UInt64";
-	if (type == t_f64)  return "Swift.Double";
-	if (type == t_bool) return "Swift.Bool";
-	if (type == t_int)  return "Swift.Int";
-	if (type == t_uint) return "Swift.UInt";
-	return nullptr;
-}
-
-gb_internal char const *swift_export_enum_raw_type(Type *type) {
-	Type *raw = base_type(base_type(type)->Enum.base_type);
+gb_internal char const *swift_export_integer(Type *raw) {
 	if (raw == t_i8)   return "Swift.Int8";
 	if (raw == t_u8)   return "Swift.UInt8";
 	if (raw == t_i16)  return "Swift.Int16";
@@ -60,6 +49,17 @@ gb_internal char const *swift_export_enum_raw_type(Type *type) {
 	if (raw == t_int)  return "Swift.Int";
 	if (raw == t_uint) return "Swift.UInt";
 	return nullptr;
+}
+
+gb_internal char const *swift_export_scalar(Type *type) {
+	if (type == t_f32)  return "Swift.Float";
+	if (type == t_f64)  return "Swift.Double";
+	if (type == t_bool) return "Swift.Bool";
+	return swift_export_integer(type);
+}
+
+gb_internal char const *swift_export_enum_raw_type(Type *type) {
+	return swift_export_integer(base_type(base_type(type)->Enum.base_type));
 }
 
 // Verified against the target Swift compiler before emitting entry points.
@@ -97,7 +97,7 @@ gb_internal bool swift_export_check_type(Type *type, bool parameter) {
 	}
 	Type *bt = base_type(type);
 	if (parameter && type == bt && bt->kind == Type_Slice) {
-		return swift_export_scalar(bt->Slice.elem) != nullptr && bt->Slice.elem != t_bool;
+		return is_swift_abi_slice_parameter(type);
 	}
 	if (type->kind != Type_Named || !is_type_supported_by_swift_abi(type)) return false;
 	for (Type *existing : swift_export_types) if (existing == type) return true;
@@ -118,7 +118,8 @@ gb_internal bool swift_export_check_type(Type *type, bool parameter) {
 	} else if (bt->kind == Type_Struct) {
 		// The target Swift compiler verifies field offsets and native lowering.
 		for (Entity *field : bt->Struct.fields) {
-			if (!swift_export_scalar(field->type) || is_blank_ident(field->token)) return false;
+			if ((!is_swift_abi_word_field(field->type) && field->type != t_bool) ||
+			    !swift_export_scalar(field->type) || is_blank_ident(field->token)) return false;
 		}
 	} else return false;
 	array_add(&swift_export_types, type);
@@ -212,7 +213,7 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 		}
 		if (type->Proc.result_count) valid &= swift_export_check_type(type->Proc.results->Tuple.variables[0]->type, false);
 		if (!valid) {
-			error(e->token, "Swift export: expected a synchronous Swift procedure without ABI parameter attributes, with i64, u64, f64, bool, int, uint, integer enums, flat scalar structs, uuid.Identifier, or borrowed scalar slice parameters, and at most one scalar/enum/struct/UUID result");
+			error(e->token, "Swift export: expected a synchronous Swift procedure without ABI parameter attributes, with supported numeric scalars, bool, integer enums, flat scalar structs, uuid.Identifier, or borrowed scalar slice parameters, and at most one scalar/enum/struct/UUID result");
 			continue;
 		}
 		SwiftExportProcedure proc = {};

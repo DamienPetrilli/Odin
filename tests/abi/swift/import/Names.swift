@@ -43,8 +43,8 @@ public func failWithoutPublicError() async throws -> Swift.UInt64 {
 }
 
 public func selectFirst(_ value: Swift.UInt64) -> Swift.UInt64 { value + 1 }
-public func selectFirst(_ value: Swift.Float) -> Swift.Float { value }
-public func selectLast(_ value: Swift.Float) -> Swift.Float { value }
+public func selectFirst(_ value: Swift.Float16) -> Swift.Float16 { value }
+public func selectLast(_ value: Swift.Float16) -> Swift.Float16 { value }
 public func selectLast(_ value: Swift.UInt64) -> Swift.UInt64 { value + 2 }
 
 @available(macOS 99, iOS 99, *)

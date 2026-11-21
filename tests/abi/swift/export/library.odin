@@ -121,3 +121,18 @@ modify_native_words :: proc "swift" (signed: []int, unsigned: []uint) {
 	for &value in signed { value = -73 }
 	for &value in unsigned { value = max(uint) }
 }
+
+@(export)
+identity_i8 :: proc "swift" (value: i8) -> i8 { return reply.identity_int8(value) }
+@(export)
+identity_u8 :: proc "swift" (value: u8) -> u8 { return reply.identity_uint8(value) }
+@(export)
+identity_i16 :: proc "swift" (value: i16) -> i16 { return reply.identity_int16(value) }
+@(export)
+identity_u16 :: proc "swift" (value: u16) -> u16 { return reply.identity_uint16(value) }
+@(export)
+identity_i32 :: proc "swift" (value: i32) -> i32 { return reply.identity_int32(value) }
+@(export)
+identity_u32 :: proc "swift" (value: u32) -> u32 { return reply.identity_uint32(value) }
+@(export)
+identity_f32 :: proc "swift" (value: f32) -> f32 { return reply.identity_float(value) }

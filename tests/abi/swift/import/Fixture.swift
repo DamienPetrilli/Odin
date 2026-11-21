@@ -751,8 +751,10 @@ public struct ScalarState {
 	}
 	public static var canProceed: Bool { true }
 }
-public func unsupportedScalarArgument(_ value: Float) -> Int { Int(value) }
-public func unsupportedScalarResult(_ value: Int) -> Float { Float(value) }
+public func unsupportedScalarArgument(_ value: Float16) -> Int { Int(value) }
+public func unsupportedScalarResult(_ value: Int) -> Float16 { Float16(value) }
+public func narrowArray(_ values: [Int16]) -> [Int16] { values }
+public func optionalFloat(_ value: Float?) -> Float? { value }
 public func unsupportedBoolArray(_ values: [Bool]) -> [Bool] { values }
 
 // Bool fields have byte storage but may share native integer registers.
@@ -1091,4 +1093,40 @@ public func setDoubleBits(_ values: Set<Double>) -> [UInt64] { values.map { $0.b
 public func setWordsLater(_ values: Set<UInt64>) async -> UInt64 {
 	await Task.yield()
 	return UInt64(values.count)
+}
+
+public func echoInt8(_ value: Int8) -> Int8 { value }
+public func echoInt8Later(_ value: Int8) async -> Int8 {
+	await Task.yield()
+	return value
+}
+public func echoUInt8(_ value: UInt8) -> UInt8 { value }
+public func echoUInt8Later(_ value: UInt8) async -> UInt8 {
+	await Task.yield()
+	return value
+}
+public func echoInt16(_ value: Int16) -> Int16 { value }
+public func echoInt16Later(_ value: Int16) async -> Int16 {
+	await Task.yield()
+	return value
+}
+public func echoUInt16(_ value: UInt16) -> UInt16 { value }
+public func echoUInt16Later(_ value: UInt16) async -> UInt16 {
+	await Task.yield()
+	return value
+}
+public func echoInt32(_ value: Int32) -> Int32 { value }
+public func echoInt32Later(_ value: Int32) async -> Int32 {
+	await Task.yield()
+	return value
+}
+public func echoUInt32(_ value: UInt32) -> UInt32 { value }
+public func echoUInt32Later(_ value: UInt32) async -> UInt32 {
+	await Task.yield()
+	return value
+}
+public func echoFloat(_ value: Float) -> Float { value }
+public func echoFloatLater(_ value: Float) async -> Float {
+	await Task.yield()
+	return value
 }
