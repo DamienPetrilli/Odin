@@ -15,14 +15,21 @@ struct SwiftImportRejection {
 	String name, reason, title;
 };
 
+struct SwiftImportNominal;
+
+struct SwiftImportDependency {
+	String module, directory;
+};
+
 struct SwiftImportPackage {
 	String module, path, library;
 	String directory;
 	Array<SwiftImportRejection> unsupported;
+	Array<SwiftImportNominal *> plain_records;
+	Array<SwiftImportDependency> dependencies;
+	SwiftImportPackage *parent; // Only used during recursive module inspection.
 	bool framework;
 };
-
-struct SwiftImportNominal;
 
 enum SwiftImportValueKind {
 	SwiftImportValue_Opaque,
@@ -79,6 +86,7 @@ struct SwiftImportCase {
 struct SwiftImportNominal {
 	String name, swift_name, usr, symbol, mangled, indirect_llvm;
 	String generic_parent, generic_suffix;
+	String external_name, external_module;
 	String date_getter, date_initializer;
 	String uuid_getter, uuid_initializer;
 	String set_initializer;
@@ -325,6 +333,7 @@ gb_internal SwiftImportType swift_import_nominal_type(SwiftImportNominal *type) 
 		return scalar;
 	}
 	char const *odin = type->kind == SwiftImportValue_String ? "string" : alloc_cstring(permanent_allocator(), type->name);
+	if (type->external_name.len) odin = gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "_swift_dependency_%.*s.%.*s", LIT(type->external_module), LIT(type->external_name));
 	if (swift_import_slice(type) || type->kind == SwiftImportValue_Set) odin = gb_string_appendc(gb_string_make(permanent_allocator(), "[]"), swift_import_slice_element(type));
 	char const *llvm = type->kind == SwiftImportValue_String ? "{ i64, ptr }" : type->kind == SwiftImportValue_Opaque ? "ptr noalias" : "ptr";
 	return {alloc_cstring(permanent_allocator(), type->swift_name), odin, llvm, type};
@@ -1603,7 +1612,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 gb_internal bool swift_import_check_type_names(Ast *node, Array<SwiftImportNominal *> const &types) {
 	for_array(i, types) {
 		auto type = types[i];
-		if (type->is_scalar || type->is_tuple) continue;
+		if (type->is_scalar || type->is_tuple || type->external_name.len) continue;
 		if (swift_import_reserved_name(type->name)) {
 			syntax_error(node, "Swift import: type '%.*s' conflicts with a name used by generated Odin declarations", LIT(type->name));
 			return false;
@@ -1627,6 +1636,134 @@ gb_internal bool swift_import_add_name(Ast *node, Array<String> *names, String n
 		}
 	}
 	array_add(names, name);
+	return true;
+}
+
+gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg);
+
+// Called with the import mutex held. Dependencies use the same library and
+// module identity as a direct import, irrespective of source import order.
+gb_internal bool swift_import_load(Ast *node, SwiftImportPackage *parent, String module, String module_path, bool allow_framework, SwiftImportPackage *result) {
+	String library = {};
+	char const *suffixes[] = {".o", ".a"};
+	for (isize i = 0; i < 2; i++) {
+		String name = concatenate_strings(permanent_allocator(), module, make_string_c(suffixes[i]));
+		if (i == 1) name = concatenate_strings(permanent_allocator(), str_lit("lib"), name);
+		String candidate = swift_import_path(module_path, alloc_cstring(permanent_allocator(), name));
+		if (gb_file_exists(alloc_cstring(permanent_allocator(), candidate))) {
+			if (library.len) {
+				syntax_error(node, "Swift import: ambiguous object/archive for '%.*s'", LIT(module));
+				return false;
+			}
+			library = candidate;
+		}
+	}
+	bool framework = library.len == 0;
+	if (framework) {
+		String module_file = swift_import_path(module_path, alloc_cstring(permanent_allocator(), concatenate_strings(permanent_allocator(), module, str_lit(".swiftmodule"))));
+		if (!allow_framework || gb_file_exists(alloc_cstring(permanent_allocator(), module_file))) {
+			syntax_error(node, "Swift import: expected %.*s.o or lib%.*s.a beside the module", LIT(module), LIT(module));
+			return false;
+		}
+		library = concatenate3_strings(permanent_allocator(), str_lit("system:"), module, str_lit(".framework"));
+	}
+	for (auto const &pkg : swift_import_packages) {
+		if (pkg.module == module && (pkg.framework || pkg.path == module_path) && pkg.library == library) {
+			*result = pkg;
+			return true;
+		}
+	}
+	if (!swift_import_packages.allocator.proc) {
+		array_init(&swift_import_packages, permanent_allocator());
+		array_init(&swift_import_directories, permanent_allocator());
+	}
+	for (auto owner = parent; owner; owner = owner->parent) {
+		if (owner->module == module && owner->path == module_path) {
+			syntax_error(node, "Swift import: cyclic dependency on '%.*s'", LIT(module));
+			return false;
+		}
+	}
+	String temp = temporary_directory(permanent_allocator());
+	String pattern = swift_import_path(temp, "odin-swift-XXXXXX");
+	char *directory = alloc_cstring(permanent_allocator(), pattern);
+	if (!mkdtemp(directory)) {
+		syntax_error(node, "Swift import: cannot create temporary directory");
+		return false;
+	}
+	String path = path_to_full_path(permanent_allocator(), make_string_c(directory));
+	array_add(&swift_import_directories, path);
+	SwiftImportPackage pkg = {};
+	pkg.module = module;
+	pkg.path = module_path;
+	pkg.library = library;
+	pkg.directory = path;
+	pkg.framework = framework;
+	pkg.parent = parent;
+	if (!swift_import_generate(node, &pkg)) return false;
+	pkg.parent = nullptr;
+	array_add(&swift_import_packages, pkg);
+	*result = pkg;
+	return true;
+}
+
+// The digester supplies the qualified spelling for discovery and the USR for
+// identity. Only reuse layouts verified while importing their defining module.
+gb_internal void swift_import_record_references(JsonValue *api, String module, StringMap<Array<String>> *references) {
+	if (swift_import_string(api, "kind") == "TypeNominal") {
+		String printed = swift_import_string(api, "printedName");
+		isize dot = swift_import_index(printed, str_lit("."));
+		if (dot > 0) {
+			String owner = substring(printed, 0, dot);
+			String usr = swift_import_string(api, "usr");
+			if (owner != module && owner != "Swift" && usr.len && swift_import_identifier(owner)) {
+				auto list = string_map_get(references, owner);
+				if (!list) {
+					string_map_set(references, owner, array_make<String>(temporary_allocator()));
+					list = string_map_get(references, owner);
+				}
+				bool seen = false;
+				for (String existing : *list) seen |= existing == usr;
+				if (!seen) array_add(list, usr);
+			}
+		}
+	}
+	for (auto child : swift_import_array(api, "children")) swift_import_record_references(child, module, references);
+}
+
+gb_internal bool swift_import_external_records(Ast *node, SwiftImportPackage *pkg, JsonValue *api, Array<SwiftImportNominal *> *types) {
+	if (pkg->framework) return true;
+	StringMap<Array<String>> references = {};
+	string_map_init(&references);
+	defer (string_map_destroy(&references));
+	swift_import_record_references(api, pkg->module, &references);
+	for (auto const &entry : references) {
+		String owner = entry.key;
+		String file = concatenate_strings(temporary_allocator(), owner, str_lit(".swiftmodule"));
+		String path = swift_import_path(pkg->path, alloc_cstring(temporary_allocator(), file));
+		if (!gb_file_exists(alloc_cstring(temporary_allocator(), path))) continue;
+		String object = concatenate_strings(temporary_allocator(), owner, str_lit(".o"));
+		String archive = concatenate3_strings(temporary_allocator(), str_lit("lib"), owner, str_lit(".a"));
+		if (!gb_file_exists(alloc_cstring(temporary_allocator(), swift_import_path(pkg->path, alloc_cstring(temporary_allocator(), object)))) &&
+		    !gb_file_exists(alloc_cstring(temporary_allocator(), swift_import_path(pkg->path, alloc_cstring(temporary_allocator(), archive))))) continue;
+		SwiftImportPackage dep = {};
+		if (!swift_import_load(node, pkg, owner, pkg->path, false, &dep)) return false;
+		isize index = pkg->dependencies.count;
+		for (auto record : dep.plain_records) {
+			bool used = false;
+			for (String usr : entry.value) used |= usr == record->usr;
+			if (!used) continue;
+			if (pkg->dependencies.count == index) {
+				if (!pkg->dependencies.allocator.proc) array_init(&pkg->dependencies, permanent_allocator());
+				array_add(&pkg->dependencies, SwiftImportDependency{owner, dep.directory});
+			}
+			auto type = gb_alloc_item(permanent_allocator(), SwiftImportNominal);
+			*type = *record;
+			type->external_name = record->name;
+			type->external_module = owner;
+			type->name = make_string_c(gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "_swift_record_%td", types->count));
+			array_add(types, type);
+		}
+	}
 	return true;
 }
 
@@ -1746,6 +1883,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		array_add(&types, type);
 	}
 
+	if (!swift_import_external_records(node, pkg, api, &types)) return false;
 	if (!swift_import_check_type_names(node, types)) return false;
 
 	auto functions = array_make<SwiftImportFunction>(permanent_allocator());
@@ -1971,12 +2109,13 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	for (auto type : types) if (type->kind == SwiftImportValue_Set && type->argument->is_scalar) inspect_set_storage = true;
 	gbString probe = gb_string_make(permanent_allocator(), "");
 	probe = gb_string_append_fmt(probe, "import %.*s\n", LIT(pkg->module));
+	for (auto const &dep : pkg->dependencies) probe = gb_string_append_fmt(probe, "import %.*s\n", LIT(dep.module));
 	bool probe_ui = false;
 	for (auto const &fn : functions) for (auto const &param : fn.parameters) probe_ui |= param.objc_controller;
 	if (probe_ui) probe = gb_string_appendc(probe, "import UIKit\n");
 	for (auto type : types) if (type->is_date || type->is_uuid) { probe = gb_string_appendc(probe, "import Foundation\n"); break; }
 	for_array(i, types) {
-		if (types[i]->is_template) continue;
+		if (types[i]->is_template || types[i]->external_name.len) continue;
 		if (types[i]->is_date) probe = swift_import_date_probe(probe, types[i], i);
 		if (types[i]->is_uuid) probe = swift_import_uuid_probe(probe, types[i], i);
 		if (types[i]->kind == SwiftImportValue_Set) probe = swift_import_set_probe(probe, types[i], i);
@@ -2065,7 +2204,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	defer (LLVMDisposeTargetData(layout));
 	for_array(i, types) {
 		auto type = types[i];
-		if (type->is_template) continue;
+		if (type->is_template || type->external_name.len) continue;
 		if (type->is_tuple || type->is_scalar) {
 			type->supported = true;
 		} else if (type->kind == SwiftImportValue_String) {
@@ -2372,6 +2511,10 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	}
 	source = gb_string_append_fmt(source, "package swift_%.*s_%llx\n\n",
 		LIT(pkg->module), cast(unsigned long long)fnv64a(identity.text, identity.len));
+	for_array(i, pkg->dependencies) {
+		String path = quote_to_ascii(permanent_allocator(), swift_import_relative(pkg->directory, pkg->dependencies[i].directory));
+		source = gb_string_append_fmt(source, "import _swift_dependency_%.*s %.*s\n", LIT(pkg->dependencies[i].module), LIT(path));
+	}
 	if (has_ui) source = gb_string_appendc(source, "import _swift_ui \"vendor:darwin/UIKit\"\nimport _swift_ns \"core:sys/darwin/Foundation\"\n");
 	if (has_scalar_async || has_sync_throwing) source = gb_string_appendc(source, "import \"base:intrinsics\"\n");
 	if (has_value_async || has_set) source = gb_string_appendc(source, "import \"base:runtime\"\n");
@@ -2485,6 +2628,12 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		}
 	}
 	for (auto const &rejection : lookup_rejections) swift_import_reject(pkg, rejection.name, rejection.reason, rejection.title);
+	for (auto type : types) {
+		if (type->supported && type->is_record && type->projected && !type->owns && !type->is_tuple && !type->external_name.len) {
+			if (!pkg->plain_records.allocator.proc) array_init(&pkg->plain_records, permanent_allocator());
+			array_add(&pkg->plain_records, type);
+		}
+	}
 	if (!swift_import_write(node, swift_import_path(pkg->directory, "import.odin"), source)) return false;
 	if (report) {
 		for (auto const &rejection : pkg->unsupported) {
@@ -2494,7 +2643,16 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		}
 		array_sort(rows, swift_import_report_compare);
 		gb_printf("Swift imports: %.*s (%.*s)\n", LIT(pkg->module), LIT(build_context.metrics.target_triplet));
-		for (String row : rows) gb_printf("%.*s", LIT(row));
+		for (String row : rows) {
+			// The import alias is private to the generated file. Show the module name to callers.
+			String prefix = str_lit("_swift_dependency_");
+			isize start;
+			while ((start = swift_import_index(row, prefix)) >= 0 && pkg->dependencies.count) {
+				gb_printf("%.*s", cast(int)start, row.text);
+				row = substring(row, start+prefix.len, row.len);
+			}
+			gb_printf("%.*s", LIT(row));
+		}
 	}
 	return true;
 }
@@ -2529,59 +2687,11 @@ gb_internal bool swift_import_setup(Ast *node, String base_dir, String spec, Str
 	}
 	String module_path = slash < 0 ? base_dir : get_fullpath_relative(permanent_allocator(), base_dir, substring(spec, 0, slash), nullptr);
 	module_path = path_to_full_path(permanent_allocator(), module_path);
-	String library = {};
-	char const *suffixes[] = {".o", ".a"};
-	for (isize i = 0; i < 2; i++) {
-		String name = concatenate_strings(permanent_allocator(), module, make_string_c(suffixes[i]));
-		if (i == 1) name = concatenate_strings(permanent_allocator(), str_lit("lib"), name);
-		String candidate = swift_import_path(module_path, alloc_cstring(permanent_allocator(), name));
-		if (gb_file_exists(alloc_cstring(permanent_allocator(), candidate))) {
-			if (library.len) {
-				syntax_error(node, "Swift import: ambiguous object/archive for '%.*s'", LIT(module));
-				return false;
-			}
-			library = candidate;
-		}
-	}
-	bool framework = library.len == 0;
-	if (framework) {
-		String module_file = swift_import_path(module_path, alloc_cstring(permanent_allocator(), concatenate_strings(permanent_allocator(), module, str_lit(".swiftmodule"))));
-		if (slash >= 0 || gb_file_exists(alloc_cstring(permanent_allocator(), module_file))) {
-			syntax_error(node, "Swift import: expected %.*s.o or lib%.*s.a beside the module", LIT(module), LIT(module));
-			return false;
-		}
-		library = concatenate3_strings(permanent_allocator(), str_lit("system:"), module, str_lit(".framework"));
-	}
 	mutex_lock(&swift_import_mutex);
 	defer (mutex_unlock(&swift_import_mutex));
-	for (auto const &pkg : swift_import_packages) {
-		if (pkg.module == module && (pkg.framework || pkg.path == module_path) && pkg.library == library) {
-			*import_path = pkg.directory;
-			return true;
-		}
-	}
-	if (!swift_import_packages.allocator.proc) {
-		array_init(&swift_import_packages, permanent_allocator());
-		array_init(&swift_import_directories, permanent_allocator());
-	}
-	String temp = temporary_directory(permanent_allocator());
-	String pattern = swift_import_path(temp, "odin-swift-XXXXXX");
-	char *directory = alloc_cstring(permanent_allocator(), pattern);
-	if (!mkdtemp(directory)) {
-		syntax_error(node, "Swift import: cannot create temporary directory");
-		return false;
-	}
-	String path = path_to_full_path(permanent_allocator(), make_string_c(directory));
-	array_add(&swift_import_directories, path);
 	SwiftImportPackage pkg = {};
-	pkg.module = module;
-	pkg.path = module_path;
-	pkg.library = library;
-	pkg.directory = path;
-	pkg.framework = framework;
-	if (!swift_import_generate(node, &pkg)) return false;
-	array_add(&swift_import_packages, pkg);
-	*import_path = path;
+	if (!swift_import_load(node, nullptr, module, module_path, slash < 0, &pkg)) return false;
+	*import_path = pkg.directory;
 	return true;
 #endif
 }

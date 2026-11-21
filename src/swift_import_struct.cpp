@@ -3,7 +3,7 @@
 // Other records keep their metadata-driven, explicitly owned representation.
 
 gb_internal void swift_import_struct_fields(SwiftImportNominal *type, JsonValue *graph, Array<SwiftImportNominal *> *types) {
-	if (!type->is_frozen || type->is_enum || type->is_template || type->argument || type->is_scalar || !type->declaration) return;
+	if (type->external_name.len || !type->is_frozen || type->is_enum || type->is_template || type->argument || type->is_scalar || !type->declaration) return;
 	for (auto attribute : swift_import_array(type->declaration, "declAttributes")) {
 		if (attribute->kind != Json_String || (attribute->string != "Frozen" && attribute->string != "Available")) return;
 	}
@@ -156,9 +156,14 @@ gb_internal gbString swift_import_emit_owned_struct(gbString source, SwiftImport
 gb_internal gbString swift_import_emit_struct(gbString source, SwiftImportNominal *type) {
 	if (type->owns) return swift_import_emit_owned_struct(source, type);
 	String name = type->name;
-	source = gb_string_append_fmt(source, "%.*s :: struct {\n", LIT(name));
-	for (auto const &field : type->fields) source = gb_string_append_fmt(source, "\t%.*s: %s,\n", LIT(field.name), field.type.odin);
-	source = gb_string_append_fmt(source, "}\n#assert(size_of(%.*s) == %llu && align_of(%.*s) == %llu)\n", LIT(name), cast(unsigned long long)(type->size ? type->stride : 0), LIT(name), cast(unsigned long long)type->alignment);
+	if (type->external_name.len) {
+		source = gb_string_append_fmt(source, "@(private)\n%.*s :: _swift_dependency_%.*s.%.*s\n", LIT(name), LIT(type->external_module), LIT(type->external_name));
+	} else {
+		source = gb_string_append_fmt(source, "%.*s :: struct {\n", LIT(name));
+		for (auto const &field : type->fields) source = gb_string_append_fmt(source, "\t%.*s: %s,\n", LIT(field.name), field.type.odin);
+		source = gb_string_appendc(source, "}\n");
+	}
+	source = gb_string_append_fmt(source, "#assert(size_of(%.*s) == %llu && align_of(%.*s) == %llu)\n", LIT(name), cast(unsigned long long)(type->size ? type->stride : 0), LIT(name), cast(unsigned long long)type->alignment);
 	for (auto const &field : type->fields) source = gb_string_append_fmt(source, "#assert(offset_of(%.*s, %.*s) == %llu)\n", LIT(name), LIT(field.name), cast(unsigned long long)field.offset);
 	source = gb_string_append_fmt(source, "@(private)\n_swift_native_%.*s :: %.*s\n", LIT(name), LIT(name));
 	// A nested Swift payload can reuse tail padding. Only touch stored fields.
