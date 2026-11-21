@@ -34,7 +34,8 @@ imports: imports are resolved during parsing.
 A synchronous free function returning two to four numeric or Bool scalars maps
 to ordinary Odin multiple returns. For example, `low, high := example.bounds(x)`
 calls Swift's `bounds(_:) -> (lower: UInt64, upper: UInt64)`. Each result is
-copied in registers. Run with `-show-swift-imports` to see the result names.
+copied in registers. Synchronous pointer and buffer parameters use the same typed
+pointers and borrowed slices with these results. Run with `-show-swift-imports` to see the result names.
 
 Swift names become snake case, so `addLater` becomes `add_later`:
 

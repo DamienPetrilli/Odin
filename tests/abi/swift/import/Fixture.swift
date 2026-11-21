@@ -1257,6 +1257,20 @@ public func mixedTuple(_ x: Int8, _ y: UInt16, _ z: Bool, _ w: Float) -> (Int8, 
 	(x, y, z, w)
 }
 public func indirectTuple() -> (Int, Int, Int, Int, Int) { (0, 1, 2, 3, 4) }
+public func textBounds(_ text: String) -> (UInt8, UInt16) { (0, 0) }
 public func ownedTuple() -> (String, UInt64) { ("text", 0) }
 public func tupleCaseCollision() -> (pageID: UInt64, page_id: UInt64) { (0, 1) }
 public func asyncTuple() async -> (UInt64, UInt64) { (0, 1) }
+
+public func inspectPrefix(_ bytes: UnsafeBufferPointer<UInt8>, _ needle: UnsafePointer<UInt8>) -> (index: Int, found: Bool) {
+	guard let index = bytes.firstIndex(of: needle.pointee) else { return (bytes.count, false) }
+	return (index, true)
+}
+
+public func editPrefix(_ bytes: UnsafeMutableBufferPointer<UInt8>, _ counter: UnsafeMutablePointer<UInt16>) -> (previous: UInt8, count: UInt16) {
+	guard !bytes.isEmpty else { return (0, counter.pointee) }
+	let previous = bytes[0]
+	bytes[0] &+= 1
+	counter.pointee &+= 1
+	return (previous, counter.pointee)
+}

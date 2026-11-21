@@ -84,7 +84,23 @@ check_optional_width :: proc(values: []$T, $echo: $Echo, $later: $Later) -> int 
 	return 1+len(values)
 }
 
+check_tuple_borrows :: proc() {
+	bytes := [4]u8{19, 23, 41, 47}
+	needle: u8 = 41
+	index, found := fixture.inspect_prefix(bytes[1:3], &needle)
+	assert(found && index == 1)
+	index, found = fixture.inspect_prefix(nil, &needle)
+	assert(!found && index == 0)
+	counter: u16 = 0xfffe
+	old, count := fixture.edit_prefix(bytes[1:3], &counter)
+	assert(old == 23 && count == counter && count == 0xffff)
+	assert(bytes == [4]u8{19, 24, 41, 47})
+	old, count = fixture.edit_prefix(nil, &counter)
+	assert(old == 0 && counter == 0xffff && count == counter)
+}
+
 check_scalars :: proc() {
+	check_tuple_borrows()
 	lo, hi := fixture.packed_tuple(0xfe, 0xfcba)
 	assert(lo == 0xfe && hi == 0xfcba)
 	for flag in ([]bool{true, false}) {

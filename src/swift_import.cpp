@@ -592,8 +592,8 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 		return false;
 	}
 	for (auto const &p : fn->parameters) {
-		if (p.type.nominal || p.borrow != SwiftImportBorrow_None) {
-			fn->rejection = str_lit("tuple results with converted or borrowed parameters are unsupported");
+		if (p.type.nominal) {
+			fn->rejection = str_lit("tuple results with converted parameters are unsupported");
 			return false;
 		}
 	}

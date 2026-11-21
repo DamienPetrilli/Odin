@@ -84,7 +84,7 @@ if [[ "$sdk" != macosx ]]; then cp "$here/controller.odin" "$build/names/"; fi
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/names-test"
 
 # Check rejections in one invocation on every target, including link-only iOS runs.
-rejected=(indirect_tuple owned_tuple tuple_case_collision async_tuple ArrayRecord_recursive_result BoolTail_toggle TextRecord_clear RawCollision_raw_value RawCode_replace async_buffer returned_buffer generic throwing isolated_sync overloaded future inout_value typed_throwing
+rejected=(indirect_tuple text_bounds owned_tuple tuple_case_collision async_tuple ArrayRecord_recursive_result BoolTail_toggle TextRecord_clear RawCollision_raw_value RawCode_replace async_buffer returned_buffer generic throwing isolated_sync overloaded future inout_value typed_throwing
 	unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields
 	unsupported_scalar_argument unsupported_scalar_result narrow_array unsupported_bool_array unsupported_set_result
 	unsupported_optional_set unsupported_bool_set client_only new_number new_number_for_ NewValue
@@ -113,6 +113,7 @@ for name in "${rejected[@]}"; do expect_diagnostic "Swift import: '$name':"; don
 for name in indirect_tuple owned_tuple; do
 	expect_diagnostic "'$name': tuple results require two to four numeric or Bool scalars"
 done
+expect_diagnostic "'text_bounds': tuple results with converted parameters are unsupported"
 expect_diagnostic "'tuple_case_collision': tuple result labels collide after Odin name conversion"
 expect_diagnostic "'async_tuple': tuple results currently require a synchronous free function"
 platform=iOS
