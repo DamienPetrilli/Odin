@@ -30,6 +30,9 @@ check_owned_records :: proc() {
 	context.allocator = {procedure = value_allocator, data = &state}
 	for text in ([]string{"", "small", "Café 📚 with heap-allocated UTF-8", "before\x00after"}) {
 		input := fixture.TextRecord{title = text, count = -73, flag = true}
+		adjusted := fixture.TextRecord_adjusted(input, 9) or_else panic("Owned record member")
+		assert(adjusted.count == -64 && adjusted.title == text && input.count == -73)
+		fixture.TextRecord_destroy(adjusted)
 		value := fixture.echo_text_record(input) or_else panic("Owned record")
 		assert(value.title == text && value.count == -73 && value.flag)
 		copy := fixture.TextRecord_copy(value) or_else panic("Owned record copy")
@@ -73,11 +76,12 @@ check_owned_records :: proc() {
 		text := strings.clone(request.expected)
 		_ = fixture.echo_text_record_later({text, 73, true}, text_record_received) or_else panic("Async owned record")
 		_ = fixture.echo_wide_text_record_later({true, text, "second", 73}, wide_text_record_received) or_else panic("Async indirect owned record")
+		_ = fixture.TextRecord_adjusted_later({text, 68, true}, 5, text_record_received) or_else panic("Async owned receiver")
 		delete(text) // Swift captures its own values before either start returns.
 	}
 	deadline := time.tick_now()
-	for request.calls != 2 && time.tick_since(deadline) < 10*time.Second {
+	for request.calls != 3 && time.tick_since(deadline) < 10*time.Second {
 		cf.RunLoopRunInMode(cf.kRunLoopDefaultMode, 0.01, false)
 	}
-	assert(request.calls == 2 && state.allocations == state.frees)
+	assert(request.calls == 3 && state.allocations == state.frees)
 }

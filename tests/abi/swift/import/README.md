@@ -189,6 +189,7 @@ mode := example.echo_mode(.Running)
 assert(mode == .Running)
 code, present := example.Code_init_raw_value(20).?
 assert(present && code == .Second)
+assert(example.Code_raw_value(code) == 20)
 assert(example.Code_init_raw_value(11) == nil)
 ```
 
@@ -196,7 +197,10 @@ Raw values are distinct from ABI case tags: `u32(code)` above is the case tag,
 not the Swift raw value 20. Supported failable initializers preserve `Maybe(T)`;
 a valid absent result is not a failed conversion. Initializers with owned inputs
 or results additionally report conversion success using the existing boolean.
-Enum instance getters/methods, including `rawValue`, remain outside this subset.
+A nonmutating getter or method takes its enum or record as the first Odin argument.
+The importer checks the Swift receiver convention, including for async calls.
+An async call captures an independent copy. Projected mutating receivers require
+write-back and currently produce a diagnostic.
 Known native tag widths are checked from the Swift compiler; unfamiliar lowering
 is rejected. Names that collide after case conversion are diagnosed.
 

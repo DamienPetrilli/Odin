@@ -52,6 +52,13 @@ received_snapshot :: proc(task: swift.Task) {
 }
 
 main :: proc() {
+	// The backend caches procedure layouts by canonical type identity.
+	// The parameter name and type stay identical in these three signatures.
+	ordinary := typeid_of(proc "swift" (value: rawptr))
+	receiver := typeid_of(proc "swift" (#swift_self value: rawptr))
+	result := typeid_of(proc "swift" (#swift_result value: rawptr))
+	assert(ordinary != receiver && ordinary != result && receiver != result)
+
 	a := Request{value = 17, expected = 26}
 	b := Request{value = 41, expected = 45}
 	init_probe(&a.probe, &a.value, 9)

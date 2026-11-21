@@ -548,6 +548,22 @@ public func sumAligned(_ values: [ArrayAligned]) -> UInt64 {
 @frozen public enum RawCode: UInt64 { case first = 10, second = 20 }
 @frozen public enum TextCode: String { case empty = "", book = "Café 📚", other = "other" }
 public enum ResilientChoice { case first, second }
+@frozen public enum RawCollision: UInt64 {
+	case first = 10
+	public var raw_value: UInt64 { 99 }
+}
+public enum LibraryCode: UInt64 { case read = 17, write = 91 }
+public extension LibraryCode {
+	func repeated() async -> LibraryCode { await Task.yield(); return self }
+}
+public extension RawCode {
+	func adding(_ value: UInt64) -> UInt64 { rawValue + value }
+	func addingLater(_ value: UInt64) async -> UInt64 { await Task.yield(); return adding(value) }
+	mutating func replace() { self = .second }
+}
+public extension SingleCase {
+	func scaled(_ value: Double) -> Double { value * 2 }
+}
 
 public func echoMode(_ value: Mode) -> Mode { value }
 public func toggleMode(_ value: Mode) -> Mode { value == .idle ? .running : .idle }
@@ -883,6 +899,17 @@ public func echoOptionalDateLater(_ value: Date?) async -> Date? {
 	public var count: Int
 	public init(_ flag: Bool, _ title: String, _ subtitle: String, _ count: Int) {
 		self.flag = flag; self.title = title; self.subtitle = subtitle; self.count = count
+	}
+}
+public extension TextRecord {
+	func adjusted(_ amount: Int) -> TextRecord {
+		var result = self
+		result.count += amount
+		return result
+	}
+	func adjustedLater(_ amount: Int) async -> TextRecord {
+		await Task.yield()
+		return adjusted(amount)
 	}
 }
 public func echoTextRecord(_ value: TextRecord) -> TextRecord { value }

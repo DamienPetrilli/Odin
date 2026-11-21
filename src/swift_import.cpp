@@ -109,6 +109,7 @@ struct SwiftImportParameter {
 	SwiftImportType type;
 	bool empty_set;
 	bool objc_controller;
+	bool self_register;
 	SwiftImportBorrow borrow;
 	bool consumed;
 };
@@ -127,6 +128,7 @@ struct SwiftImportFunction {
 	bool is_initializer;
 	bool is_main_actor;
 	bool is_collection;
+	bool value_receiver; // Lowered as the last Swift value argument, named first in Odin.
 };
 
 gb_internal bool swift_import_indirect(SwiftImportType const &type);
@@ -786,6 +788,8 @@ gb_internal bool swift_import_ownership(String sil, SwiftImportFunction *fn) {
 		for (auto &param : fn->parameters) {
 			if (parameters.pos >= parameters.str.len) return false;
 			String argument = string_trim_whitespace(string_split_iterator(&parameters, ','));
+			if (fn->value_receiver && &param == &fn->parameters[fn->parameters.count-1] &&
+			    string_starts_with(argument, str_lit("@inout"))) return false;
 			if (param.objc_controller) {
 				if (argument != "@guaranteed UIViewController") return false;
 				continue;
@@ -897,8 +901,25 @@ gb_internal String swift_import_availability_rejection(JsonValue *symbol, JsonVa
 	return {};
 }
 
+// Xcode's symbol graph can omit the synthesized RawRepresentable getter.
+// The digester identifies the actual member and accessor on the public enum.
+// Explicit declarations, including their availability, use the symbol graph.
+gb_internal JsonValue *swift_import_implicit_raw_value(JsonValue *owner, StringSet *published) {
+	if (!swift_import_string(owner, "enumRawTypeName").len || swift_import_member(owner, "genericSig")) return nullptr;
+	for (auto attribute : swift_import_array(owner, "declAttributes")) {
+		if (attribute->kind != Json_String || (attribute->string != "Available" && attribute->string != "Frozen")) return nullptr;
+	}
+	for (auto child : swift_import_array(owner, "children")) {
+		if (swift_import_string(child, "kind") != "Var" || swift_import_string(child, "name") != "rawValue") continue;
+		auto implicit = swift_import_member(child, "implicit");
+		if (!implicit || implicit->kind != Json_Boolean || !implicit->boolean || swift_import_member(child, "declAttributes")) return nullptr;
+		if (!string_set_exists(published, swift_import_string(child, "usr"))) return child;
+	}
+	return nullptr;
+}
+
 gb_internal bool swift_import_has_receiver(SwiftImportFunction const &fn) {
-	return fn.owner && !fn.is_static && !fn.is_initializer;
+	return fn.owner && !fn.is_static && !fn.is_initializer && !fn.value_receiver;
 }
 
 gb_internal bool swift_import_kind(SwiftImportType const &type, SwiftImportValueKind kind) {
@@ -977,7 +998,7 @@ gb_internal gbString swift_import_emit_value_declaration(gbString source, SwiftI
 		if (swift_import_empty(param.type)) continue;
 		if (swift_import_kind(param.type, SwiftImportValue_String)) {
 			source = gb_string_append_fmt(source, "%sarg%td_bits: u64, arg%td_object: rawptr", count++ ? ", " : "", i, i);
-		} else source = gb_string_append_fmt(source, "%sarg%td: %s", count++ ? ", " : "", i, swift_import_indirect(param.type) ? "rawptr" : swift_import_native_type(param.type));
+		} else source = gb_string_append_fmt(source, "%s%sarg%td: %s", count++ ? ", " : "", param.self_register ? "#swift_self " : "", i, swift_import_indirect(param.type) ? "rawptr" : swift_import_native_type(param.type));
 	}
 	if (fn.is_collection) source = gb_string_append_fmt(source, "%scollection_metadata, collection_witness: rawptr", count++ ? ", " : "");
 	if (receiver) source = gb_string_append_fmt(source, "%s#swift_self receiver: rawptr", count ? ", " : "");
@@ -1005,12 +1026,12 @@ gb_internal void swift_import_report_function(Array<String> *report, SwiftImport
 		if (patch) row = gb_string_append_fmt(row, ".%d", patch);
 		row = gb_string_appendc(row, "\n");
 	}
-	if (swift_import_has_receiver(fn)) {
+	if (swift_import_has_receiver(fn) || fn.value_receiver) {
 		char const *borrow = !fn.is_async ? "borrowed during call" : fn.is_mutating ? "exclusive borrow through completion" : "copied for task";
 		row = gb_string_append_fmt(row, "  receiver: %s\n", borrow);
 	}
 	for (auto const &param : fn.parameters) {
-		if (param.empty_set) continue;
+		if (param.empty_set || (fn.value_receiver && param.name == "receiver")) continue;
 		if (param.objc_controller) row = gb_string_append_fmt(row, "  %.*s: retained through completion\n", LIT(param.name));
 		else if (param.borrow != SwiftImportBorrow_None) {
 			bool writable = param.borrow == SwiftImportBorrow_MutableBuffer || param.borrow == SwiftImportBorrow_MutablePointer;
@@ -1078,10 +1099,10 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	bool entry_needs_capture = indirect_result || receiver || fn.is_collection;
 	gbString params = gb_string_make(permanent_allocator(), "");
 	gbString arguments = gb_string_make(permanent_allocator(), "");
-	if (receiver) params = gb_string_append_fmt(params, "receiver: %.*s", LIT(fn.owner->name));
+	if (receiver || fn.value_receiver) params = gb_string_append_fmt(params, "receiver: %.*s", LIT(fn.owner->name));
 	for_array(i, fn.parameters) {
 		auto const &param = fn.parameters[i];
-		if (!param.empty_set) params = gb_string_append_fmt(params, "%s%.*s: %s", gb_string_length(params) ? ", " : "", LIT(param.name), param.type.odin);
+		if (!param.empty_set && !(fn.value_receiver && i == fn.parameters.count-1)) params = gb_string_append_fmt(params, "%s%.*s: %s", gb_string_length(params) ? ", " : "", LIT(param.name), param.type.odin);
 		fallible |= (swift_import_projected(param.type) && (param.type.nominal->owns || !param.type.nominal->alignment)) || swift_import_kind(param.type, SwiftImportValue_String) || swift_import_slice(param.type.nominal) || (swift_import_kind(param.type, SwiftImportValue_Set) && !param.empty_set) || (param.consumed && !param.empty_set);
 		if (swift_import_empty(param.type)) continue;
 		entry_needs_capture |= !param.empty_set;
@@ -1450,26 +1471,41 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	auto functions = array_make<SwiftImportFunction>(permanent_allocator());
 	isize unavailable_type_count = lookup_rejections.count;
 	array_init(&pkg->unsupported, permanent_allocator());
+	StringSet published_raw_values = {};
+	string_set_init(&published_raw_values, 16);
+	defer (string_set_destroy(&published_raw_values));
+	for (auto symbol : swift_import_array(graph, "symbols")) {
+		if (swift_import_string(swift_import_member(symbol, "kind"), "identifier") == "swift.property" &&
+		    swift_import_string(swift_import_member(symbol, "names"), "title") == "rawValue") {
+			string_set_update(&published_raw_values, swift_import_string(swift_import_member(symbol, "identifier"), "precise"));
+		}
+	}
 	for (JsonValue *symbol : swift_import_array(graph, "symbols")) {
 		String kind = swift_import_string(swift_import_member(symbol, "kind"), "identifier");
 		auto components = swift_import_array(symbol, "pathComponents");
 		bool method = kind == "swift.method" || kind == "swift.type.method";
 		bool property = kind == "swift.property" || kind == "swift.type.property";
 		bool initializer = kind == "swift.init";
-		if (!(kind == "swift.func" && components.count == 1) && !method && !property && !initializer) continue;
+		bool implicit_raw = kind == "swift.enum";
+		if (!(kind == "swift.func" && components.count == 1) && !method && !property && !initializer && !implicit_raw) continue;
 		String usr = swift_import_string(swift_import_member(symbol, "identifier"), "precise");
 		JsonValue *declaration = swift_import_find_api(api, usr);
+		if (implicit_raw) {
+			declaration = swift_import_implicit_raw_value(declaration, &published_raw_values);
+			property = true;
+		}
 		if (!declaration) continue;
 		String name = swift_import_name(swift_import_string(declaration, "name"));
 		SwiftImportFunction fn = {};
 		fn.is_static = kind == "swift.type.method" || kind == "swift.type.property";
 		fn.is_property = property;
 		fn.is_initializer = initializer;
-		fn.title = swift_import_string(swift_import_member(symbol, "names"), "title");
+		fn.title = implicit_raw ? str_lit("rawValue") : swift_import_string(swift_import_member(symbol, "names"), "title");
 		fn.rejection = swift_import_availability_rejection(symbol, &fn.available_since);
-		if (components.count > 1) {
+		isize owner_count = implicit_raw ? components.count : components.count-1;
+		if (owner_count > 0) {
 			gbString owner_name = gb_string_make(permanent_allocator(), "");
-			for (isize i = 0; i < components.count-1; i++) {
+			for (isize i = 0; i < owner_count; i++) {
 				if (components[i]->kind != Json_String) continue;
 				owner_name = gb_string_append_fmt(owner_name, "%s%.*s", i ? "_" : "", LIT(components[i]->string));
 			}
@@ -1486,7 +1522,12 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			name = concatenate3_strings(permanent_allocator(), make_string_c(owner_name), str_lit("_"), name);
 		}
 		if (!fn.rejection.len && fn.owner && fn.owner->is_template) fn.rejection = str_lit("unsupported generic Swift receiver");
-		bool supported = (components.count == 1 || fn.owner) && !fn.rejection.len && swift_import_function(symbol, declaration, &fn, &types);
+		bool supported = (!owner_count || fn.owner) && !fn.rejection.len && swift_import_function(implicit_raw ? nullptr : symbol, declaration, &fn, &types);
+		if (implicit_raw) {
+			auto result = swift_import_array(declaration, "children");
+			String spelling = result.count == 1 ? swift_import_string(result[0], "printedName") : str_lit("RawValue");
+			fn.signature = concatenate3_strings(permanent_allocator(), str_lit("var rawValue: "), spelling, str_lit(" { get }"));
+		}
 		if (report && !fn.signature.len) {
 			gbString signature = gb_string_make(temporary_allocator(), "");
 			for (auto fragment : swift_import_array(symbol, "declarationFragments")) {
@@ -1787,13 +1828,31 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	for (isize index = functions.count; index-- > 0;) {
 		auto &fn = functions[index];
 		bool receiver = swift_import_has_receiver(fn);
-		bool indirect_result = swift_import_indirect(fn.result);
 		LLVMValueRef native = LLVMGetNamedFunction(inspection, alloc_cstring(permanent_allocator(), fn.symbol));
+		// A nonmutating member of a projected value can receive self in the
+		// ordinary argument registers. Check the actual declaration below.
+		if (receiver && fn.owner->supported && fn.owner->projected && !fn.is_mutating) {
+			SwiftImportParameter self = {};
+			self.name = str_lit("receiver");
+			self.type = swift_import_nominal_type(fn.owner);
+			// Indirect self may occupy Swift's dedicated context register.
+			// The signature verifier also checks the full parameter list.
+			if (swift_import_indirect(self.type) && native && LLVMCountParams(native)) {
+				unsigned attr = LLVMGetEnumAttributeKindForName("swiftself", 9);
+				self.self_register = LLVMGetEnumAttributeAtIndex(native, LLVMCountParams(native), attr) != nullptr;
+			}
+			array_add(&fn.parameters, self);
+			fn.value_receiver = true;
+			receiver = false;
+		}
+		bool indirect_result = swift_import_indirect(fn.result);
 		bool record_parameters = false;
 		unsigned native_index = 0;
 		String &reason = fn.rejection;
 		auto api_types = swift_import_array(fn.api, "children");
-		if (fn.owner && !fn.is_static && (!fn.owner->supported || (!fn.is_initializer && fn.owner->projected))) {
+		if (receiver && fn.owner->projected && fn.is_mutating) {
+			reason = str_lit("mutating a projected Swift receiver requires write-back to the Odin value");
+		} else if (fn.owner && !fn.is_static && !fn.owner->supported) {
 			reason = str_lit("unsupported Swift receiver representation");
 		} else if (fn.result.nominal && !fn.result.nominal->supported) {
 			reason = swift_import_type_rejection(api_types.count ? api_types[0] : nullptr);
@@ -1839,7 +1898,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 				}
 				llvm = "ptr noalias";
 			}
-			declaration = gb_string_append_fmt(declaration, "%s%s", count++ ? ", " : "", llvm);
+			declaration = gb_string_append_fmt(declaration, "%s%s%s", count++ ? ", " : "", llvm, param.self_register ? " swiftself" : "");
 			if (fn.is_collection && swift_import_string_array(param.type)) native_index++;
 			else if (swift_import_kind(param.type, SwiftImportValue_String) || param.borrow == SwiftImportBorrow_Buffer || param.borrow == SwiftImportBorrow_MutableBuffer) native_index += 2;
 			else if (swift_import_projected(param.type) && !swift_import_indirect(param.type)) native_index += cast(unsigned)param.type.nominal->components.count;
@@ -2061,7 +2120,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			count++;
 			// The only supported default is the trailing empty Set. Preserve
 			// the zero-argument short call when a labeled overload is added.
-			if (other.parameters.count == 1 && other.parameters[0].empty_set) {
+			if (other.parameters.count == 1+other.value_receiver && other.parameters[0].empty_set) {
 				default_fn = &other;
 				default_count++;
 			}

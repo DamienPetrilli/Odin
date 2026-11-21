@@ -48,6 +48,19 @@ raw_code_received :: proc(task: swift.Task, result: Maybe(fixture.RawCode)) {
 	plain_enum_calls += 1
 }
 
+adjusted_received :: proc(task: swift.Task, value: u64) {
+	assert(value == take_expected(task))
+	plain_enum_calls += 1
+}
+
+library_code_received :: proc(task: swift.Task, value: fixture.LibraryCode, converted: bool) {
+	expected := take_expected(task)
+	assert(converted)
+	defer fixture.LibraryCode_destroy(value)
+	assert(fixture.LibraryCode_raw_value(value) == expected)
+	plain_enum_calls += 1
+}
+
 modes_received :: proc(task: swift.Task, result: []fixture.Mode, ok: bool) {
 	_ = take_expected(task)
 	assert(ok)
@@ -73,13 +86,15 @@ check_plain_enums :: proc() {
 	assert(fixture.raw_code_value(.First) == 10 && fixture.raw_code_value(.Second) == 20)
 	assert(fixture.echo_single_case(.Only) == .Only)
 	assert(fixture.make_single_case() == .Only)
+	assert(fixture.SingleCase_scaled(.Only, 4.5) == 9)
 	single, present := fixture.optional_single_case(fixture.SingleCase.Only).?
 	assert(present && single == .Only)
 	assert(fixture.optional_single_case(nil) == nil)
 	assert(fixture.single_case_arguments(.Only, 17, .Only, 0.5, .Only) == 17.5)
 	for value in fixture.RawCode {
 		assert(fixture.echo_raw_code(value) == value)
-		raw := fixture.raw_code_value(value)
+		raw := fixture.RawCode_raw_value(value)
+		assert(raw == fixture.raw_code_value(value) && fixture.RawCode_adding(value, 7) == raw+7)
 		assert(raw == 10 || raw == 20)
 		copy, valid := fixture.RawCode_init_raw_value(raw).?
 		assert(valid && copy == value)
@@ -89,7 +104,8 @@ check_plain_enums :: proc() {
 	assert(fixture.RawCode_init_raw_value(max(u64)) == nil)
 	for value in fixture.WideCode {
 		assert(fixture.echo_wide_code(value) == value)
-		raw := fixture.wide_code_value(value)
+		raw := fixture.WideCode_raw_value(value)
+		assert(raw == fixture.wide_code_value(value))
 		assert(raw == 1000 + u64(value))
 		copy, valid := fixture.WideCode_init_raw_value(raw).?
 		assert(valid && copy == value)
@@ -111,7 +127,7 @@ check_plain_enums :: proc() {
 		value, valid := optional.?
 		expected := [3]fixture.TextCode{.Empty, .Book, .Other}
 		assert(valid && value == expected[index])
-		copy := fixture.text_code_value(value) or_else panic("Raw String result")
+		copy := fixture.TextCode_raw_value(value) or_else panic("Raw String result")
 		assert(copy == text)
 		delete(copy)
 	}
@@ -199,12 +215,22 @@ check_plain_enums :: proc() {
 		task = fixture.raw_code_later(raw, raw_code_received) or_else panic("Async optional enum")
 		track_task(task, raw)
 	}
+	code: fixture.RawCode = .First
+	track_task(fixture.RawCode_adding_later(code, 100, adjusted_received) or_else panic("Async value method"), 110)
+	code = .Second
+	invalid_task, valid_receiver := fixture.RawCode_adding_later(fixture.RawCode(99), 1, adjusted_received)
+	assert(!valid_receiver && invalid_task == nil)
+	library := fixture.LibraryCode_init_raw_value(91) or_else panic("Library raw value")
+	access, has_code := library.?
+	assert(has_code && fixture.LibraryCode_raw_value(access) == 91)
+	track_task(fixture.LibraryCode_repeated(access, library_code_received) or_else panic("Async resilient receiver"), 91)
+	fixture.Optional_LibraryCode_destroy(library)
 	modes := []fixture.Mode{.Running, .Idle, .Running}
 	task = fixture.modes_later(modes, modes_received) or_else panic("Async enum array")
 	track_task(task)
 	for &value in modes { value = .Idle }
 	begin := time.tick_now()
-	for plain_enum_calls != 9 {
+	for plain_enum_calls != 11 {
 		cf.RunLoopRunInMode(cf.kRunLoopDefaultMode, 0.01, false)
 		assert(time.tick_since(begin) < 10*time.Second)
 	}

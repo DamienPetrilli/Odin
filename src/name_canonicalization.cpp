@@ -461,6 +461,10 @@ gb_internal void write_canonical_params(TypeWriter *w, Type *params) {
 
 		switch (v->kind) {
 		case Entity_Variable:
+			// These parameters select distinct registers even when their Odin types match.
+			if (v->flags&EntityFlag_SwiftAsync)  type_writer_appendc(w, "#swift_async ");
+			if (v->flags&EntityFlag_SwiftSelf)   type_writer_appendc(w, "#swift_self ");
+			if (v->flags&EntityFlag_SwiftResult) type_writer_appendc(w, "#swift_result ");
 			if (v->flags&EntityFlag_CVarArg) {
 				type_writer_appendc(w, CANONICAL_PARAM_C_VARARG);
 			}
