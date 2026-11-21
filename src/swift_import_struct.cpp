@@ -155,7 +155,13 @@ gb_internal gbString swift_import_emit_struct(gbString source, SwiftImportNomina
 	// A nested Swift payload can reuse tail padding. Only touch stored fields.
 	source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_initialize :: proc(storage: rawptr, value: %.*s) -> bool {\n", LIT(name), LIT(name));
 	if (type->fields.count) source = gb_string_append_fmt(source, "target := cast(^%.*s)storage\n", LIT(name));
-	for (auto const &field : type->fields) source = gb_string_append_fmt(source, "target.%.*s = value.%.*s\n", LIT(field.name), LIT(field.name));
+	for (auto const &field : type->fields) {
+		if (make_string_c(field.type.odin) == "bool") {
+			source = gb_string_append_fmt(source, "(cast(^u8)&target.%.*s)^ = u8(value.%.*s)\n", LIT(field.name), LIT(field.name));
+		} else {
+			source = gb_string_append_fmt(source, "target.%.*s = value.%.*s\n", LIT(field.name), LIT(field.name));
+		}
+	}
 	source = gb_string_appendc(source, "return true\n}\n");
 	source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_take :: proc(storage: rawptr) -> (result: %.*s, ok: bool) #optional_ok {\n", LIT(name), LIT(name));
 	if (type->fields.count) source = gb_string_append_fmt(source, "value := cast(^%.*s)storage\n", LIT(name));

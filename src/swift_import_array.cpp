@@ -31,7 +31,28 @@ gb_internal gbString swift_import_emit_array(gbString source, SwiftImportNominal
 	String metadata = swift_import_metadata(element);
 	source = gb_string_append_fmt(source, "%.*s :: []%s\n@(private)\n_swift_%.*s_cache: swift.Array_Value_Cache\n", LIT(name), element.odin, LIT(name));
 	if (element.nominal->is_record && !element.nominal->owns) {
-		source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_from :: proc(values: []%s) -> (result: swift.Native_Array, ok: bool) #optional_ok {\nreturn swift.array_from_trivial(values, %.*s, &_swift_%.*s_cache, %llu)\n}\n", LIT(name), element.odin, LIT(metadata), LIT(name), cast(unsigned long long)element.nominal->size);
+		source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_from :: proc(values: []%s) -> (result: swift.Native_Array, ok: bool) #optional_ok {\nreturn swift.array_from_trivial(values, %.*s, &_swift_%.*s_cache, %llu", LIT(name), element.odin, LIT(metadata), LIT(name), cast(unsigned long long)element.nominal->size);
+		isize bool_count = 0;
+		for (auto const &field : element.nominal->fields) bool_count += make_string_c(field.type.odin) == "bool";
+		if (bool_count) {
+			source = gb_string_append_fmt(source, ", proc(destination: [^]%s, source: []%s) {\n", element.odin, element.odin);
+			if (cast(u64)bool_count == element.nominal->stride) {
+				// Every byte is a Bool, including across record boundaries.
+				source = gb_string_append_fmt(source,
+					"dst := cast([^]u8)destination\nsrc := (cast([^]u8)raw_data(source))[:len(source)*size_of(%s)]\n"
+					"for byte, i in src { dst[i] = u8(byte != 0) }\n", element.odin);
+			} else {
+				// Preserve the record's stride, including padding, and normalize
+				// its Bool fields while the destination is still in cache.
+				source = gb_string_append_fmt(source, "for &item, i in source {\nmem.copy_non_overlapping(&destination[i], &item, size_of(%s))\n", element.odin);
+				for (auto const &field : element.nominal->fields) {
+					if (make_string_c(field.type.odin) == "bool") source = gb_string_append_fmt(source, "(cast(^u8)&destination[i].%.*s)^ = u8(item.%.*s)\n", LIT(field.name), LIT(field.name));
+				}
+				source = gb_string_appendc(source, "}\n");
+			}
+			source = gb_string_appendc(source, "}");
+		}
+		source = gb_string_appendc(source, ")\n}\n");
 		source = gb_string_append_fmt(source, "@(private)\n_swift_%.*s_to :: proc(value: swift.Native_Array) -> (result: []%s, ok: bool) #optional_ok {\nreturn swift.array_to_trivial(value, %.*s, &_swift_%.*s_cache, %s, %llu)\n}\n", LIT(name), element.odin, LIT(metadata), LIT(name), element.odin, cast(unsigned long long)element.nominal->size);
 		source = gb_string_append_fmt(source, "%.*s_destroy :: proc(values: []%s, allocator := context.allocator) {\ndelete(values, allocator)\n}\n", LIT(name), element.odin);
 		return gb_string_append_fmt(source, "@(require_results)\n%.*s_copy :: proc(value: []%s, allocator := context.allocator) -> (result: []%s, ok: bool) #optional_ok {\nvalues, err := non_zero_make([]%s, len(value), allocator)\nif err != nil { return }\ncopy(values, value)\nreturn values, true\n}\n\n", LIT(name), element.odin, element.odin, element.odin);

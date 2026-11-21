@@ -359,11 +359,17 @@ array_trivial_layout :: proc(metadata: rawptr, $T: typeid, native_size: int) -> 
 }
 
 @(require_results)
-array_from_trivial :: proc(values: []$T, metadata: rawptr, cache: ^Array_Value_Cache, native_size := size_of(T)) -> (result: Native_Array, ok: bool) #optional_ok {
+array_from_trivial :: proc(values: []$T, metadata: rawptr, cache: ^Array_Value_Cache, native_size := size_of(T), copy_fields: proc(destination: [^]T, source: []T) = nil) -> (result: Native_Array, ok: bool) #optional_ok {
 	if !array_trivial_layout(metadata, T, native_size) { return }
 	buffer := array_value_allocate(len(values), metadata, cache) or_return
 	when size_of(T) != 0 {
-		if len(values) != 0 { mem.copy_non_overlapping(buffer.elements, raw_data(values), len(values)*size_of(T)) }
+		if len(values) != 0 {
+			if copy_fields != nil {
+				copy_fields(cast([^]T)buffer.elements, values)
+			} else {
+				mem.copy_non_overlapping(buffer.elements, raw_data(values), len(values)*size_of(T))
+			}
+		}
 	}
 	return buffer.value, true
 }

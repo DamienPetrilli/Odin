@@ -100,6 +100,22 @@ check_mixed_records :: proc() {
 	assert(result.(fixture.BoolRecordResult_Value).value == mixed)
 	assert(state.allocations == 0)
 
+	// Raw Odin true values can have any nonzero byte. Check the owned
+	// Swift array's bytes across its echo and preserve the source bytes.
+	raw_flags: [256]fixture.BoolTriple
+	for &flags, i in raw_flags {
+		flags = {transmute(bool)u8(i), transmute(bool)u8(255-i), true}
+	}
+	canonical := fixture.echo_bool_triples(raw_flags[:]) or_else panic("Bool record array")
+	for flags, i in canonical {
+		assert(transmute(u8)flags.a == u8(i != 0))
+		assert(transmute(u8)flags.b == u8(i != 255))
+		assert(transmute(u8)flags.c == 1)
+		assert(transmute(u8)raw_flags[i].a == u8(i))
+		assert(transmute(u8)raw_flags[i].b == u8(255-i))
+	}
+	delete(canonical)
+
 	for count in ([]int{0, 1, 2, 3, 7, 8, 9, 31, 32, 33, 1024}) {
 		triples := make([]fixture.BoolTriple, count)
 		tails := make([]fixture.BoolTail, count)
