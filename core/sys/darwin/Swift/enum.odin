@@ -13,7 +13,8 @@ Enum_Witnesses :: struct {
 
 @(private)
 foreign {
-	@(link_name="swift_getTypeByMangledNameInContext2")
+	// Complete type names need no signed context descriptor.
+	@(link_name="swift_getTypeByMangledNameInContext")
 	metadata_from_name_native :: proc "swift" (name: rawptr, length: u64, descriptor, arguments: rawptr) -> rawptr ---
 }
 

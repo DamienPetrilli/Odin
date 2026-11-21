@@ -56,6 +56,12 @@ if [[ ${2:-debug} == debug ]]; then
 	if [[ "$sdk" == macosx ]] && xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1; then
 		"$ODIN" "${storekit[@]}" -target:darwin_arm64 -subtarget:iphonesimulator \
 			-minimum-os-version:15.0 -out:"$build/storekit-simulator"
+		xcrun nm -ju "$build/storekit-simulator" > "$build/storekit-imports"
+		grep -Fxq '_swift_getTypeByMangledNameInContext' "$build/storekit-imports"
+		if grep -Fxq '_swift_getTypeByMangledNameInContext2' "$build/storekit-imports"; then
+			echo "The iOS 15 Swift runtime has no signed-descriptor metadata lookup" >&2
+			exit 1
+		fi
 	fi
 fi
 
