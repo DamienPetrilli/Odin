@@ -103,7 +103,8 @@ check_invalid darwin_arm64 \
 	'Unsupported parameter type for the "swift" calling convention' \
 	"'#by_ptr' cannot be used with the \"swift\" calling convention" \
 	'Unsupported result type for the "swift" calling convention' \
-	'The "swift" calling convention requires a fixed, non-polymorphic procedure with at most one result' \
+	'The "swift" calling convention requires a fixed, non-polymorphic procedure' \
+	'Multiple Swift results require two to four word-sized numeric scalars' \
 	'Nested_Arg ::' \
 	'Packed_Arg ::' \
 	'Empty_Arg ::' \

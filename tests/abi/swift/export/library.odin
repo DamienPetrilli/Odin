@@ -142,3 +142,13 @@ edit_buffer :: proc "swift" (values: []i16, flags: []bool) {
 	for &v in values { v += 1 }
 	for &v in flags { v = !v }
 }
+
+@(export)
+measure_pair :: proc "swift" (index: i64, weight: f64) -> (last_index: i64, total_weight: f64) {
+	return reply.measure(index, weight)
+}
+
+@(export)
+word_components :: proc "swift" (x: u64, y: f64, z: int, w: f64) -> (u64, f64, int, f64) {
+	return x, y, z, w
+}

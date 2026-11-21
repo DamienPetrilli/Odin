@@ -3401,7 +3401,7 @@ gb_internal LB_ABI_INFO(lb_get_abi_info_internal) {
 				ft->args[i] = is_swift ? lb_swift_abi_value(c, arg_types[i], false, original_type->Proc.params->Tuple.variables[i]->type) : lb_arg_type_direct(arg_types[i]);
 			}
 			LLVMTypeRef result = return_is_defined ? return_type : LLVMVoidTypeInContext(c);
-			ft->ret = is_swift ? lb_swift_abi_value(c, result, true, return_is_defined ? original_type->Proc.results->Tuple.variables[0]->type : nullptr) : lb_arg_type_direct(result);
+			ft->ret = is_swift ? lb_swift_abi_value(c, result, true, reduce_tuple_to_single_type(original_type->Proc.results)) : lb_arg_type_direct(result);
 			ft->calling_convention = calling_convention;
 			return ft;
 		}

@@ -334,7 +334,7 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 	LLVMSetLinkage(gen->cleanup_runtime->value, LLVMExternalLinkage);
 	for (auto const &exported : swift_export_procedures) {
 		Type *original = base_type(exported.entity->type);
-		Type *result_type = original->Proc.result_count ? original->Proc.results->Tuple.variables[0]->type : nullptr;
+		Type *result_type = reduce_tuple_to_single_type(original->Proc.results);
 		bool uuid_result = is_swift_uuid_type(result_type);
 		auto params = array_make<Type *>(temporary_allocator());
 		if (uuid_result) array_add(&params, t_rawptr);
@@ -359,8 +359,9 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 		}
 		if (uuid_result) tuple->Tuple.variables[0]->flags |= EntityFlag_SwiftResult;
 		Type *native_result = uuid_result ? nullptr : is_type_enum(result_type) ? swift_export_enum_tag_type(result_type) : result_type;
-		Type *results = native_result ? alloc_type_tuple_from_field_types(&native_result, 1, false, true) : nullptr;
-		Type *type = alloc_type_proc(nullptr, tuple, params.count, results, native_result ? 1 : 0, false, ProcCC_Swift);
+		Type *results = original->Proc.results;
+		if (original->Proc.result_count == 1) results = native_result ? alloc_type_tuple_from_field_types(&native_result, 1, false, true) : nullptr;
+		Type *type = alloc_type_proc(nullptr, tuple, params.count, results, results ? results->Tuple.variables.count : 0, false, ProcCC_Swift);
 		lbProcedure *p = lb_create_dummy_procedure(m, exported.symbol, type);
 		p->is_export = true;
 		LLVMSetLinkage(p->value, LLVMExternalLinkage);

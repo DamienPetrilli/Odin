@@ -51,8 +51,8 @@ reflection. Application procedures execute in Odin.
 
 This subset supports `proc "swift"` with 8-, 16-, 32-, and 64-bit signed and unsigned
 integer scalars, `int`, `uint`, `f32`, `f64`, `bool`, and flat
-named structs containing `bool`, `i64`, `u64`, `int`, `uint`, and `f64`. A procedure returns at most one
-such value. Struct fields preserve their order and offsets. Swift value size,
+named structs containing `bool`, `i64`, `u64`, `int`, `uint`, and `f64`. A procedure can return one such value or two to four full-width numeric results
+as a Swift tuple. Named Odin results become lowerCamelCase tuple labels. Struct fields preserve their order and offsets. Swift value size,
 array stride and register/indirect lowering are checked separately. Packed, aligned, nested, or nontrivial structs
 are rejected. Scalar parameters use their corresponding Swift scalar types;
 structs become frozen Swift value types. Bool fields may be mixed with the

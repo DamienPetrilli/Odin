@@ -1239,3 +1239,18 @@ public func readPointer(_ value: UnsafePointer<UInt32>) -> UInt32 { value.pointe
 public func writePointer(_ value: UnsafeMutablePointer<Float>, _ newValue: Float) { value.pointee = newValue }
 public func asyncBuffer(_ values: UnsafeBufferPointer<Int16>) async -> Int { values.count }
 public func returnedBuffer(_ values: UnsafeBufferPointer<Int16>) -> UnsafeBufferPointer<Int16> { values }
+
+@inline(never) public func bounds(_ value: UInt64) -> (lower: UInt64, upper: UInt64) {
+	(value, value &+ 1)
+}
+
+public func measureTuple(_ a: Int64, _ b: Double, _ c: UInt, _ d: Int) -> (Int64, Double, UInt, Int) {
+	(a, b, c, d)
+}
+
+public func mixedLabels(_ x: Int) -> (Int, weight: Double) { (x, 0.5) }
+public func packedTuple() -> (UInt8, UInt16) { (0, 0) }
+public func indirectTuple() -> (Int, Int, Int, Int, Int) { (0, 1, 2, 3, 4) }
+public func ownedTuple() -> (String, UInt64) { ("text", 0) }
+public func tupleCaseCollision() -> (pageID: UInt64, page_id: UInt64) { (0, 1) }
+public func asyncTuple() async -> (UInt64, UInt64) { (0, 1) }

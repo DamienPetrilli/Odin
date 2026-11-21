@@ -207,3 +207,10 @@ shortBuffer.withUnsafeMutableBufferPointer { words in
 	}
 }
 precondition(shortBuffer == [-7, 1, .min, 9] && flagBuffer == [false, true, false])
+
+let pair = measurePair(.min, -0.5)
+precondition(pair.lastIndex == Int64.max && pair.totalWeight == -0.25)
+
+let components = wordComponents(.max, -0.0, .min, .infinity)
+precondition(components.0 == UInt64.max && components.1.bitPattern == (-0.0 as Double).bitPattern)
+precondition(components.2 == Int.min && components.3 == .infinity)

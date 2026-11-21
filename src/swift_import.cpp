@@ -582,6 +582,79 @@ gb_internal bool swift_import_borrowed_parameter(JsonValue *api, Slice<JsonValue
 	return true;
 }
 
+// A Swift tuple is a list of results. On Darwin arm64 up to four full-width
+// numeric elements return directly. Match the target compiler's IR as usual.
+gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *fn) {
+	auto elements = swift_import_array(api, "children");
+	fn->rejection = str_lit("tuple results require two to four word-sized numeric scalars");
+	if (elements.count < 2 || elements.count > 4) return false;
+	if (fn->is_async || fn->owner) {
+		fn->rejection = str_lit("tuple results currently require a synchronous free function");
+		return false;
+	}
+	for (auto const &p : fn->parameters) {
+		if (p.type.nominal || p.borrow != SwiftImportBorrow_None) {
+			fn->rejection = str_lit("tuple results with converted or borrowed parameters are unsupported");
+			return false;
+		}
+	}
+
+	// The digester stores the labels in printedName and the canonical types
+	// in children. Accept a label only after matching its element's spelling.
+	String spelling = swift_import_string(api, "printedName");
+	if (spelling.len < 2 || spelling[0] != '(' || spelling[spelling.len-1] != ')') return false;
+	String_Iterator it = {substring(spelling, 1, spelling.len-1)};
+	String labels[4] = {};
+	SwiftImportType types[4] = {};
+	bool named = false;
+	for_array(i, elements) {
+		SwiftImportType &type = types[i];
+		if (!swift_import_scalar(swift_import_string(elements[i], "usr"), &type)) return false;
+		if (make_string_c(type.llvm) != "i64" && make_string_c(type.llvm) != "double") return false;
+		String item = string_trim_whitespace(string_split_iterator(&it, ','));
+		isize colon = swift_import_index(item, str_lit(":"));
+		if (colon >= 0) {
+			String label = string_trim_whitespace(substring(item, 0, colon));
+			if (!swift_import_identifier(label) || label == "_") return false;
+			labels[i] = swift_import_name(label, true);
+			named = true;
+			item = string_trim_whitespace(substring(item, colon+1, item.len));
+		}
+		if (item != make_string_c(type.swift)) return false;
+	}
+	if (it.pos != it.str.len) return false;
+
+	gbString swift = gb_string_make(permanent_allocator(), "(");
+	gbString odin = gb_string_make(permanent_allocator(), "(");
+	gbString llvm = gb_string_make(permanent_allocator(), "{ ");
+	for_array(i, elements) {
+		char const *separator = i ? ", " : "";
+		swift = gb_string_append_fmt(swift, "%s%s", separator, types[i].swift);
+		odin = gb_string_appendc(odin, separator);
+		if (named) {
+			if (!labels[i].len) labels[i] = make_string_c(gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "value_%td", i));
+			for (isize j = 0; j < i; j++) {
+				if (labels[j] == labels[i]) {
+					fn->rejection = str_lit("tuple result labels collide after Odin name conversion");
+					return false;
+				}
+			}
+			for (auto const &p : fn->parameters) {
+				if (p.name == labels[i]) {
+					fn->rejection = str_lit("tuple result label collides with an Odin parameter name");
+					return false;
+				}
+			}
+			odin = gb_string_append_fmt(odin, "%.*s: ", LIT(labels[i]));
+		}
+		odin = gb_string_appendc(odin, types[i].odin);
+		llvm = gb_string_append_fmt(llvm, "%s%s", separator, types[i].llvm);
+	}
+	fn->result = {gb_string_appendc(swift, ")"), gb_string_appendc(odin, ")"), gb_string_appendc(llvm, " }"), nullptr};
+	fn->rejection = {};
+	return true;
+}
+
 gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftImportFunction *fn, Array<SwiftImportNominal *> *types) {
 	fn->api = api;
 	fn->name = swift_import_string(api, "name");
@@ -684,6 +757,9 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 	auto api_types = swift_import_array(api, "children");
 	JsonValue *signature = swift_import_member(symbol, "functionSignature");
 	JsonValue *returns = swift_import_member(signature, "returns");
+	bool tuple = api_types.count && swift_import_string(api_types[0], "kind") == "TypeNominal" &&
+	             swift_import_string(api_types[0], "name") == "Tuple" && !swift_import_string(api_types[0], "usr").len &&
+	             swift_import_array(api_types[0], "children").count > 0;
 	if (fn->is_initializer) {
 		// Failable initializers return Optional<Self>, not Self. The digester
 		// records that result even when the symbol graph omits a return clause.
@@ -695,9 +771,9 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		// entry. Both the inspected IR and library exports must confirm it.
 		if (!string_ends_with(fn->symbol, str_lit("cfc"))) return false;
 		fn->symbol = concatenate_strings(permanent_allocator(), substring(fn->symbol, 0, fn->symbol.len-1), str_lit("C"));
-	} else if (!returns || returns->kind != Json_Array || returns->array.count == 0 ||
+	} else if (!tuple && (!returns || returns->kind != Json_Array || returns->array.count == 0 ||
 	           (!swift_import_type(returns->array, true, &fn->result, *types) &&
-	            (api_types.count == 0 || !swift_import_api_type(api_types[0], &fn->result, types)))) {
+	            (api_types.count == 0 || !swift_import_api_type(api_types[0], &fn->result, types))))) {
 		fn->rejection = swift_import_type_rejection(api_types.count ? api_types[0] : nullptr);
 		return false;
 	}
@@ -754,7 +830,7 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		fn->rejection = str_lit("Set results are not supported; only Set parameters map to Odin slices");
 		return false;
 	}
-	return it.pos == labels.len;
+	return it.pos == labels.len && (!tuple || swift_import_tuple_result(api_types[0], fn));
 }
 
 gb_internal bool swift_import_has_line(String text, String wanted, bool prefix) {

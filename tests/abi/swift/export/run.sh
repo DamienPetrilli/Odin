@@ -57,6 +57,7 @@ fi
 "${swiftc[@]}" -I "$build" -emit-ir "$here/main.swift" -o "$build/client.ll"
 grep -Eq 'call swiftcc .*@__odin_swift_OdinExportFixture_addNumbers' "$build/client.ll"
 grep -Eq 'call swiftcc \{ i64, i64 \} @__odin_swift_OdinExportFixture_updateAny' "$build/client.ll"
+grep -Eq 'call swiftcc \{ i64, double \} @__odin_swift_OdinExportFixture_measurePair' "$build/client.ll"
 # Verify the textual interface too, without the compiler-specific binary module.
 rm "$build/OdinExportFixture.swiftmodule"
 "${swiftc[@]}" -I "$build" "$here/main.swift" "$build/libOdinExportFixture.a" "$build/reply/SwiftReply.o" -o "$build/interface"
@@ -222,6 +223,8 @@ package clashes
 Swift :: struct { value: u64 }
 Clashes :: struct { value: u64 }
 Field_Collision :: struct { read_value, readValue: u64 }
+@(export)
+tuple_clash :: proc "swift" () -> (read_value: u64, readValue: u64) { return 1, 2 }
 Case_Name :: struct { value: u64 }
 CaseName :: struct { value: u64 }
 @(export)
@@ -242,7 +245,7 @@ if "$ODIN" build "$build/clashes.odin" -file -swift-module-name:Clashes -build-m
 	echo "Expected ambiguous Swift export names to fail" >&2
 	exit 1
 fi
-for diagnostic in 'shadows a module name' 'collides after case conversion' 'duplicate type name' 'reserved namespace'; do
+for diagnostic in "tuple result label 'readValue' collides after case conversion" 'shadows a module name' 'collides after case conversion' 'duplicate type name' 'reserved namespace'; do
 	if ! grep -q "$diagnostic" "$build/clashes.log"; then cat "$build/clashes.log" >&2; exit 1; fi
 done
 test ! -e "$build/Clashes.swiftmodule"

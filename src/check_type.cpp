@@ -4364,8 +4364,8 @@ gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc
 	}
 
 	if (cc == ProcCC_Swift) {
-		if (variadic || pt->generic || params_are_polymorphic || result_count > 1) {
-			error(proc_type_node, "The \"swift\" calling convention requires a fixed, non-polymorphic procedure with at most one result");
+		if (variadic || pt->generic || params_are_polymorphic) {
+			error(proc_type_node, "The \"swift\" calling convention requires a fixed, non-polymorphic procedure");
 			success = false;
 		} else {
 			for (isize i = 0; i < param_count; i++) {
@@ -4375,6 +4375,16 @@ gb_internal bool check_procedure_type(CheckerContext *ctx, Type *type, Ast *proc
 					success = false;
 				} else if (!is_type_supported_by_swift_abi(param->type) && !is_swift_abi_slice_parameter(param->type)) {
 					error(param->token, "Unsupported parameter type for the \"swift\" calling convention");
+					success = false;
+				}
+			}
+			if (result_count > 1) {
+				bool direct = result_count <= 4;
+				for (Entity *result : results->Tuple.variables) {
+					direct &= is_swift_abi_word_field(result->type) && is_swift_abi_numeric_scalar(result->type);
+				}
+				if (!direct) {
+					error(proc_type_node, "Multiple Swift results require two to four word-sized numeric scalars");
 					success = false;
 				}
 			}

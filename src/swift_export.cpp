@@ -205,15 +205,27 @@ gb_internal bool swift_export_prepare(Checker *checker) {
 		if (!is_swift_export_procedure(checker, e)) continue;
 		Type *type = base_type(e->type);
 		bool valid = !type->Proc.is_polymorphic && !type->Proc.variadic && !type->Proc.c_vararg &&
-		             !type->Proc.diverging && !type->Proc.return_by_pointer && type->Proc.result_count <= 1 &&
+		             !type->Proc.diverging && !type->Proc.return_by_pointer &&
 		             type->Proc.calling_convention == ProcCC_Swift;
 		for (isize i = 0; i < type->Proc.param_count; i++) {
 			Entity *param = type->Proc.params->Tuple.variables[i];
 			valid &= !(param->flags & EntityFlags_SwiftABI) && swift_export_check_type(param->type, true);
 		}
-		if (type->Proc.result_count) valid &= swift_export_check_type(type->Proc.results->Tuple.variables[0]->type, false);
+		for (isize i = 0; i < type->Proc.result_count; i++) {
+			Entity *result = type->Proc.results->Tuple.variables[i];
+			valid &= swift_export_check_type(result->type, false);
+			if (type->Proc.result_count == 1 || !result->token.string.len) continue;
+			String label = swift_export_name(result->token.string, false);
+			if (!swift_import_identifier(label)) error(result->token, "Swift export: invalid tuple result label after case conversion");
+			for (isize j = 0; j < i; j++) {
+				Entity *prev = type->Proc.results->Tuple.variables[j];
+				if (prev->token.string.len && prev->token.string != "_" && label == swift_export_name(prev->token.string, false)) {
+					error(result->token, "Swift export: tuple result label '%.*s' collides after case conversion", LIT(label));
+				}
+			}
+		}
 		if (!valid) {
-			error(e->token, "Swift export: expected a synchronous Swift procedure without ABI parameter attributes, with supported numeric scalars, bool, integer enums, flat scalar structs, uuid.Identifier, or borrowed scalar slice parameters, and at most one scalar/enum/struct/UUID result");
+			error(e->token, "Swift export: expected a synchronous Swift procedure without ABI parameter attributes, with supported numeric scalars, bool, integer enums, flat scalar structs, uuid.Identifier, or borrowed scalar slice parameters, and supported result types");
 			continue;
 		}
 		SwiftExportProcedure proc = {};
@@ -494,7 +506,20 @@ gb_internal bool swift_export_link(Array<String> const &objects) {
 			source = gb_string_append_fmt(source, "%s_ p%td: %.*s", i ? ", " : "", i, LIT(name));
 		}
 		source = gb_string_appendc(source, ")");
-		if (type->Proc.result_count) source = gb_string_append_fmt(source, " -> %.*s", LIT(swift_export_type_name(type->Proc.results->Tuple.variables[0]->type, true)));
+		if (type->Proc.result_count == 1) {
+			source = gb_string_append_fmt(source, " -> %.*s", LIT(swift_export_type_name(type->Proc.results->Tuple.variables[0]->type, true)));
+		} else if (type->Proc.result_count > 1) {
+			source = gb_string_appendc(source, " -> (");
+			for_array(i, type->Proc.results->Tuple.variables) {
+				Entity *result = type->Proc.results->Tuple.variables[i];
+				if (i) source = gb_string_appendc(source, ", ");
+				if (result->token.string.len && result->token.string != "_") {
+					source = gb_string_append_fmt(source, "`%.*s`: ", LIT(swift_export_name(result->token.string, false)));
+				}
+				source = gb_string_append_fmt(source, "%.*s", LIT(swift_export_type_name(result->type, true)));
+			}
+			source = gb_string_appendc(source, ")");
+		}
 		source = gb_string_appendc(source, "\n");
 	}
 	String dir = swift_export_directory;

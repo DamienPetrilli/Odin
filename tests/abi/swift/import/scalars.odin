@@ -85,6 +85,12 @@ check_optional_width :: proc(values: []$T, $echo: $Echo, $later: $Later) -> int 
 }
 
 check_scalars :: proc() {
+	lower, upper := fixture.bounds(max(u64))
+	assert(lower == max(u64) && upper == 0)
+	integer, fraction, bits, whole := fixture.measure_tuple(-17, -0.0, max(uint), min(int))
+	assert(integer == -17 && fraction == 0 && bits == max(uint) && whole == min(int))
+	mixed_index, weight := fixture.mixed_labels(-3)
+	assert(mixed_index == -3 && weight == 0.5)
 	#assert(size_of(int) == 8 && size_of(uint) == 8 && size_of(bool) == 1)
 	#assert(size_of(fixture.NativeWords) == 16 && offset_of(fixture.NativeWords, unsigned) == 8)
 	state := Value_Allocator{backing = context.allocator, remaining = -1}
