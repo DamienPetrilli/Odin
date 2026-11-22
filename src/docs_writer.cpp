@@ -1198,9 +1198,10 @@ gb_internal void odin_doc_write_docs(OdinDocWriter *w) {
 		}
 
 		OdinDocPkg doc_pkg = {};
-		String generated = swift_import_doc_path(pkg->fullpath);
+		String name = pkg->name;
+		String generated = swift_import_doc_path(pkg->fullpath, &name);
 		doc_pkg.fullpath = odin_doc_write_string(w, generated.len ? generated : pkg->fullpath);
-		doc_pkg.name     = odin_doc_write_string(w, pkg->name);
+		doc_pkg.name     = odin_doc_write_string(w, name);
 		doc_pkg.flags    = pkg_flags;
 		doc_pkg.docs     = odin_doc_pkg_doc_string(w, pkg);
 

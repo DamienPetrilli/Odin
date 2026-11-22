@@ -51,7 +51,7 @@ if [[ ${2:-debug} == debug ]]; then
 		grep -Eq '[[:space:]]products :: proc\(' "$build/storekit.txt"
 		grep -Eq '[[:space:]]finish :: proc\(' "$build/storekit.txt"
 		"$ODIN" doc "$package" "${odin_target[@]}" -all-packages -doc-format -out:"$build/storekit-doc"
-		grep -aFq 'swift:StoreKit/arm64-apple-macosx' "$build/storekit-doc.odin-doc"
+		"$ODIN" run "$here/storekit_doc.odin" -file -out:"$build/check-doc" -- "$build/storekit-doc.odin-doc"
 	fi
 	if [[ "$sdk" == macosx ]] && xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1; then
 		"$ODIN" "${storekit[@]}" -target:darwin_arm64 -subtarget:iphonesimulator \

@@ -2749,10 +2749,11 @@ gb_internal String swift_import_module_name(String directory) {
 }
 
 // Documentation outlives the temporary source produced during inspection.
-gb_internal String swift_import_doc_path(String directory) {
+gb_internal String swift_import_doc_path(String directory, String *module) {
 #if defined(GB_SYSTEM_OSX)
 	for (auto const &pkg : swift_import_packages) {
 		if (pkg.directory != directory) continue;
+		*module = pkg.module;
 		gbString path = gb_string_make(permanent_allocator(), "");
 		if (pkg.framework) path = gb_string_append_fmt(path, "swift:%.*s", LIT(pkg.module));
 		else path = gb_string_append_fmt(path, "%.*s/%.*s.swiftmodule", LIT(pkg.path), LIT(pkg.module));
