@@ -23,6 +23,10 @@ loaded :: proc(task: sk.Task, products: []sk.Product, err: sk.Error) {
 }
 
 main :: proc() {
+	period := sk.Non_Renewing_Period{starts_at = 10, expires_at = 20}
+	assert(sk.non_renewing_active(period, 10))
+	assert(!sk.non_renewing_active(period, 20))
+	assert(!sk.non_renewing_active({}))
 	if sk.can_make_payments() {
 		if task, started := sk.products(nil, loaded); started {
 			sk.task_release(task)

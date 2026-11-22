@@ -2,7 +2,7 @@
 #+vet tabs style semicolon
 
 /*
-StoreKit purchases, consumable delivery, entitlements and transaction updates on Apple platforms.
+StoreKit purchases, consumable delivery, non-renewing passes, entitlements and transaction updates on Apple platforms.
 
 Use `Product_type` to select how to sell a catalog item. It returns an Odin
 `Product_Type`. An unfamiliar SDK value yields `.Unknown, true`. A failed
@@ -215,6 +215,122 @@ are spent. If the wallet maintains a separate balance, insert the grant and
 update that balance in the same database transaction, adding credits only
 when the insert creates a row. A wallet shared across devices needs the same
 uniqueness rule in its shared store.
+
+**Sell a 30-day non-renewing pass**
+
+Create a Non-Renewing Subscription named `com.example.editor.pass30` in the
+Xcode configuration. This pass lasts 30 consecutive 24-hour days starting
+at the verified purchase date. The app allows another purchase after expiry.
+Each purchase starts its own term. Apple lets the app choose this policy.
+
+```odin
+import "core:time"
+import sk "vendor:darwin/StoreKit"
+
+PASS_ID :: "com.example.editor.pass30"
+PASS_TERM :: 30 * 24 * time.Hour
+
+Pass :: struct {
+	id:      u64,
+	period:  sk.Non_Renewing_Period,
+	revoked: bool,
+}
+
+current_pass, snapshot: Pass
+scan: sk.Transaction_Listener
+scan_failed, entitlements_checked, purchasing: bool
+
+has_pass :: proc() -> bool {
+	return !current_pass.revoked && sk.non_renewing_active(current_pass.period)
+}
+
+buy_pass :: proc(product: sk.Product) -> bool {
+	if !entitlements_checked || sk.is_listening(&scan) || purchasing || has_pass() { return false }
+	kind := sk.Product_type(product) or_return
+	if kind != .Non_Renewing_Subscription { return false }
+	id := sk.Product_id(product) or_return
+	defer delete(id)
+	if id != PASS_ID { return false }
+
+	task := sk.purchase(product, pass_purchased) or_return
+	purchasing = true
+	sk.task_release(task)
+	return true
+}
+
+pass_purchased :: proc(_: sk.Task, result: sk.Purchase_Result, err: sk.Error) {
+	defer sk.Error_destroy(err)
+	defer sk.Purchase_Result_destroy(result)
+	purchasing = false
+	if err != nil { return }
+	if purchase, ok := result.(sk.Purchase_Success); ok {
+		observe_pass(purchase.value, false)
+	}
+}
+
+// A repeated delivery keeps its original deadline. A refund wins over a
+// previous observation of the same transaction.
+keep_latest :: proc(dst: ^Pass, p: Pass) {
+	if dst.period.starts_at == dst.period.expires_at ||
+	   p.period.starts_at > dst.period.starts_at ||
+	   p.period.starts_at == dst.period.starts_at && p.id > dst.id ||
+	   p.id == dst.id && p.revoked {
+		dst^ = p
+	}
+}
+
+observe_pass :: proc(item: sk.Verification, from_scan: bool) -> bool {
+	v := item.(sk.Verified) or_return
+	id := sk.Transaction_product_id(v.value) or_return
+	defer delete(id)
+	if id != PASS_ID { return true }
+	period := sk.non_renewing_period(v, PASS_TERM) or_return
+	revoked := sk.Transaction_revocation_date(v.value) or_return
+	p := Pass{sk.Transaction_id(v.value), period, revoked != nil}
+	if from_scan || sk.is_listening(&scan) { keep_latest(&snapshot, p) }
+	if !from_scan {
+		keep_latest(&current_pass, p)
+		if task, started := sk.finish(v.value, pass_finished); started { sk.task_release(task) }
+	}
+	return true
+}
+
+pass_finished :: proc(_: sk.Task) {}
+
+// Call at launch and after restore. The listener borrows each result.
+refresh_pass :: proc() -> bool {
+	if sk.is_listening(&scan) { return false }
+	snapshot = {}
+	scan_failed = false
+	return sk.listen(&scan, .Entitlements, pass_item, pass_scan_closed)
+}
+
+pass_item :: proc(l: ^sk.Transaction_Listener, item: sk.Verification) {
+	from_scan := l.stream == .Entitlements
+	if !observe_pass(item, from_scan) && from_scan { scan_failed = true }
+}
+
+pass_scan_closed :: proc(_: ^sk.Transaction_Listener, reason: sk.Listener_End) {
+	if reason == .Exhausted && !scan_failed {
+		current_pass = snapshot
+		entitlements_checked = true
+	}
+}
+```
+
+Start the long-lived `.Updates` listener and an `.Unfinished` listener with
+`pass_item` when the app launches (see the listener example above). Then call
+`refresh_pass()`. A successful empty scan clears access. A failed scan leaves
+access intact so the app can retry. Live deliveries during a scan update both
+the current pass and the snapshot. StoreKit can include a finished, expired
+pass in `.Entitlements`.
+
+Check `has_pass()` when opening the feature and when returning to the foreground.
+Schedule a UI refresh for `period.expires_at` if the screen remains open. Access
+ends at that instant, even if StoreKit sends no update. Replaying the same
+signed purchase yields the same deadline. A later verified purchase yields a
+new deadline. `non_renewing_active(period, now)` accepts an explicit Swift
+reference date for an app with a trusted clock.
 
 **Presentation and ownership**
 

@@ -42,7 +42,7 @@ Foundation and code which imports AppKit.
 ## StoreKit
 
 `import sk "vendor:darwin/StoreKit"` imports the Swift purchase and transaction APIs
-for consumables and non-consumables on arm64 macOS 12+ and iOS 15+. Set `-minimum-os-version` to
+for consumables, non-consumables and non-renewing passes on arm64 macOS 12+ and iOS 15+. Set `-minimum-os-version` to
 your deployment target. The compiler imports the Swift declarations from the target SDK.
 
 Call `sk.products` with a slice of product IDs. The completion owns the returned slice
@@ -72,7 +72,9 @@ Use `sk.Product_type(product)` to classify a catalog item. For consumables, pass
 `sk.Transaction_purchased_quantity(tx)`. Record the credit once per transaction ID
 before finishing, including when retrying an unfinished transaction. The
 [StoreKit package guide](StoreKit/doc.odin) includes a credit-pack example and a
-SQLite grant ledger.
+SQLite grant ledger. For a non-renewing subscription, pass the verified purchase and
+your duration to `sk.non_renewing_period`. Check access with `sk.non_renewing_active`.
+The same guide shows a 30-day pass, expiry and repurchase.
 
 ## Using the bindings
 
