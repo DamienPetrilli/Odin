@@ -26,7 +26,16 @@ loaded :: proc(task: sk.Task, products: []sk.Product, err: sk.Error) {
 	}
 }
 
+refund_completed :: proc(_: sk.Task, result: sk.Refund_Result, err: sk.Error) {
+	defer sk.Refund_Result_destroy(result)
+	defer sk.Error_destroy(err)
+}
+
 main :: proc() {
+	_, refund_started := sk.request_refund(0, nil, refund_completed)
+	assert(!refund_started)
+	reason, converted := sk.Transaction_revocation_reason(nil)
+	assert(!converted && reason == nil)
 	current, renewal, ok := sk.subscription_products(nil)
 	assert(!ok && current == "" && renewal == nil)
 	period := sk.Non_Renewing_Period{starts_at = 10, expires_at = 20}

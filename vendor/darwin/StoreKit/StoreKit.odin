@@ -96,6 +96,20 @@ when AVAILABLE {
 	Purchase_Cancelled      :: api.Product_PurchaseResult_UserCancelled
 	Purchase_Unknown        :: api.Product_PurchaseResult_Unknown
 
+	// The presentation argument is the window scene on iOS and the view
+	// controller on macOS. A submitted request awaits the App Store's decision.
+	request_refund        :: api.Transaction_begin_refund_request_for__in_
+	Refund_Result         :: api.Transaction_RefundRequestStatus
+	Refund_Result_destroy :: api.Transaction_RefundRequestStatus_destroy
+	Refund_Submitted      :: api.Transaction_RefundRequestStatus_Success
+	Refund_Cancelled      :: api.Transaction_RefundRequestStatus_UserCancelled
+	Refund_Unknown        :: api.Transaction_RefundRequestStatus_Unknown
+
+	Refund_Error         :: api.Transaction_RefundRequestError
+	Refund_Duplicate     :: api.Transaction_RefundRequestError_DuplicateRequest
+	Refund_Failed        :: api.Transaction_RefundRequestError_Failed
+	Refund_Error_Unknown :: api.Transaction_RefundRequestError_Unknown
+
 	can_make_payments :: api.AppStore_can_make_payments
 	restore           :: api.AppStore_sync
 
@@ -131,6 +145,22 @@ when AVAILABLE {
 	Transaction_revocation_date        :: api.Transaction_revocation_date
 	Transaction_purchased_quantity     :: api.Transaction_purchased_quantity
 	finish                             :: api.Transaction_finish
+
+	// StoreKit uses an open integer code. Preserve new reasons from later OS releases.
+	Revocation_Reason :: distinct int
+	REVOCATION_OTHER           :: Revocation_Reason(0)
+	REVOCATION_DEVELOPER_ISSUE :: Revocation_Reason(1)
+
+	@(require_results)
+	Transaction_revocation_reason :: proc(tx: Transaction) -> (reason: Maybe(Revocation_Reason), ok: bool) #optional_ok {
+		if tx == nil { return nil, false }
+		native := api.Transaction_revocation_reason(tx) or_return
+		defer api.Optional_Transaction_RevocationReason_destroy(native)
+		if value, present := native.?; present {
+			return Revocation_Reason(api.Transaction_RevocationReason_raw_value(value)), true
+		}
+		return nil, true
+	}
 
 	// Classify a delivered or replayed transaction without fetching its product.
 	@(require_results)

@@ -471,6 +471,42 @@ check `active_tier() == .Plus`. Pass the selected catalog product to
 status again. Only the current product grants its tier. The renewal preference
 can name a different product for the next period, or be nil when renewal is off.
 
+**Request a refund in the app**
+
+Use a verified transaction ID and present in the window that owns the Refund
+button. On iOS the presenter is a UIKit window scene. On macOS pass the AppKit
+view controller displaying the purchase. The Swift importer retains the presenter through
+completion. Release the task when the app has no further use for the handle.
+
+```odin
+import sk "vendor:darwin/StoreKit"
+import UI "vendor:darwin/UIKit"
+
+request_refund :: proc(id: u64, window: ^UI.Window) -> bool {
+	task := sk.request_refund(id, UI.Window_windowScene(window), refund_returned) or_return
+	sk.task_release(task)
+	return true
+}
+
+refund_returned :: proc(_: sk.Task, result: sk.Refund_Result, err: sk.Error) {
+	defer sk.Refund_Result_destroy(result)
+	defer sk.Error_destroy(err)
+	if err != nil { return } // Report the request error and preserve access.
+	switch _ in result {
+	case sk.Refund_Submitted: // Show a submission receipt. Apple decides the refund.
+	case sk.Refund_Cancelled: // The customer dismissed the sheet.
+	case sk.Refund_Unknown:   // Preserve access for future status values.
+	}
+}
+```
+
+Keep listening to verified transaction updates. Apply the signed revocation
+date to the affected transaction and reconcile current entitlements on launch.
+`Transaction_revocation_reason` returns an optional integer code with no
+cleanup. A revocation can also arise from Family Sharing. A submitted or cancelled
+sheet by itself leaves the entitlement intact. Applications that need a decline
+notification use App Store Server Notifications V2.
+
 **Presentation and ownership**
 
 For a multiwindow iPad app targeting iOS 18.2+, use

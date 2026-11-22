@@ -114,11 +114,24 @@ enum SwiftImportBorrow {
 	SwiftImportBorrow_MutableBuffer,
 };
 
+struct SwiftImportObjcPresenter {
+	char const *usr;
+	SwiftImportType type;
+	char const *sil_borrow;
+	bool macos;
+};
+
+gb_global SwiftImportObjcPresenter const swift_import_objc_presenters[] = {
+	{"c:objc(cs)UIViewController", {"UIKit.UIViewController", "^_swift_ui.ViewController", "ptr"}, "@guaranteed UIViewController", false},
+	{"c:objc(cs)UIWindowScene",    {"UIKit.UIWindowScene",    "^_swift_ui.WindowScene",    "ptr"}, "@guaranteed UIWindowScene",    false},
+	{"c:objc(cs)NSViewController", {"AppKit.NSViewController", "^_swift_ui.ViewController", "ptr"}, "@guaranteed NSViewController", true},
+};
+
 struct SwiftImportParameter {
 	String name, label;
 	SwiftImportType type;
 	bool empty_set;
-	bool objc_controller;
+	char const *objc_borrow;
 	bool self_register;
 	SwiftImportBorrow borrow;
 	bool consumed;
@@ -615,7 +628,7 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 		return false;
 	}
 	for (auto const &p : fn->parameters) {
-		if (!managed && (p.type.nominal || p.objc_controller)) {
+		if (!managed && (p.type.nominal || p.objc_borrow)) {
 			fn->rejection = str_lit("tuple results with converted parameters are unsupported");
 			return false;
 		}
@@ -718,6 +731,19 @@ gb_internal bool swift_import_tuple_result(JsonValue *api, SwiftImportFunction *
 	fn->result = {gb_string_appendc(swift, ")"), gb_string_appendc(odin, ")"), swift_abi_tuple_result_llvm(fn->tuple_result), nullptr};
 	fn->rejection = {};
 	return true;
+}
+
+// Match both Swift tools' type identities and reject optional or modified operands.
+gb_internal SwiftImportObjcPresenter const *swift_import_objc_presenter(JsonValue *operand, Slice<JsonValue *> fragments) {
+	if (fragments.count != 3 || swift_import_string(fragments[1], "spelling") != ": ") return nullptr;
+	for (auto const &presenter : swift_import_objc_presenters) {
+		if (presenter.macos != (selected_subtarget == Subtarget_Default)) continue;
+		String usr = make_string_c(presenter.usr);
+		if (swift_import_string(operand, "usr") == usr &&
+		    swift_import_string(operand, "printedName") == make_string_c(presenter.type.swift) &&
+		    swift_import_string(fragments[2], "preciseIdentifier") == usr) return &presenter;
+	}
+	return nullptr;
 }
 
 gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftImportFunction *fn, Array<SwiftImportNominal *> *types) {
@@ -859,15 +885,10 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		if (!swift_import_identifier(p.label)) return false;
 		JsonValue *operand = api_types.count > fn->parameters.count+1 ? api_types[fn->parameters.count+1] : nullptr;
 		auto fragments = swift_import_array(parameter, "declarationFragments");
-		// Accept a nonoptional, unmodified ObjC class operand only. SIL must
-		// also confirm a borrow before an async capture can own its reference.
-		if (fn->is_async && selected_subtarget != Subtarget_Default &&
-		    swift_import_string(operand, "usr") == "c:objc(cs)UIViewController" &&
-		    swift_import_string(operand, "printedName") == "UIKit.UIViewController" &&
-		    fragments.count == 3 && swift_import_string(fragments[1], "spelling") == ": " &&
-		    swift_import_string(fragments[2], "preciseIdentifier") == "c:objc(cs)UIViewController") {
-			p.type = {"UIKit.UIViewController", "^_swift_ui.ViewController", "ptr", nullptr};
-			p.objc_controller = true;
+		auto presenter = fn->is_async ? swift_import_objc_presenter(operand, fragments) : nullptr;
+		if (presenter) {
+			p.type = presenter->type;
+			p.objc_borrow = presenter->sil_borrow;
 		} else if (swift_import_borrowed_parameter(operand, fragments, &p)) {
 			if (fn->is_async) {
 				fn->rejection = str_lit("a borrowed Swift pointer or buffer cannot be captured across suspension");
@@ -944,8 +965,8 @@ gb_internal bool swift_import_ownership(String sil, SwiftImportFunction *fn) {
 			String argument = string_trim_whitespace(string_split_iterator(&parameters, ','));
 			if (fn->value_receiver && &param == &fn->parameters[fn->parameters.count-1] &&
 			    string_starts_with(argument, str_lit("@inout"))) return false;
-			if (param.objc_controller) {
-				if (argument != "@guaranteed UIViewController") return false;
+			if (param.objc_borrow) {
+				if (argument != make_string_c(param.objc_borrow)) return false;
 				continue;
 			}
 			if (!param.type.nominal) continue;
@@ -1108,7 +1129,7 @@ gb_internal bool swift_import_needs_value_binding(SwiftImportFunction const &fn)
 	if (fn.owner && !(fn.is_static && fn.tuple_result && !fn.is_async && !fn.is_throwing)) return true;
 	if (fn.result.nominal || (fn.is_throwing && (!fn.is_async || !fn.tuple_result))) return true;
 	for (auto const &param : fn.parameters) {
-		if (param.type.nominal || param.objc_controller) return true;
+		if (param.type.nominal || param.objc_borrow) return true;
 	}
 	return false;
 }
@@ -1242,7 +1263,7 @@ gb_internal void swift_import_report_function(Array<String> *report, SwiftImport
 	}
 	for (auto const &param : fn.parameters) {
 		if (param.empty_set || (fn.value_receiver && param.name == "receiver")) continue;
-		if (param.objc_controller) row = gb_string_append_fmt(row, "  %.*s: retained through completion\n", LIT(param.name));
+		if (param.objc_borrow) row = gb_string_append_fmt(row, "  %.*s: retained through completion\n", LIT(param.name));
 		else if (param.borrow != SwiftImportBorrow_None) {
 			bool writable = param.borrow == SwiftImportBorrow_MutableBuffer || param.borrow == SwiftImportBorrow_MutablePointer;
 			bool pointer = param.borrow == SwiftImportBorrow_Pointer || param.borrow == SwiftImportBorrow_MutablePointer;
@@ -1508,7 +1529,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	swift_import_report_function(report, fn, native_name, source, signature_start);
 	source = gb_string_appendc(source, " {\n\tif completion == nil");
 	if (receiver) source = gb_string_appendc(source, " || receiver == nil");
-	for (auto const &param : fn.parameters) if (param.objc_controller || (param.type.nominal && !param.type.nominal->projected && !param.empty_set && !swift_import_kind(param.type, SwiftImportValue_String) && !swift_import_slice(param.type.nominal) && !swift_import_kind(param.type, SwiftImportValue_Set))) source = gb_string_append_fmt(source, " || %.*s == nil", LIT(param.name));
+	for (auto const &param : fn.parameters) if (param.objc_borrow || (param.type.nominal && !param.type.nominal->projected && !param.empty_set && !swift_import_kind(param.type, SwiftImportValue_String) && !swift_import_slice(param.type.nominal) && !swift_import_kind(param.type, SwiftImportValue_Set))) source = gb_string_append_fmt(source, " || %.*s == nil", LIT(param.name));
 	source = gb_string_appendc(source, " { return }\n\tCapture :: struct {\n\t\tcompletion: type_of(completion),\n");
 	if (fn.record_inout) source = gb_string_append_fmt(source, "\t\treceiver: ^%.*s,\n", LIT(fn.owner->name));
 	else if (receiver) source = gb_string_appendc(source, "\t\treceiver: rawptr,\n");
@@ -1524,7 +1545,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	for_array(i, fn.parameters) {
 		auto const &param = fn.parameters[i];
 		if (param.empty_set) continue;
-		if (param.objc_controller) {
+		if (param.objc_borrow) {
 			source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = %.*s\n\t_swift_ns.ObjectProtocol_retain(cast(^_swift_ns.ObjectProtocol)%.*s)\n\tdefer if !ok { _swift_ns.ObjectProtocol_release(cast(^_swift_ns.ObjectProtocol)%.*s) }\n", i, LIT(param.name), LIT(param.name), LIT(param.name));
 		} else if (swift_import_projected(param.type)) {
 			auto type = param.type.nominal;
@@ -1563,7 +1584,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	for_array(i, fn.parameters) {
 		auto const &param = fn.parameters[i];
 		if (param.empty_set) continue;
-		if (param.objc_controller) {
+		if (param.objc_borrow) {
 			source = gb_string_append_fmt(source, "\t\t_swift_ns.ObjectProtocol_release(cast(^_swift_ns.ObjectProtocol)capture.arg%td)\n", i);
 		} else if (swift_import_projected(param.type)) {
 			auto type = param.type.nominal;
@@ -2166,8 +2187,8 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	probe = gb_string_append_fmt(probe, "import %.*s\n", LIT(pkg->module));
 	for (auto const &dep : pkg->dependencies) probe = gb_string_append_fmt(probe, "import %.*s\n", LIT(dep.module));
 	bool probe_ui = false;
-	for (auto const &fn : functions) for (auto const &param : fn.parameters) probe_ui |= param.objc_controller;
-	if (probe_ui) probe = gb_string_appendc(probe, "import UIKit\n");
+	for (auto const &fn : functions) for (auto const &param : fn.parameters) probe_ui |= param.objc_borrow != nullptr;
+	if (probe_ui) probe = gb_string_appendc(probe, selected_subtarget == Subtarget_Default ? "import AppKit\n" : "import UIKit\n");
 	for (auto type : types) if (type->is_date || type->is_uuid) { probe = gb_string_appendc(probe, "import Foundation\n"); break; }
 	for_array(i, types) {
 		if (types[i]->is_template || types[i]->external_name.len) continue;
@@ -2532,7 +2553,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	}
 	for (auto const &fn : functions) {
 		bool values = swift_import_needs_value_binding(fn);
-		for (auto const &param : fn.parameters) has_ui |= param.objc_controller;
+		for (auto const &param : fn.parameters) has_ui |= param.objc_borrow != nullptr;
 		has_values |= values;
 		has_scalar_async |= fn.is_async && !values;
 		has_value_async |= fn.is_async && values;
@@ -2544,7 +2565,10 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		String path = quote_to_ascii(permanent_allocator(), swift_import_relative(pkg->directory, pkg->dependencies[i].directory));
 		source = gb_string_append_fmt(source, "import _swift_dependency_%.*s %.*s\n", LIT(pkg->dependencies[i].module), LIT(path));
 	}
-	if (has_ui) source = gb_string_appendc(source, "import _swift_ui \"vendor:darwin/UIKit\"\nimport _swift_ns \"core:sys/darwin/Foundation\"\n");
+	if (has_ui) {
+		source = gb_string_append_fmt(source, "import _swift_ui \"vendor:darwin/%s\"\nimport _swift_ns \"core:sys/darwin/Foundation\"\n",
+			selected_subtarget == Subtarget_Default ? "AppKit" : "UIKit");
+	}
 	if (has_scalar_async || has_sync_throwing) source = gb_string_appendc(source, "import \"base:intrinsics\"\n");
 	if (has_value_async || has_set) source = gb_string_appendc(source, "import \"base:runtime\"\n");
 	for (auto type : types) if (type->supported && type->is_uuid) { source = gb_string_appendc(source, "import _swift_uuid \"core:encoding/uuid\"\n"); break; }
