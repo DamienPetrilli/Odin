@@ -42,7 +42,7 @@ Foundation and code which imports AppKit.
 ## StoreKit
 
 `import sk "vendor:darwin/StoreKit"` imports the Swift purchase and transaction APIs
-for consumables, non-consumables and non-renewing passes on arm64 macOS 12+ and iOS 15+. Set `-minimum-os-version` to
+for consumables, non-consumables, non-renewing passes and auto-renewable subscriptions on arm64 macOS 12+ and iOS 15+. Set `-minimum-os-version` to
 your deployment target. The compiler imports the Swift declarations from the target SDK.
 
 Call `sk.products` with a slice of product IDs. The completion owns the returned slice
@@ -74,7 +74,8 @@ before finishing, including when retrying an unfinished transaction. The
 [StoreKit package guide](StoreKit/doc.odin) includes a credit-pack example and a
 SQLite grant ledger. For a non-renewing subscription, pass the verified purchase and
 your duration to `sk.non_renewing_period`. Check access with `sk.non_renewing_active`.
-The same guide shows a 30-day pass, expiry and repurchase.
+The guide shows a 30-day pass and a monthly auto-renewable subscription. Use
+`subscription_period` to read the verified renewal preference and access deadline.
 
 ## Using the bindings
 

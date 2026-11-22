@@ -2,7 +2,7 @@
 #+vet tabs style semicolon
 
 /*
-StoreKit purchases, consumable delivery, non-renewing passes, entitlements and transaction updates on Apple platforms.
+StoreKit purchases, consumable delivery, subscriptions, entitlements and transaction updates on Apple platforms.
 
 Use `Product_type` to select how to sell a catalog item. It returns an Odin
 `Product_Type`. An unfamiliar SDK value yields `.Unknown, true`. A failed
@@ -331,6 +331,92 @@ ends at that instant, even if StoreKit sends no update. Replaying the same
 signed purchase yields the same deadline. A later verified purchase yields a
 new deadline. `non_renewing_active(period, now)` accepts an explicit Swift
 reference date for an app with a trusted clock.
+
+**Sell an auto-renewable monthly subscription**
+
+Put a monthly auto-renewable product in its own subscription group. StoreKit
+supplies the end of each paid period. Turning off renewal changes the next
+charge. Access continues until the current deadline. A successful renewal
+has a new transaction ID and a later deadline.
+
+This example gives all products in the group the same access. Call
+`refresh_monthly` with the catalog product at launch, on return from Manage
+Subscriptions, and when StoreKit sends a transaction update. Refresh again at
+the displayed deadline. `has_monthly_access` checks the clock each time the
+customer opens the paid feature.
+
+```odin
+import sk "vendor:darwin/StoreKit"
+
+monthly: sk.Subscription_Period
+refreshing, refresh_again: bool
+monthly_group: string // Owned by the app for its lifetime.
+
+refresh_monthly :: proc(product: sk.Product) -> bool {
+	if monthly_group == "" {
+		monthly_group = sk.subscription_group_id(product) or_return
+	}
+	return refresh_group()
+}
+
+refresh_group :: proc() -> bool {
+	if refreshing {
+		refresh_again = true
+		return true
+	}
+	task := sk.subscription_statuses(monthly_group, received_status) or_return
+	refreshing = true
+	sk.task_release(task)
+	return true
+}
+
+received_status :: proc(_: sk.Task, items: []sk.Subscription_Status, err: sk.Error) {
+	defer sk.Error_destroy(err)
+	defer sk.subscription_statuses_destroy(items)
+	defer {
+		refreshing = false
+		if refresh_again {
+			refresh_again = false
+			refresh_group()
+		}
+	}
+	if err != nil { return } // Keep the last verified deadline and retry.
+	next: sk.Subscription_Period
+	for item in items {
+		p, verified := sk.subscription_period(item)
+		if !verified { return }
+		until := p.access_until.? or_continue
+		if sk.subscription_active(p) && until > (next.access_until.? or_else 0) {
+			next = p
+		}
+	}
+	monthly = next
+}
+
+has_monthly_access :: proc() -> bool {
+	return sk.subscription_active(monthly)
+}
+
+monthly_label :: proc() -> string {
+	if !has_monthly_access() { return "Subscribe" }
+	if monthly.state == .Grace_Period { return "Billing grace period" }
+	return "Renews automatically" if monthly.will_renew else "Access until period ends"
+}
+```
+
+Start a purchase with `sk.purchase(product, completion)` as in the purchase
+example above. Deliver a verified transaction for your product, refresh the
+group, and finish the delivered transaction. Also listen for renewals through
+`.Updates` and recover outstanding deliveries through `.Unfinished`. A change
+to renewal preference alone can be observed by refreshing the group when the
+customer returns from subscription management.
+
+`paid_until` is the signed transaction expiry. During billing grace,
+`access_until` uses the verified grace deadline. Billing retry outside grace,
+revocation, a superseded product, expiry, and an unfamiliar state grant no
+access. A group may contain multiple statuses through Family Sharing. Apps
+with different service tiers can call `Subscription_Status_transaction`, inspect
+the verified product ID, and release the result with `Verification_destroy`.
 
 **Presentation and ownership**
 

@@ -30,11 +30,15 @@ when AVAILABLE {
 	non_renewing_active :: proc{non_renewing_active_now, non_renewing_active_at}
 
 	@(private)
-	non_renewing_active_now :: proc(period: Non_Renewing_Period) -> bool {
+	current_store_date :: proc() -> swift.Date {
 		// Swift counts seconds from 2001-01-01 00:00:00 UTC.
 		ns := time.to_unix_nanoseconds(time.now())
-		now := swift.Date(ns / 1_000_000_000 - 978_307_200) + swift.Date(ns % 1_000_000_000) / 1e9
-		return non_renewing_active_at(period, now)
+		return swift.Date(ns / 1_000_000_000 - 978_307_200) + swift.Date(ns % 1_000_000_000) / 1e9
+	}
+
+	@(private)
+	non_renewing_active_now :: proc(period: Non_Renewing_Period) -> bool {
+		return non_renewing_active_at(period, current_store_date())
 	}
 
 	@(private)
