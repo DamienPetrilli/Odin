@@ -10,6 +10,11 @@ loaded :: proc(task: sk.Task, products: []sk.Product, err: sk.Error) {
 		_, _ = purchase_err.(sk.Purchase_Error_Product_Unavailable)
 	}
 	for product in products {
+		kind := sk.Product_type(product) or_continue
+		if kind == .Consumable {
+			option := sk.purchase_quantity(2) or_continue
+			sk.Purchase_Option_destroy(option)
+		}
 		name := sk.Product_display_name(product) or_continue
 		defer delete(name)
 		description := sk.Product_description(product) or_continue

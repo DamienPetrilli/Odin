@@ -42,7 +42,7 @@ Foundation and code which imports AppKit.
 ## StoreKit
 
 `import sk "vendor:darwin/StoreKit"` imports the Swift purchase and transaction APIs
-for non-consumables on arm64 macOS 12+ and iOS 15+. Set `-minimum-os-version` to
+for consumables and non-consumables on arm64 macOS 12+ and iOS 15+. Set `-minimum-os-version` to
 your deployment target. The compiler imports the Swift declarations from the target SDK.
 
 Call `sk.products` with a slice of product IDs. The completion owns the returned slice
@@ -66,6 +66,13 @@ before closing. A failed start schedules no callbacks.
 Use `sk.purchase` with an available presentation window. On iOS 18.2+,
 `sk.purchase_confirm_in` also accepts an explicit UIKit view controller.
 A successful async start returns an owned task. Keep it if you need to cancel and release it with `sk.task_release`. Deliver a verified purchase before calling `sk.finish`.
+
+Use `sk.Product_type(product)` to classify a catalog item. For consumables, pass a
+`sk.purchase_quantity` option to buy up to ten units. On delivery read the verified
+`sk.Transaction_purchased_quantity(tx)`. Record the credit once per transaction ID
+before finishing, including when retrying an unfinished transaction. The
+[StoreKit package guide](StoreKit/doc.odin) includes a credit-pack example and a
+SQLite grant ledger.
 
 ## Using the bindings
 

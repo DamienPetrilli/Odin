@@ -29,6 +29,36 @@ when AVAILABLE {
 	Product_description   :: api.Product_description
 	Product_display_price :: api.Product_display_price
 
+	// StoreKit uses an open, string-backed type. Unknown includes product types
+	// introduced by newer SDKs. A failed getter returns ok = false.
+	Product_Type :: enum {
+		Unknown,
+		Consumable,
+		Non_Consumable,
+		Non_Renewing_Subscription,
+		Auto_Renewable_Subscription,
+	}
+
+	@(private)
+	take_product_type :: proc(native: api.Product_ProductType) -> (kind: Product_Type, ok: bool) {
+		defer api.Product_ProductType_destroy(native)
+		raw := api.Product_ProductType_raw_value(native) or_return
+		defer delete(raw)
+		switch raw {
+		case "Consumable":                  return .Consumable, true
+		case "Non-Consumable":              return .Non_Consumable, true
+		case "Non-Renewing Subscription":   return .Non_Renewing_Subscription, true
+		case "Auto-Renewable Subscription": return .Auto_Renewable_Subscription, true
+		}
+		return .Unknown, true
+	}
+
+	@(require_results)
+	Product_type :: proc(product: Product) -> (kind: Product_Type, ok: bool) #optional_ok {
+		native := api.Product_type(product) or_return
+		return take_product_type(native)
+	}
+
 	// The callback owns the product slice and its elements. Free the slice on its
 	// own when transferring its elements elsewhere, or use products_destroy.
 	products :: api.Product_products
@@ -40,6 +70,13 @@ when AVAILABLE {
 	Purchase_Option         :: api.Product_PurchaseOption
 	Purchase_Option_destroy :: api.Product_PurchaseOption_destroy
 	app_account_token       :: api.Product_PurchaseOption_app_account_token
+
+	// StoreKit accepts 1 through 10 units per purchase. The caller owns the option.
+	@(require_results)
+	purchase_quantity :: proc(units: int) -> (option: Purchase_Option, ok: bool) #optional_ok {
+		if units < 1 || units > 10 { return nil, false }
+		return api.Product_PurchaseOption_quantity(units)
+	}
 
 	Purchase_Error                          :: api.Product_PurchaseError
 	Purchase_Error_Invalid_Quantity         :: api.Product_PurchaseError_InvalidQuantity
@@ -92,5 +129,13 @@ when AVAILABLE {
 	Transaction_original_purchase_date :: api.Transaction_original_purchase_date
 	Transaction_expiration_date        :: api.Transaction_expiration_date
 	Transaction_revocation_date        :: api.Transaction_revocation_date
+	Transaction_purchased_quantity     :: api.Transaction_purchased_quantity
 	finish                             :: api.Transaction_finish
+
+	// Classify a delivered or replayed transaction without fetching its product.
+	@(require_results)
+	Transaction_product_type :: proc(tx: Transaction) -> (kind: Product_Type, ok: bool) #optional_ok {
+		native := api.Transaction_product_type(tx) or_return
+		return take_product_type(native)
+	}
 }

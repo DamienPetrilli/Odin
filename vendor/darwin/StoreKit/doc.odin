@@ -2,7 +2,12 @@
 #+vet tabs style semicolon
 
 /*
-StoreKit purchases, entitlements and transaction updates for non-consumables on Apple platforms.
+StoreKit purchases, consumable delivery, entitlements and transaction updates on Apple platforms.
+
+Use `Product_type` to select how to sell a catalog item. It returns an Odin
+`Product_Type`. An unfamiliar SDK value yields `.Unknown, true`. A failed
+read yields `ok == false`. The same classification is available on a verified
+transaction through `Transaction_product_type`.
 
 **Sell a non-consumable**
 
@@ -138,6 +143,78 @@ matches for `PRO_ID` and publish that snapshot once the stream ends with
 previous access decision on a read or conversion failure. Reconcile any updates
 received during the scan. A user-initiated Restore Purchases button can call
 `restore` and rescan entitlements after it succeeds.
+
+**Sell consumable credits**
+
+Add a Consumable with ID `com.example.editor.credits` to the same Xcode
+configuration and load it with `products`. This example sells packs of 100
+credits. Re-enable Buy after completion so the customer can repurchase.
+Use `packs_received` as the item callback for the `.Updates` and `.Unfinished`
+listeners shown above. Consumables do not appear in `.Entitlements`.
+
+```odin
+buy_packs :: proc(product: sk.Product, units: int) -> bool {
+	kind := sk.Product_type(product) or_return
+	if kind != .Consumable { return false }
+	option := sk.purchase_quantity(units) or_return
+	defer sk.Purchase_Option_destroy(option)
+	task := sk.purchase(product, {option}, packs_purchased) or_return
+	sk.task_release(task)
+	return true
+}
+
+packs_purchased :: proc(_: sk.Task, result: sk.Purchase_Result, err: sk.Error) {
+	defer sk.Error_destroy(err)
+	defer sk.Purchase_Result_destroy(result)
+	if err != nil { return }
+	if success, ok := result.(sk.Purchase_Success); ok {
+		deliver_packs(success.value)
+	}
+}
+
+packs_received :: proc(_: ^sk.Transaction_Listener, item: sk.Verification) {
+	deliver_packs(item)
+}
+
+deliver_packs :: proc(item: sk.Verification) {
+	verified, ok := item.(sk.Verified)
+	if !ok { return }
+	tx := verified.value
+	kind, typed := sk.Transaction_product_type(tx)
+	if !typed || kind != .Consumable { return }
+	id, read := sk.Transaction_product_id(tx)
+	if !read { return }
+	defer delete(id)
+	if id != "com.example.editor.credits" { return }
+	revoked, checked := sk.Transaction_revocation_date(tx)
+	if !checked || revoked != nil { return }
+	units := sk.Transaction_purchased_quantity(tx)
+	if units < 1 || units > 10 { return }
+	if !credit_once(sk.Transaction_id(tx), 100 * units) { return }
+	if task, started := sk.finish(tx, finished); started { sk.task_release(task) }
+}
+```
+
+`credit_once` is an application procedure. For a local SQLite wallet, create
+the table below once. Bind the 64-bit transaction ID as eight big-endian bytes
+and the credit amount as an integer. Return true after the insert commits,
+including when the same ID already exists. On a storage error return false
+and leave the transaction unfinished. The `finished` callback above needs
+no wallet logic.
+
+```sql
+CREATE TABLE grants (tx BLOB PRIMARY KEY NOT NULL, credits INTEGER NOT NULL CHECK (credits > 0));
+INSERT INTO grants(tx, credits) VALUES (?1, ?2) ON CONFLICT(tx) DO NOTHING;
+SELECT COALESCE(SUM(credits), 0) FROM grants;
+```
+
+Each row is a credit grant. Two purchases of the same product have different
+transaction IDs and create two rows. A crash after commit and before `finish`
+replays the existing ID and adds zero credits. Keep grant IDs after credits
+are spent. If the wallet maintains a separate balance, insert the grant and
+update that balance in the same database transaction, adding credits only
+when the insert creates a row. A wallet shared across devices needs the same
+uniqueness rule in its shared store.
 
 **Presentation and ownership**
 
