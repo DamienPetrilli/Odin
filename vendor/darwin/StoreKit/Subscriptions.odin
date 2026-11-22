@@ -88,6 +88,23 @@ when AVAILABLE {
 		return .Unknown, true
 	}
 
+	// Read the current product and renewal preference from signed renewal info.
+	// The caller owns each returned string. A nil preference means no renewal.
+	@(require_results)
+	subscription_products :: proc(status: Subscription_Status) -> (current: string, renewal: Maybe(string), ok: bool) {
+		if status == nil { return "", nil, false }
+		result := api.Product_SubscriptionInfo_Status_renewal_info(status) or_return
+		defer api.VerificationResult_Product_SubscriptionInfo_RenewalInfo_destroy(result)
+		info := result.(api.VerificationResult_Product_SubscriptionInfo_RenewalInfo_Verified) or_return
+		id := api.Product_SubscriptionInfo_RenewalInfo_current_product_id(info.value) or_return
+		preference, converted := api.Product_SubscriptionInfo_RenewalInfo_auto_renew_preference(info.value)
+		if !converted {
+			delete(id)
+			return "", nil, false
+		}
+		return id, preference, true
+	}
+
 	// Borrow a status and verify both signed values. The result owns no storage.
 	@(require_results)
 	subscription_period :: proc(status: Subscription_Status) -> (period: Subscription_Period, ok: bool) #optional_ok {

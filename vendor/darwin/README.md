@@ -76,7 +76,9 @@ SQLite grant ledger. For a non-renewing subscription, pass the verified purchase
 your duration to `sk.non_renewing_period`. Check access with `sk.non_renewing_active`.
 The guide shows a 30-day pass and a monthly auto-renewable subscription. Read the offer’s
 calendar interval with `Product_subscription_period`. Use `subscription_period`
-for the verified renewal preference and paid or billing-grace deadline.
+for the verified paid or billing-grace deadline. For tiered access,
+`subscription_products` returns the current and next renewal product IDs. The
+example keeps Plus available through a scheduled downgrade to Basic.
 
 ## Using the bindings
 

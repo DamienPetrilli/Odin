@@ -27,6 +27,8 @@ loaded :: proc(task: sk.Task, products: []sk.Product, err: sk.Error) {
 }
 
 main :: proc() {
+	current, renewal, ok := sk.subscription_products(nil)
+	assert(!ok && current == "" && renewal == nil)
 	period := sk.Non_Renewing_Period{starts_at = 10, expires_at = 20}
 	assert(sk.non_renewing_active(period, 10))
 	assert(!sk.non_renewing_active(period, 20))

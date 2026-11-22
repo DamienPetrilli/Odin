@@ -332,15 +332,17 @@ signed purchase yields the same deadline. A later verified purchase yields a
 new deadline. `non_renewing_active(period, now)` accepts an explicit Swift
 reference date for an app with a trusted clock.
 
-**Sell an auto-renewable monthly subscription**
+**Sell monthly subscriptions with Basic and Plus tiers**
 
-Put a monthly auto-renewable product in its own subscription group. StoreKit
+Put Basic and Plus monthly products in one subscription group. In App Store Connect,
+rank Plus at level 1 and Basic at level 2. StoreKit
 supplies the end of each paid period. Turning off renewal changes the next
 charge. Access continues until the current deadline. A successful renewal
 has a new transaction ID and a later deadline. The catalog interval describes
 the offer. Use the signed status deadlines to decide access.
 
-This example gives all products in the group the same access. Call
+An upgrade delivers Plus immediately. When the customer schedules a downgrade,
+Plus remains active until StoreKit renews to Basic. Call
 `refresh_monthly` with the catalog product at launch, on return from Manage
 Subscriptions, and when StoreKit sends a transaction update. Refresh again at
 the displayed deadline. `has_monthly_access` checks the clock each time the
@@ -349,7 +351,22 @@ customer opens the paid feature.
 ```odin
 import sk "vendor:darwin/StoreKit"
 
-monthly: sk.Subscription_Period
+Tier :: enum { None, Basic, Plus }
+
+Plan :: struct {
+	period:    sk.Subscription_Period,
+	renews_to: Tier,
+}
+
+tier_for :: proc(id: string) -> Tier {
+	switch id {
+	case "com.example.basic": return .Basic
+	case "com.example.plus":  return .Plus
+	}
+	return .None
+}
+
+monthly: [Tier]Plan
 refreshing, refresh_again: bool
 billing_retry: bool
 monthly_group: string // Owned by the app for its lifetime.
@@ -385,30 +402,47 @@ received_status :: proc(_: sk.Task, items: []sk.Subscription_Status, err: sk.Err
 		}
 	}
 	if err != nil { return } // Keep the last verified deadline and retry.
-	next: sk.Subscription_Period
+	next: [Tier]Plan
 	retrying := false
 	for item in items {
 		p, ok := sk.subscription_period(item)
 		if !ok { return } // Preserve the snapshot on verification or conversion failure.
 		if p.in_billing_retry { retrying = true }
 		until := p.access_until.? or_continue
-		if sk.subscription_active(p) && until > (next.access_until.? or_else 0) {
-			next = p
+		current, renewal, read := sk.subscription_products(item)
+		if !read { return }
+		defer delete(current)
+		renews_to := Tier.None
+		if preference, present := renewal.?; present {
+			renews_to = tier_for(preference)
+			delete(preference)
+		}
+		tier := tier_for(current)
+		if tier != .None && sk.subscription_active(p) && until > (next[tier].period.access_until.? or_else 0) {
+			next[tier] = {p, renews_to}
 		}
 	}
 	monthly, billing_retry = next, retrying
 }
 
+active_tier :: proc() -> Tier {
+	if sk.subscription_active(monthly[.Plus].period)  { return .Plus }
+	if sk.subscription_active(monthly[.Basic].period) { return .Basic }
+	return .None
+}
+
 has_monthly_access :: proc() -> bool {
-	return sk.subscription_active(monthly)
+	return active_tier() != .None
 }
 
 monthly_label :: proc() -> string {
-	if has_monthly_access() {
-		if monthly.state == .Grace_Period { return "Update payment to keep access" }
-		return "Renews automatically" if monthly.will_renew else "Access until period ends"
+	if tier := active_tier(); tier != .None {
+		plan := monthly[tier]
+		if plan.period.state == .Grace_Period { return "Update payment to keep access" }
+		if tier == .Plus && plan.renews_to == .Basic { return "Plus until renewal, then Basic" }
+		return "Renews automatically" if plan.period.will_renew else "Access until period ends"
 	}
-	if billing_retry || monthly.state == .Grace_Period { return "Update payment to restore access" }
+	if billing_retry { return "Update payment to restore access" }
 	return "Subscribe"
 }
 ```
@@ -430,9 +464,12 @@ paid deadline and the same access check opens the feature again.
 
 Billing retry outside grace,
 revocation, a superseded product, expiry, and an unfamiliar state grant no
-access. A group may contain multiple statuses through Family Sharing. Apps
-with different service tiers can call `Subscription_Status_transaction`, inspect
-the verified product ID, and release the result with `Verification_destroy`.
+access. A group may contain multiple statuses through Family Sharing. The example
+keeps the latest active deadline for each known tier. To gate a Plus feature,
+check `active_tier() == .Plus`. Pass the selected catalog product to
+`sk.purchase` for either change. After the purchase, read the verified group
+status again. Only the current product grants its tier. The renewal preference
+can name a different product for the next period, or be nil when renewal is off.
 
 **Presentation and ownership**
 
