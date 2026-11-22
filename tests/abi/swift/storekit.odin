@@ -27,7 +27,9 @@ main :: proc() {
 	assert(sk.non_renewing_active(period, 10))
 	assert(!sk.non_renewing_active(period, 20))
 	assert(!sk.non_renewing_active({}))
-	p := sk.Subscription_Period{will_renew = false, access_until = 20}
+	p := sk.Subscription_Period{will_renew = false, starts_at = 10, access_until = 20}
+	assert(!sk.subscription_active(p, 9))
+	assert(sk.subscription_active(p, 10))
 	assert(sk.subscription_active(p, 19))
 	assert(!sk.subscription_active(p, 20))
 	if sk.can_make_payments() {

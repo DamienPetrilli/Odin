@@ -30,6 +30,7 @@ when AVAILABLE {
 		original_id:    u64,
 		state:          Subscription_State,
 		will_renew:     bool,
+		starts_at:      swift.Date,
 		paid_until:     swift.Date,
 		access_until:   Maybe(swift.Date),
 	}
@@ -68,6 +69,7 @@ when AVAILABLE {
 		renewal := renewal_result.(api.VerificationResult_Product_SubscriptionInfo_RenewalInfo_Verified) or_return
 		expiry := Transaction_expiration_date(tx.value) or_return
 		paid_until := expiry.? or_return
+		starts_at := Transaction_purchase_date(tx.value) or_return
 		state := renewal_state(status) or_return
 		revoked := Transaction_revocation_date(tx.value) or_return
 		period = {
@@ -75,6 +77,7 @@ when AVAILABLE {
 			original_id    = api.Transaction_original_id(tx.value),
 			state          = state,
 			will_renew     = api.Product_SubscriptionInfo_RenewalInfo_will_auto_renew(renewal.value),
+			starts_at      = starts_at,
 			paid_until     = paid_until,
 		}
 		if revoked == nil && !api.Transaction_is_upgraded(tx.value) {
@@ -98,6 +101,6 @@ when AVAILABLE {
 	@(private)
 	subscription_active_at :: proc(period: Subscription_Period, now: swift.Date) -> bool {
 		end := period.access_until.? or_return
-		return now < end
+		return period.starts_at <= now && now < end
 	}
 }
