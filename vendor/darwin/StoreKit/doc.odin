@@ -337,7 +337,8 @@ reference date for an app with a trusted clock.
 Put a monthly auto-renewable product in its own subscription group. StoreKit
 supplies the end of each paid period. Turning off renewal changes the next
 charge. Access continues until the current deadline. A successful renewal
-has a new transaction ID and a later deadline.
+has a new transaction ID and a later deadline. The catalog interval describes
+the offer. Use the signed status deadlines to decide access.
 
 This example gives all products in the group the same access. Call
 `refresh_monthly` with the catalog product at launch, on return from Manage
@@ -350,10 +351,13 @@ import sk "vendor:darwin/StoreKit"
 
 monthly: sk.Subscription_Period
 refreshing, refresh_again: bool
+billing_retry: bool
 monthly_group: string // Owned by the app for its lifetime.
 
 refresh_monthly :: proc(product: sk.Product) -> bool {
 	if monthly_group == "" {
+		interval := sk.Product_subscription_period(product) or_return
+		if interval.count != 1 || interval.unit != .Month { return false }
 		monthly_group = sk.subscription_group_id(product) or_return
 	}
 	return refresh_group()
@@ -382,15 +386,17 @@ received_status :: proc(_: sk.Task, items: []sk.Subscription_Status, err: sk.Err
 	}
 	if err != nil { return } // Keep the last verified deadline and retry.
 	next: sk.Subscription_Period
+	retrying := false
 	for item in items {
-		p, verified := sk.subscription_period(item)
-		if !verified { return }
+		p, ok := sk.subscription_period(item)
+		if !ok { return } // Preserve the snapshot on verification or conversion failure.
+		if p.in_billing_retry { retrying = true }
 		until := p.access_until.? or_continue
 		if sk.subscription_active(p) && until > (next.access_until.? or_else 0) {
 			next = p
 		}
 	}
-	monthly = next
+	monthly, billing_retry = next, retrying
 }
 
 has_monthly_access :: proc() -> bool {
@@ -398,9 +404,12 @@ has_monthly_access :: proc() -> bool {
 }
 
 monthly_label :: proc() -> string {
-	if !has_monthly_access() { return "Subscribe" }
-	if monthly.state == .Grace_Period { return "Billing grace period" }
-	return "Renews automatically" if monthly.will_renew else "Access until period ends"
+	if has_monthly_access() {
+		if monthly.state == .Grace_Period { return "Update payment to keep access" }
+		return "Renews automatically" if monthly.will_renew else "Access until period ends"
+	}
+	if billing_retry || monthly.state == .Grace_Period { return "Update payment to restore access" }
+	return "Subscribe"
 }
 ```
 
@@ -412,7 +421,14 @@ to renewal preference alone can be observed by refreshing the group when the
 customer returns from subscription management.
 
 `paid_until` is the signed transaction expiry. During billing grace,
-`access_until` uses the verified grace deadline. Billing retry outside grace,
+`access_until` uses the verified grace deadline. `in_billing_retry` reflects the signed renewal info
+and can be true while the subscription still grants access. Keep the paid feature available throughout that
+interval, even after the paid expiry. Schedule the next refresh at the grace
+deadline. A cached status can still say `.Grace_Period` after that instant.
+If the payment recovers, a fresh verified status supplies the new
+paid deadline and the same access check opens the feature again.
+
+Billing retry outside grace,
 revocation, a superseded product, expiry, and an unfamiliar state grant no
 access. A group may contain multiple statuses through Family Sharing. Apps
 with different service tiers can call `Subscription_Status_transaction`, inspect

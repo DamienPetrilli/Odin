@@ -74,8 +74,9 @@ before finishing, including when retrying an unfinished transaction. The
 [StoreKit package guide](StoreKit/doc.odin) includes a credit-pack example and a
 SQLite grant ledger. For a non-renewing subscription, pass the verified purchase and
 your duration to `sk.non_renewing_period`. Check access with `sk.non_renewing_active`.
-The guide shows a 30-day pass and a monthly auto-renewable subscription. Use
-`subscription_period` to read the verified renewal preference and access deadline.
+The guide shows a 30-day pass and a monthly auto-renewable subscription. Read the offer’s
+calendar interval with `Product_subscription_period`. Use `subscription_period`
+for the verified renewal preference and paid or billing-grace deadline.
 
 ## Using the bindings
 

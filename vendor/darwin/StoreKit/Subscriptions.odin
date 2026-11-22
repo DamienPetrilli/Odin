@@ -21,18 +21,49 @@ when AVAILABLE {
 		return api.Product_SubscriptionInfo_subscription_group_id(value)
 	}
 
+	Subscription_Unit :: enum { Unknown, Day, Week, Month, Year }
+
+	Billing_Interval :: struct {
+		count: int,
+		unit:  Subscription_Unit,
+	}
+
+	// The catalog's calendar interval. Returns false for products without
+	// subscription information. The returned value owns no Swift storage.
+	@(require_results)
+	Product_subscription_period :: proc(product: Product) -> (interval: Billing_Interval, ok: bool) #optional_ok {
+		if product == nil { return {}, false }
+		info := api.Product_subscription(product) or_return
+		defer api.Optional_Product_SubscriptionInfo_destroy(info)
+		subscription := info.? or_return
+		period := api.Product_SubscriptionInfo_subscription_period(subscription) or_return
+		defer api.Product_SubscriptionPeriod_destroy(period)
+		unit := api.Product_SubscriptionPeriod_unit(period) or_return
+		defer api.Product_SubscriptionPeriod_Unit_destroy(unit)
+		interval.count = api.Product_SubscriptionPeriod_value(period)
+		switch _ in unit {
+		case api.Product_SubscriptionPeriod_Unit_Day:     interval.unit = .Day
+		case api.Product_SubscriptionPeriod_Unit_Week:    interval.unit = .Week
+		case api.Product_SubscriptionPeriod_Unit_Month:   interval.unit = .Month
+		case api.Product_SubscriptionPeriod_Unit_Year:    interval.unit = .Year
+		case api.Product_SubscriptionPeriod_Unit_Unknown: interval.unit = .Unknown
+		}
+		return interval, true
+	}
+
 	Subscription_State :: enum {
 		Unknown, Subscribed, Expired, Billing_Retry, Grace_Period, Revoked,
 	}
 
 	Subscription_Period :: struct {
-		transaction_id: u64,
-		original_id:    u64,
-		state:          Subscription_State,
-		will_renew:     bool,
-		starts_at:      swift.Date,
-		paid_until:     swift.Date,
-		access_until:   Maybe(swift.Date),
+		transaction_id:   u64,
+		original_id:      u64,
+		state:            Subscription_State,
+		will_renew:       bool,
+		in_billing_retry: bool,
+		starts_at:        swift.Date,
+		paid_until:       swift.Date,
+		access_until:     Maybe(swift.Date),
 	}
 
 	@(private)
@@ -73,12 +104,13 @@ when AVAILABLE {
 		state := renewal_state(status) or_return
 		revoked := Transaction_revocation_date(tx.value) or_return
 		period = {
-			transaction_id = Transaction_id(tx.value),
-			original_id    = api.Transaction_original_id(tx.value),
-			state          = state,
-			will_renew     = api.Product_SubscriptionInfo_RenewalInfo_will_auto_renew(renewal.value),
-			starts_at      = starts_at,
-			paid_until     = paid_until,
+			transaction_id   = Transaction_id(tx.value),
+			original_id      = api.Transaction_original_id(tx.value),
+			state            = state,
+			will_renew       = api.Product_SubscriptionInfo_RenewalInfo_will_auto_renew(renewal.value),
+			in_billing_retry = api.Product_SubscriptionInfo_RenewalInfo_is_in_billing_retry(renewal.value),
+			starts_at        = starts_at,
+			paid_until       = paid_until,
 		}
 		if revoked == nil && !api.Transaction_is_upgraded(tx.value) {
 			#partial switch state {
