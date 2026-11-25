@@ -1,5 +1,9 @@
 import Foundation
 
+@available(macOS 12, iOS 15, *)
+@backDeployed(before: macOS 99, iOS 99)
+public func backDeployedIncrement(_ value: UInt64) -> UInt64 { value &+ 1 }
+
 @inline(never) public func add(_ value: UInt64, _ delta: UInt64) -> UInt64 {
 	value &+ delta
 }
@@ -1437,6 +1441,11 @@ public func fixtureBytes(_ kind: UInt64) -> Data {
 		releasedDataBuffers += 1
 	})
 	return buffer[17..<501]
+}
+
+@available(macOS 12, iOS 15, *)
+public func fixtureCurrency(_ code: String) -> Decimal.FormatStyle.Currency {
+	Decimal.FormatStyle.Currency(code: code, locale: Locale(identifier: "en_US"))
 }
 
 public func fixturePrice(_ kind: UInt64) -> Decimal {

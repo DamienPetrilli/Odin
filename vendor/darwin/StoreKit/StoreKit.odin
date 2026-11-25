@@ -33,6 +33,17 @@ when AVAILABLE {
 	Decimal       :: swift.Decimal
 	Product_price :: api.Product_price
 
+	// The caller owns currency. Both values come from the same product.
+	@(require_results)
+	price_and_currency :: proc(product: Product) -> (amount: Decimal, currency: string, ok: bool) {
+		if product == nil { return }
+		price := Product_price(product) or_return
+		style := api.Product_price_format_style(product) or_return
+		defer api.Decimal_FormatStyle_Currency_destroy(style)
+		code := api.Decimal_FormatStyle_Currency_currency_code(style) or_return
+		return price, code, true
+	}
+
 	// StoreKit uses an open, string-backed type. Unknown includes product types
 	// introduced by newer SDKs. A failed getter returns ok = false.
 	Product_Type :: enum {

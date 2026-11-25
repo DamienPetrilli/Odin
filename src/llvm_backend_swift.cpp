@@ -679,3 +679,147 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 		LLVMSetLinkage(global, LLVMAppendingLinkage);
 	}
 }
+#if defined(GB_SYSTEM_OSX)
+// Keep the SDK's dispatch and everything its fallback references. Declarations
+// are never rewritten. Restore coalescing of surviving definitions before
+// linking so multiple Odin packages can use the same Swift metadata or code.
+gb_internal bool lb_build_swift_back_deployment(SwiftImportPackage const &pkg, Array<String> const &roots, String object) {
+	LLVMContextRef ctx = LLVMContextCreate();
+	defer (LLVMContextDispose(ctx));
+	LLVMMemoryBufferRef buffer = nullptr;
+	LLVMModuleRef donor = nullptr;
+	char *message = nullptr;
+	String path = swift_import_path(pkg.directory, "Probe.ll");
+	if (LLVMCreateMemoryBufferWithContentsOfFile(alloc_cstring(temporary_allocator(), path), &buffer, &message) ||
+	    LLVMParseIRInContext(ctx, buffer, &donor, &message)) {
+		gb_printf_err("Swift import: cannot read back-deployment code for %.*s: %s\n", LIT(pkg.module), message);
+		LLVMDisposeMessage(message);
+		return false;
+	}
+	defer (LLVMDisposeModule(donor));
+	char const *used_lists[] = {"llvm.used", "llvm.compiler.used"};
+	for (char const *list : used_lists) {
+		if (auto value = LLVMGetNamedGlobal(donor, list)) LLVMDeleteGlobal(value);
+	}
+	size_t asm_size = 0;
+	LLVMGetModuleInlineAsm(donor, &asm_size);
+	if (asm_size || LLVMGetFirstGlobalAlias(donor) || LLVMGetFirstGlobalIFunc(donor) ||
+	    LLVMGetNamedGlobal(donor, "llvm.global_ctors") || LLVMGetNamedGlobal(donor, "llvm.global_dtors")) {
+		gb_printf_err("Swift import: cannot isolate back-deployment code for %.*s with module-wide definitions\n", LIT(pkg.module));
+		return false;
+	}
+	struct Definition { String name; LLVMLinkage linkage; LLVMVisibility visibility; };
+	auto definitions = array_make<Definition>(temporary_allocator());
+	for (int kind = 0; kind < 2; kind++) {
+		for (auto value = kind ? LLVMGetFirstGlobal(donor) : LLVMGetFirstFunction(donor); value;
+		     value = kind ? LLVMGetNextGlobal(value) : LLVMGetNextFunction(value)) {
+			if (LLVMIsDeclaration(value)) continue;
+			auto linkage = LLVMGetLinkage(value);
+			if (linkage == LLVMPrivateLinkage || linkage == LLVMInternalLinkage) continue;
+			String name = copy_string(temporary_allocator(), make_string_c(LLVMGetValueName(value)));
+			array_add(&definitions, Definition{name, linkage, LLVMGetVisibility(value)});
+			LLVMSetLinkage(value, LLVMInternalLinkage);
+		}
+	}
+	for (String name : roots) {
+		LLVMSetLinkage(LLVMGetNamedFunction(donor, alloc_cstring(temporary_allocator(), name)), LLVMExternalLinkage);
+	}
+	auto options = LLVMCreatePassBuilderOptions();
+	defer (LLVMDisposePassBuilderOptions(options));
+	if (auto err = LLVMRunPasses(donor, "globaldce,strip-dead-prototypes", nullptr, options)) {
+		char *description = LLVMGetErrorMessage(err);
+		gb_printf_err("Swift import: cannot isolate back-deployment code for %.*s: %s\n", LIT(pkg.module), description);
+		LLVMDisposeErrorMessage(description);
+		return false;
+	}
+	for (auto const &def : definitions) {
+		char const *name = alloc_cstring(temporary_allocator(), def.name);
+		auto value = LLVMGetNamedFunction(donor, name);
+		if (!value) value = LLVMGetNamedGlobal(donor, name);
+		if (!value) continue;
+		if (swift_import_index(def.name, str_lit("OdinSwiftImportProbe")) >= 0) {
+			gb_printf_err("Swift import: back-deployed declaration depends on inspection code\n");
+			return false;
+		}
+		LLVMSetLinkage(value, def.linkage);
+		LLVMSetVisibility(value, def.visibility);
+	}
+	for (String name : roots) {
+		LLVMSetLinkage(LLVMGetNamedFunction(donor, alloc_cstring(temporary_allocator(), name)), LLVMWeakODRLinkage);
+	}
+	// Apple's LLVM emits the SDK code with its own data layout, stack probes
+	// and target attributes. Odin's target machine may differ on all three.
+	String ir = swift_import_path(pkg.directory, "BackDeploy.ll");
+	if (LLVMPrintModuleToFile(donor, alloc_cstring(temporary_allocator(), ir), &message)) {
+		syntax_error(pkg.node, "Swift import: cannot write back-deployment IR: %s", message);
+		LLVMDisposeMessage(message);
+		return false;
+	}
+	auto args = array_make<String>(temporary_allocator());
+	String command[] = {str_lit("clang"), str_lit("-target"), build_context.metrics.target_triplet,
+	                    str_lit("-isysroot"), swift_import_sdk, str_lit("-x"), str_lit("ir"), str_lit("-c")};
+	for (String arg : command) array_add(&args, arg);
+	array_add(&args, build_context.optimization_level ? str_lit("-O2") : str_lit("-O0"));
+	if (build_context.sanitizer_flags & SanitizerFlag_Address) array_add(&args, str_lit("-fsanitize=address"));
+	array_add(&args, ir);
+	array_add(&args, str_lit("-o"));
+	array_add(&args, object);
+	return swift_import_exec(pkg.node, pkg.directory, args, nullptr);
+}
+
+gb_internal String lb_filepath_obj_for_module(lbModule *m);
+
+gb_internal bool lb_emit_swift_back_deployment(lbGenerator *gen) {
+	for (auto const &pkg : swift_import_packages) {
+		if (!pkg.back_deploy_thunks.count) continue;
+		auto roots = array_make<String>(temporary_allocator());
+		auto consumers = array_make<lbModule *>(temporary_allocator());
+		for (auto const &entry : gen->modules) {
+			auto m = entry.value;
+			bool uses = false;
+			for (String name : pkg.back_deploy_thunks) {
+				auto fn = LLVMGetNamedFunction(m->mod, alloc_cstring(temporary_allocator(), name));
+				if (!fn || !LLVMGetFirstUse(fn)) continue;
+				uses = true;
+				bool found = false;
+				for (String known : roots) found |= known == name;
+				if (!found) array_add(&roots, name);
+			}
+			if (uses) array_add(&consumers, m);
+		}
+		if (!roots.count) continue;
+		if (build_context.build_mode == BuildMode_LLVM_IR || build_context.build_mode == BuildMode_Assembly ||
+		    (build_context.build_mode == BuildMode_Object && build_context.lto_kind != LTO_None)) {
+			syntax_error(pkg.node, "Swift back-deployment requires native object output for the fallback implementation");
+			return false;
+		}
+		String object = swift_import_path(pkg.directory, "BackDeploy.o");
+		if (!lb_build_swift_back_deployment(pkg, roots, object)) return false;
+		if (build_context.build_mode != BuildMode_Object) {
+			array_add(&gen->output_object_paths, object);
+			continue;
+		}
+		for (lbModule *m : consumers) {
+			String out = lb_filepath_obj_for_module(m);
+			char *temp = alloc_cstring(temporary_allocator(), concatenate_strings(temporary_allocator(), out, str_lit(".XXXXXX")));
+			int fd = mkstemp(temp);
+			if (fd < 0) {
+				syntax_error(pkg.node, "Cannot create temporary object beside '%.*s'", LIT(out));
+				return false;
+			}
+			close(fd);
+			defer (unlink(temp));
+			auto args = array_make<String>(temporary_allocator());
+			String command[] = {str_lit("ld"), str_lit("-r"), str_lit("-arch"), str_lit("arm64"),
+			                    out, object, str_lit("-o"), make_string_c(temp)};
+			for (String arg : command) array_add(&args, arg);
+			if (!swift_import_exec(pkg.node, pkg.directory, args, nullptr)) return false;
+			if (rename(temp, alloc_cstring(temporary_allocator(), out)) != 0) {
+				syntax_error(pkg.node, "Cannot write Swift back-deployment code to '%.*s'", LIT(out));
+				return false;
+			}
+		}
+	}
+	return true;
+}
+#endif

@@ -537,7 +537,16 @@ Read `price := sk.Product_price(product) or_return` for calculations. The
 magnitude is `coefficient * 10^exponent`; `negative` carries the sign. For example,
 2.99 has coefficient 299 and exponent -2, and 0.125 has coefficient 125 and
 exponent -3. The value is allocation-free. Use `Product_display_price` for
-localized price text. Check the currency separately before combining amounts.
+localized price text. For calculations across products, read the storefront
+currency with the amount and compare currency codes before adding prices.
+
+	amount, currency := sk.price_and_currency(product) or_return
+	defer delete(currency)
+
+The amount is an exact decimal value. The caller owns the currency string.
+On iOS 15 and macOS 12, StoreKit can return an empty code if it cannot
+determine the price locale. Check for an empty string before doing currency
+arithmetic. A failed conversion returns `ok = false`.
 
 Use `Transaction_json_representation` to read the transaction JSON as an owned
 `[]u8`. The header, payload, signature and signed bytes are available from the

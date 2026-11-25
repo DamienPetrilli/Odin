@@ -101,6 +101,18 @@ main :: proc() {
 	}
 	nan, finite := fixture.fixture_price(9)
 	assert(!finite && nan == {})
+	for code in ([3]string{"KWD", "", "unexpected-long-currency-identifier"}) {
+		style := fixture.fixture_currency(code) or_else panic("Currency format")
+		{
+			context.allocator = runtime.nil_allocator()
+			str, ok := fixture.Decimal_FormatStyle_Currency_currency_code(style)
+			assert(str == "" && ok == (len(code) == 0))
+		}
+		text := fixture.Decimal_FormatStyle_Currency_currency_code(style) or_else panic("Currency code")
+		fixture.Decimal_FormatStyle_Currency_destroy(style)
+		assert(text == code)
+		delete(text)
+	}
 	empty := fixture.fixture_bytes(0) or_else panic("Empty Data")
 	assert(len(empty) == 0)
 	delete(empty)
@@ -151,6 +163,7 @@ main :: proc() {
 	check_tasks()
 	assert(fixture.prior_value(41) == 41)
 	assert(fixture.add(17, 9) == 26)
+	assert(fixture.back_deployed_increment(41) == 42)
 	assert(fixture.add(0xffff_ffff_ffff_ffff, 9) == 8)
 	assert(fixture.mixed(-41, 0.25) == -40.75)
 	assert(!failed_start())

@@ -84,6 +84,25 @@ fi
 grep -q 'SwiftImportFixture.*addLater.*YaF$' "$build/symbols.txt"
 grep -q 'SwiftImportFixture.*addLater.*Tu' "$build/symbols.txt"
 grep -q 'SwiftImportFixture.*3add' "$build/symbols.txt"
+grep -q 'SwiftImportFixture.*backDeployedIncrement.*FTwb$' "$build/symbols.txt"
+if [[ $sdk == macosx && $mode == release ]]; then
+	# The executable may coalesce the dispatch function with one in the
+	# provider. Inspect the Odin object before linking the Swift library.
+	mkdir "$build/object"
+	cat > "$build/object/client.odin" <<'ODIN'
+package client
+foreign import fixture "swift:../fixture/SwiftImportFixture"
+@(export)
+increment :: proc "c" (value: u64) -> u64 { return fixture.back_deployed_increment(value) }
+ODIN
+	"$ODIN" build "$build/object" "${odin_target[@]}" "${odin_opt[@]}" -no-entry-point -use-single-module -build-mode:obj -out:"$build/client.o"
+	xcrun nm -U "$build/client.o" > "$build/client-symbols.txt"
+	grep -q 'SwiftImportFixture.*backDeployedIncrement.*FTwb$' "$build/client-symbols.txt"
+	if grep -q OdinSwiftImportProbe "$build/client-symbols.txt"; then
+		echo "Unexpected Swift inspection code in the client object" >&2
+		exit 1
+	fi
+fi
 
 # A separate Swift module deliberately shadows standard scalar type names.
 mkdir -p "$build/names/fixture"

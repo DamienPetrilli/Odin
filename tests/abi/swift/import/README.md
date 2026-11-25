@@ -892,3 +892,11 @@ used at build time must describe the declaration. Runtime lookup currently cover
 nonthrowing calls with scalar or String inputs and scalar, String or supported
 opaque results whose types exist at the deployment floor. An available call
 keeps its usual conversion and ownership contract.
+
+For synchronous nonthrowing `@backDeployed` declarations, Swift can supply
+a client-side implementation for older OS versions. On those deployment
+targets Odin includes the SDK’s dispatch function and its dependencies when
+the program calls the declaration. The same Odin call goes straight to the
+framework on newer deployment targets. The application links native objects.
+An individual LLVM IR, assembly, or LTO object output cannot currently carry
+the separate fallback object.

@@ -4282,6 +4282,9 @@ gb_internal bool lb_generate_code(lbGenerator *gen) {
 	llvm_error = nullptr;
 	defer (LLVMDisposeMessage(llvm_error));
 
+#if defined(GB_SYSTEM_OSX)
+	if (build_context.build_mode == BuildMode_LLVM_IR && !lb_emit_swift_back_deployment(gen)) return false;
+#endif
 	if (build_context.keep_temp_files ||
 	    build_context.build_mode == BuildMode_LLVM_IR) {
 		TIME_SECTION("LLVM Print Module to File");
@@ -4327,6 +4330,9 @@ gb_internal bool lb_generate_code(lbGenerator *gen) {
 	if (!lb_llvm_object_generation(gen, do_threading)) {
 		return false;
 	}
+#if defined(GB_SYSTEM_OSX)
+	if (!lb_emit_swift_back_deployment(gen)) return false;
+#endif
 
 
 	if (build_context.sanitizer_flags & SanitizerFlag_Address) {

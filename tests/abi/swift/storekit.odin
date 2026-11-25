@@ -24,6 +24,8 @@ loaded :: proc(task: sk.Task, products: []sk.Product, err: sk.Error) {
 		defer delete(name)
 		description := sk.Product_description(product) or_continue
 		defer delete(description)
+		_, currency := sk.price_and_currency(product) or_continue
+		defer delete(currency)
 	}
 }
 
@@ -43,6 +45,8 @@ scan_item :: proc(_: ^sk.Transaction_Scan, item: sk.Verification) {
 scan_closed :: proc(_: ^sk.Transaction_Scan, _: sk.Listener_End) {}
 
 main :: proc() {
+	_, code, priced := sk.price_and_currency(nil)
+	assert(!priced && code == "")
 	scan: sk.Transaction_Scan
 	assert(!sk.scan_transactions(nil, .History, "sample", scan_item, scan_closed))
 	sk.stop_scan(&scan)

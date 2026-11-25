@@ -1,5 +1,5 @@
-// Swift modules are inspected at build time. Only the original library is
-// linked; the inspection source and its IR never become application code.
+// Swift modules are inspected at build time. Back-deployed declarations can
+// also supply a dispatch function and implementation serialized by the library.
 
 #if defined(GB_SYSTEM_OSX)
 #include <spawn.h>
@@ -22,11 +22,13 @@ struct SwiftImportDependency {
 };
 
 struct SwiftImportPackage {
+	Ast *node;
 	String module, path, library;
 	String directory;
 	Array<SwiftImportRejection> unsupported;
 	Array<SwiftImportNominal *> plain_records;
 	Array<SwiftImportDependency> dependencies;
+	Array<String> back_deploy_thunks;
 	SwiftImportPackage *parent; // Only used during recursive module inspection.
 	bool framework;
 };
@@ -104,6 +106,7 @@ struct SwiftImportNominal {
 	bool is_tuple; // Structural storage used only by a managed tuple result.
 	SwiftImportValueKind kind;
 	bool supported, is_enum, is_frozen, is_template, is_optional, is_scalar, is_record, is_date, is_uuid, is_error;
+	bool is_currency_format;
 };
 
 enum SwiftImportBorrow {
@@ -147,6 +150,7 @@ struct SwiftImportFunction {
 	String name, title, signature, symbol, odin_name, base_name, rejection;
 	JsonValue *api, *available_since, *deprecated_since;
 	bool runtime_guard;
+	bool back_deployed;
 	SwiftImportNominal *owner;
 	Array<SwiftImportParameter> parameters;
 	SwiftImportType result;
@@ -450,6 +454,25 @@ gb_internal bool swift_import_api_type(JsonValue *api, SwiftImportType *type, Ar
 	}
 	if (usr == "s:SS" && children.count == 0) {
 		*type = swift_import_nominal_type(swift_import_string_type(types));
+		return true;
+	}
+	if (usr == "s:So9NSDecimala10FoundationE11FormatStyleV8CurrencyV" && children.count == 0 &&
+	    swift_import_string(api, "printedName") == "Foundation.Decimal.FormatStyle.Currency") {
+		int major = atoi(alloc_cstring(temporary_allocator(), build_context.minimum_os_version_string));
+		if (major < (selected_subtarget == Subtarget_Default ? 12 : 15)) return false;
+		SwiftImportNominal *style = nullptr;
+		for (auto t : *types) if (t->usr == usr) style = t;
+		if (!style) {
+			style = gb_alloc_item(permanent_allocator(), SwiftImportNominal);
+			*style = {};
+			style->name = str_lit("Decimal_FormatStyle_Currency");
+			style->swift_name = str_lit("Foundation.Decimal.FormatStyle.Currency");
+			style->usr = usr;
+			style->symbol = str_lit("$sSo9NSDecimala10FoundationE11FormatStyleV8CurrencyV");
+			style->is_currency_format = true;
+			array_add(types, style);
+		}
+		*type = swift_import_nominal_type(style);
 		return true;
 	}
 	// Foundation.Date is resilient. Project through its public Swift initializer
@@ -804,6 +827,10 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 			}
 			fn->rejection = concatenate3_strings(permanent_allocator(), str_lit("unsupported Swift attribute '"), word, str_lit("'"));
 			return false;
+		} else if (string_starts_with(word, str_lit("@backDeployed(before: ")) &&
+		           string_index_byte(word, ')') == string_trim_whitespace(word).len-1 &&
+		           !string_contains_char(substring(word, 1, word.len), '@')) {
+			fn->back_deployed = true;
 		} else if (string_contains_char(word, '@')) {
 			fn->rejection = concatenate3_strings(permanent_allocator(), str_lit("unsupported attributed Swift declaration fragment '"), word, str_lit("'"));
 			return false;
@@ -823,6 +850,7 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 	for (auto attribute : swift_import_array(api, "declAttributes")) {
 		if (attribute->kind != Json_String) return false;
 		String name = attribute->string;
+		if (name == "BackDeployed" && fn->back_deployed) continue;
 		// Inline affects the optimizer. The call still requires a verified external entry point.
 		if (name == "Available" || name == "Inline" || (fn->is_property && name == "HasStorage") || (fn->is_main_actor && name == "Custom")) continue;
 		if (name == "AlwaysEmitIntoClient") name = str_lit("@_alwaysEmitIntoClient");
@@ -831,6 +859,10 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		return false;
 	}
 	fn->signature = make_string_c(declaration);
+	if (fn->back_deployed && (fn->is_async || fn->is_throwing || fn->runtime_guard)) {
+		fn->rejection = str_lit("back-deployment is supported for synchronous nonthrowing calls at the deployment target");
+		return false;
+	}
 	if (fn->is_main_actor && !fn->is_async) {
 		fn->rejection = str_lit("synchronous @MainActor calls require actor isolation");
 		return false;
@@ -1225,6 +1257,13 @@ gb_internal gbString swift_import_emit_type(gbString source, SwiftImportNominal 
 		"%.*s_destroy :: proc(value: %.*s) {\n\tswift.value_destroy(rawptr(value), _swift_%.*s_metadata(0).type)\n}\n\n",
 		LIT(name), LIT(name), LIT(name), LIT(name), LIT(name), LIT(name), LIT(name), LIT(name));
 
+	if (type->is_currency_format) source = gb_string_appendc(source,
+		"@(private)\nforeign swift_library {\n"
+		"\t@(link_name=\"$sSo9NSDecimala10FoundationE11FormatStyleV8CurrencyV12currencyCodeSSvg\")\n"
+		"\t_swift_currency_code :: proc \"swift\" (#swift_self receiver: rawptr) -> swift.Native_String ---\n}\n"
+		"@(require_results)\nDecimal_FormatStyle_Currency_currency_code :: proc(style: Decimal_FormatStyle_Currency) -> (code: string, ok: bool) #optional_ok {\n"
+		"\tif style == nil { return }\n\ttext := _swift_currency_code(rawptr(style))\n"
+		"\tdefer swift.string_destroy(&text)\n\treturn swift.string_to_odin(text)\n}\n");
 	return gb_string_appendc(source, "\n");
 }
 
@@ -1753,6 +1792,7 @@ gb_internal bool swift_import_load(Ast *node, SwiftImportPackage *parent, String
 	String path = path_to_full_path(permanent_allocator(), make_string_c(directory));
 	array_add(&swift_import_directories, path);
 	SwiftImportPackage pkg = {};
+	pkg.node = node;
 	pkg.module = module;
 	pkg.path = module_path;
 	pkg.library = library;
@@ -2283,11 +2323,12 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	bool probe_ui = false;
 	for (auto const &fn : functions) for (auto const &param : fn.parameters) probe_ui |= param.objc_borrow != nullptr;
 	if (probe_ui) probe = gb_string_appendc(probe, selected_subtarget == Subtarget_Default ? "import AppKit\n" : "import UIKit\n");
-	for (auto type : types) if (type->is_date || type->is_uuid) { probe = gb_string_appendc(probe, "import Foundation\n"); break; }
+	for (auto type : types) if (type->is_date || type->is_uuid || type->is_currency_format) { probe = gb_string_appendc(probe, "import Foundation\n"); break; }
 	for_array(i, types) {
 		if (types[i]->is_template || types[i]->external_name.len) continue;
 		if (types[i]->is_date) probe = swift_import_date_probe(probe, types[i], i);
 		if (types[i]->is_uuid) probe = swift_import_uuid_probe(probe, types[i], i);
+		if (types[i]->is_currency_format) probe = gb_string_appendc(probe, "public func probe_currency_code(_ style: Foundation.Decimal.FormatStyle.Currency) -> Swift.String { style.currencyCode }\n");
 		if (types[i]->kind == SwiftImportValue_Set) probe = swift_import_set_probe(probe, types[i], i);
 		if (!types[i]->is_tuple) probe = gb_string_append_fmt(probe, "@_silgen_name(\"odin_swift_import_metadata_%td\")\npublic func metadata_%td() -> Any.Type { %.*s.self }\n", i, i, LIT(types[i]->swift_name));
 		if ((types[i]->is_enum && types[i]->cases.count) || types[i]->is_record) {
@@ -2391,7 +2432,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 				"declare swiftcc %%swift.metadata_response @\"%.*sMa\"(i64)", LIT(type->symbol));
 			String exported = concatenate3_strings(permanent_allocator(), str_lit(" _"), type->symbol, str_lit("Ma"));
 			type->supported = swift_import_has_line(ir, make_string_c(declaration), true) &&
-			                  (pkg->framework || type->is_date || type->is_uuid || swift_import_has_line(exports, exported, false));
+			                  (pkg->framework || type->is_date || type->is_uuid || type->is_currency_format || swift_import_has_line(exports, exported, false));
 		}
 		if (!type->argument && type->is_frozen) {
 			String symbol = concatenate_strings(permanent_allocator(), type->symbol, str_lit("N"));
@@ -2403,6 +2444,10 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		}
 		if (type->is_date) type->supported &= swift_import_date_layout(inspection, sil, type, i);
 		if (type->is_uuid) type->supported &= swift_import_uuid_layout(inspection, sil, type, i);
+		if (type->is_currency_format) {
+			type->supported &= swift_import_has_line(ir, str_lit("declare swiftcc { i64, ptr } @\"$sSo9NSDecimala10FoundationE11FormatStyleV8CurrencyV12currencyCodeSSvg\"(ptr noalias swiftself)"), true) &&
+			                   swift_import_has_line(sil, str_lit(" @$sSo9NSDecimala10FoundationE11FormatStyleV8CurrencyV12currencyCodeSSvg : $@convention(method) (@in_guaranteed Decimal.FormatStyle.Currency) -> @owned String"), false);
+		}
 		if (type->kind == SwiftImportValue_Set) type->supported &= swift_import_set_layout(inspection, layout, sil, type, i);
 		if (type->is_enum) type->supported &= swift_import_enum_layout(inspection, layout, type, i);
 		if (type->is_record) swift_import_struct_layout(inspection, layout, type, i);
@@ -2443,6 +2488,26 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		auto &fn = functions[index];
 		bool receiver = swift_import_has_receiver(fn);
 		LLVMValueRef native = LLVMGetNamedFunction(inspection, alloc_cstring(permanent_allocator(), fn.symbol));
+		String dispatch = {};
+		if (fn.back_deployed && native && LLVMGetLinkage(native) == LLVMExternalWeakLinkage) {
+			dispatch = concatenate_strings(permanent_allocator(), fn.symbol, str_lit("Twb"));
+			LLVMValueRef thunk = LLVMGetNamedFunction(inspection, alloc_cstring(permanent_allocator(), dispatch));
+			if (!thunk || LLVMIsDeclaration(thunk) || LLVMGetLinkage(thunk) != LLVMLinkOnceODRLinkage ||
+			    LLVMGetFunctionCallConv(thunk) != LLVMSwiftCallConv || LLVMGlobalGetValueType(thunk) != LLVMGlobalGetValueType(native)) {
+				fn.rejection = str_lit("Swift back-deployment dispatch function could not be verified");
+			} else {
+				// LLVM function types omit these ABI-affecting parameter attributes.
+				char const *attrs[] = {"sret", "swiftself", "swifterror", "swiftasync", "byval", "inreg", "signext", "zeroext"};
+				for (char const *attr : attrs) {
+					unsigned kind = LLVMGetEnumAttributeKindForName(attr, strlen(attr));
+					for (unsigned i = 0; i <= LLVMCountParams(native); i++) {
+						if (LLVMGetEnumAttributeAtIndex(native, i, kind) != LLVMGetEnumAttributeAtIndex(thunk, i, kind)) {
+							fn.rejection = str_lit("Swift back-deployment dispatch calling convention differs from the native entry point");
+						}
+					}
+				}
+			}
+		}
 		// A nonmutating member of a projected value can receive self in the
 		// ordinary argument registers. Check the actual declaration below.
 		if (receiver && fn.owner->supported && fn.owner->projected && !fn.is_mutating) {
@@ -2483,14 +2548,17 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 				reason = swift_import_type_rejection(i+1 < api_types.count ? api_types[i+1] : nullptr, param.name);
 			}
 		}
+		String direct_symbol = fn.symbol;
+		if (dispatch.len) fn.symbol = dispatch;
 		if (!reason.len && !swift_import_ownership(sil, &fn)) reason = str_lit("Swift parameter or result ownership could not be verified");
+		fn.symbol = direct_symbol;
 		if (reason.len) {
 			swift_import_reject_function(pkg, &lookup_rejections, fn, report);
 			array_ordered_remove(&functions, index);
 			continue;
 		}
 		gbString declaration = gb_string_make(permanent_allocator(), "");
-		declaration = gb_string_append_fmt(declaration, "declare %s%s %s @\"%.*s\"(", fn.runtime_guard ? "extern_weak " : "", fn.is_async ? "swifttailcc" : "swiftcc",
+		declaration = gb_string_append_fmt(declaration, "declare %s%s %s @\"%.*s\"(", fn.runtime_guard || dispatch.len ? "extern_weak " : "", fn.is_async ? "swifttailcc" : "swiftcc",
 			fn.is_async || indirect_result || swift_import_empty(fn.result) || !fn.result.llvm ? "void" : swift_import_projected(fn.result) ? alloc_cstring(permanent_allocator(), swift_import_enum_llvm(fn.result.nominal, true)) : fn.result.llvm, LIT(fn.symbol));
 		isize count = 0;
 		if (fn.tuple_result && make_string_c(fn.result.llvm) == "void") {
@@ -2577,6 +2645,10 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		if (reason.len) {
 			swift_import_reject_function(pkg, &lookup_rejections, fn, report);
 			array_ordered_remove(&functions, index);
+		} else if (dispatch.len) {
+			fn.symbol = dispatch;
+			if (!pkg->back_deploy_thunks.allocator.proc) array_init(&pkg->back_deploy_thunks, permanent_allocator());
+			array_add(&pkg->back_deploy_thunks, dispatch);
 		}
 	}
 
@@ -2610,6 +2682,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		if (!type->supported || type->is_scalar || type->is_tuple || type->kind == SwiftImportValue_Set || type->kind == SwiftImportValue_String || (swift_import_slice(type) && !swift_import_value_slice(type))) continue;
 		if (!swift_import_add_name(node, &names, type->name)) return false;
 		if (type->is_date || type->is_uuid) continue;
+		if (type->is_currency_format && !swift_import_add_name(node, &names, str_lit("Decimal_FormatStyle_Currency_currency_code"))) return false;
 		if (type->is_error && type->projected && !swift_import_add_name(node, &names, concatenate_strings(permanent_allocator(), type->name, str_lit("_from_error")))) return false;
 		if (type->is_record) {
 			auto members = array_make<String>(permanent_allocator());
