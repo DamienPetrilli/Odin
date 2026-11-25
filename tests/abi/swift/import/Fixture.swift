@@ -1423,3 +1423,18 @@ extension Namespace {
 		return (n, n &+ 1, n ^ 17, n &* 5, n != 0)
 	}
 }
+
+
+nonisolated(unsafe) private var releasedDataBuffers: UInt64 = 0
+public func releasedBufferCount() -> UInt64 { releasedDataBuffers }
+public func fixtureBytes(_ kind: UInt64) -> Data {
+	if kind == 0 { return Data() }
+	if kind == 1 { return Data([0, 255, 0]) }
+	let p = UnsafeMutableRawPointer.allocate(byteCount: 512, alignment: 8)
+	for i in 0..<512 { p.storeBytes(of: UInt8(truncatingIfNeeded: i), toByteOffset: i, as: UInt8.self) }
+	let buffer = Data(bytesNoCopy: p, count: 512, deallocator: .custom { ptr, _ in
+		ptr.deallocate()
+		releasedDataBuffers += 1
+	})
+	return buffer[17..<501]
+}

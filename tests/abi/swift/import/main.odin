@@ -3,6 +3,7 @@ package swift_import_test
 foreign import fixture "swift:fixture/SwiftImportFixture"
 import swift "core:sys/darwin/Swift"
 import "core:time"
+import "base:runtime"
 import cf "core:sys/darwin/CoreFoundation"
 
 foreign {
@@ -88,6 +89,24 @@ main :: proc() {
 	assert((increment != nil) == fixture.has_versioned_increment())
 	if increment != nil {
 		assert(increment(41) == 42)
+	}
+	empty := fixture.fixture_bytes(0) or_else panic("Empty Data")
+	assert(len(empty) == 0)
+	delete(empty)
+	small := fixture.fixture_bytes(1) or_else panic("Inline Data")
+	assert(len(small) == 3 && small[0] == 0 && small[1] == 255 && small[2] == 0)
+	delete(small)
+	before := fixture.released_buffer_count()
+	{
+		context.allocator = runtime.nil_allocator()
+		bytes, ok := fixture.fixture_bytes(2)
+		assert(!ok && bytes == nil)
+	}
+	for iteration in 0..<4 {
+		bytes := fixture.fixture_bytes(2) or_else panic("Sliced Data")
+		assert(len(bytes) == 484 && fixture.released_buffer_count() == before+u64(iteration)+2)
+		for b, i in bytes { assert(b == u8((i+17) % 256)) }
+		delete(bytes)
 	}
 	low, ready := fixture.Namespace_bounds(min(int))
 	assert(low == min(int) && !ready)
