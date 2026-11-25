@@ -174,12 +174,16 @@ when AVAILABLE {
 		Unknown, Subscribed, Expired, Billing_Retry, Grace_Period, Revoked,
 	}
 
+	// StoreKit records consent for the next renewal in signed renewal info.
+	Price_Increase_Status :: enum u8 { None, Pending, Agreed }
+
 	Subscription_Period :: struct {
 		transaction_id:   u64,
 		original_id:      u64,
 		state:            Subscription_State,
 		will_renew:       bool,
 		in_billing_retry: bool,
+		price_increase:   Price_Increase_Status,
 		starts_at:        swift.Date,
 		paid_until:       swift.Date,
 		access_until:     Maybe(swift.Date),
@@ -241,7 +245,7 @@ when AVAILABLE {
 		{
 			buffer: [3 * 1024]byte = ---
 			arena := mem.Arena{data = buffer[:]}
-			context.allocator = mem.arena_allocator(&arena)
+			context.allocator = swift.value_arena_allocator(&arena)
 			period, ok = read_subscription_period(status)
 			if ok { return }
 		}
@@ -269,6 +273,11 @@ when AVAILABLE {
 			in_billing_retry = api.Product_SubscriptionInfo_RenewalInfo_is_in_billing_retry(renewal.value),
 			starts_at        = starts_at,
 			paid_until       = paid_until,
+		}
+		switch api.Product_SubscriptionInfo_RenewalInfo_price_increase_status(renewal.value) {
+		case .NoIncreasePending: period.price_increase = .None
+		case .Pending:           period.price_increase = .Pending
+		case .Agreed:            period.price_increase = .Agreed
 		}
 		if revoked == nil && !api.Transaction_is_upgraded(tx.value) {
 			#partial switch state {

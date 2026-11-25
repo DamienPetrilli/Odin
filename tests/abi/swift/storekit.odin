@@ -126,6 +126,9 @@ main :: proc() {
 	assert(sk.subscription_active(p, 10))
 	assert(sk.subscription_active(p, 19))
 	assert(!sk.subscription_active(p, 20))
+	p.will_renew = false
+	p.price_increase = .Pending
+	assert(sk.subscription_active(p, 19) && !sk.subscription_active(p, 20))
 	if sk.can_make_payments() {
 		if task, started := sk.products(nil, loaded); started {
 			sk.task_release(task)

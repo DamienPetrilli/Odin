@@ -441,6 +441,9 @@ monthly_label :: proc() -> string {
 	if tier := active_tier(); tier != .None {
 		plan := monthly[tier]
 		if plan.period.state == .Grace_Period { return "Update payment to keep access" }
+		if plan.period.will_renew && plan.period.price_increase == .Pending {
+			return "Review the price increase before renewal"
+		}
 		if tier == .Plus && plan.renews_to == .Basic { return "Plus until renewal, then Basic" }
 		return "Renews automatically" if plan.period.will_renew else "Access until period ends"
 	}
@@ -491,6 +494,13 @@ interval, even after the paid expiry. Schedule the next refresh at the grace
 deadline. A cached status can still say `.Grace_Period` after that instant.
 If the payment recovers, a fresh verified status supplies the new
 paid deadline and the same access check opens the feature again.
+
+The signed `price_increase` field distinguishes `.None`, `.Pending` and
+`.Agreed`. Keep the current entitlement through its verified access deadline
+when a customer declines the increase and automatic renewal turns off.
+StoreKit also reports `.Agreed` for increases that take effect after customer
+notification without requiring explicit consent.
+[[Managing subscription price increases;https://developer.apple.com/documentation/storekit/managing-price-increases-for-auto-renewable-subscriptions]]
 
 Billing retry outside grace,
 revocation, a superseded product, expiry, and an unfamiliar state grant no
