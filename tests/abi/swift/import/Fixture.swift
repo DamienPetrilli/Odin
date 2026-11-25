@@ -1438,3 +1438,18 @@ public func fixtureBytes(_ kind: UInt64) -> Data {
 	})
 	return buffer[17..<501]
 }
+
+public func fixturePrice(_ kind: UInt64) -> Decimal {
+	switch kind {
+	case 0: return .zero
+	case 1: return 123
+	case 2: return Decimal(string: "2.99")!
+	case 3: return Decimal(string: "-0.005")!
+	case 4: return Decimal(string: "1.234")!
+	case 5: return Decimal(string: "12.30")!
+	case 6: return Decimal(string: "12345678901234567890123456789012345678")!
+	case 7: return Decimal(sign: .minus, exponent: -128, significand: 1)
+	case 8: return Decimal(sign: .plus, exponent: 127, significand: 1)
+	default: return .nan
+	}
+}

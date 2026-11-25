@@ -90,6 +90,17 @@ main :: proc() {
 	if increment != nil {
 		assert(increment(41) == 42)
 	}
+	expected_prices := [?]swift.Decimal{
+		{}, {123, 0, false}, {299, -2, false}, {5, -3, true},
+		{1234, -3, false}, {123, -1, false}, {12345678901234567890123456789012345678, 0, false},
+		{1, -128, true}, {1, 127, false},
+	}
+	for expected, i in expected_prices {
+		price := fixture.fixture_price(u64(i)) or_else panic("Finite decimal")
+		assert(price == expected)
+	}
+	nan, finite := fixture.fixture_price(9)
+	assert(!finite && nan == {})
 	empty := fixture.fixture_bytes(0) or_else panic("Empty Data")
 	assert(len(empty) == 0)
 	delete(empty)

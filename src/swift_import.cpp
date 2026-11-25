@@ -137,6 +137,12 @@ struct SwiftImportParameter {
 	bool consumed;
 };
 
+enum SwiftImportFoundationResult {
+	SwiftImportFoundation_None,
+	SwiftImportFoundation_Data,
+	SwiftImportFoundation_Decimal,
+};
+
 struct SwiftImportFunction {
 	String name, title, signature, symbol, odin_name, base_name, rejection;
 	JsonValue *api, *available_since, *deprecated_since;
@@ -154,7 +160,7 @@ struct SwiftImportFunction {
 	bool is_property;
 	bool is_initializer;
 	bool is_main_actor;
-	bool data_result; // Owned synchronous Foundation.Data projected to []u8.
+	SwiftImportFoundationResult foundation_result;
 	bool is_collection;
 	bool record_inout; // The verified native storage is borrowed through a typed Odin pointer.
 	bool value_receiver; // Lowered as the last Swift value argument, named first in Odin.
@@ -843,15 +849,20 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 	bool tuple = api_types.count && swift_import_string(api_types[0], "kind") == "TypeNominal" &&
 	             swift_import_string(api_types[0], "name") == "Tuple" && !swift_import_string(api_types[0], "usr").len &&
 	             swift_import_array(api_types[0], "children").count > 0;
-	if (!fn->is_async && !fn->is_throwing && !fn->is_initializer && api_types.count &&
-	    swift_import_string(api_types[0], "usr") == "s:10Foundation4DataV") {
-		fn->data_result = true;
-		fn->result = {"Foundation.Data", "[]u8", "{ i64, i64 }"};
+	if (!fn->is_async && !fn->is_throwing && !fn->is_initializer && api_types.count) {
+		String usr = swift_import_string(api_types[0], "usr");
+		if (usr == "s:10Foundation4DataV") {
+			fn->foundation_result = SwiftImportFoundation_Data;
+			fn->result = {"Foundation.Data", "[]u8", "{ i64, i64 }"};
+		} else if (usr == "c:@SA@NSDecimal" && swift_import_string(api_types[0], "printedName") == "Foundation.Decimal") {
+			fn->foundation_result = SwiftImportFoundation_Decimal;
+			fn->result = {"Foundation.Decimal", "swift.Decimal", "{ i64, i64, i32 }"};
+		}
 	}
 	if (fn->is_property) {
 		if (api_types.count != 1) return false;
 		if (tuple) return swift_import_tuple_result(api_types[0], fn, types);
-		bool supported = fn->data_result || swift_import_api_type(api_types[0], &fn->result, types);
+		bool supported = fn->foundation_result || swift_import_api_type(api_types[0], &fn->result, types);
 		if (fn->result.nominal && fn->result.nominal->kind == SwiftImportValue_Set) supported = false;
 		if (!supported) fn->rejection = swift_import_type_rejection(api_types[0]);
 		return supported;
@@ -869,7 +880,7 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		// entry. Both the inspected IR and library exports must confirm it.
 		if (!string_ends_with(fn->symbol, str_lit("cfc"))) return false;
 		fn->symbol = concatenate_strings(permanent_allocator(), substring(fn->symbol, 0, fn->symbol.len-1), str_lit("C"));
-	} else if (!tuple && !fn->data_result && (!returns || returns->kind != Json_Array || returns->array.count == 0 ||
+	} else if (!tuple && !fn->foundation_result && (!returns || returns->kind != Json_Array || returns->array.count == 0 ||
 	           (!swift_import_type(returns->array, true, &fn->result, *types) &&
 	            (api_types.count == 0 || !swift_import_api_type(api_types[0], &fn->result, types))))) {
 		fn->rejection = swift_import_type_rejection(api_types.count ? api_types[0] : nullptr);
@@ -1002,7 +1013,10 @@ gb_internal bool swift_import_ownership(String sil, SwiftImportFunction *fn) {
 			expected = gb_string_appendc(expected, fn->is_throwing ? ", @error any Error)" : ")");
 			return string_trim_whitespace(substring(line, end+1, line.len)) == make_string_c(expected);
 		}
-		if (fn->data_result) return string_trim_whitespace(substring(line, end+1, line.len)) == "-> @owned Data";
+		if (fn->foundation_result) {
+			String result = string_trim_whitespace(substring(line, end+1, line.len));
+			return fn->foundation_result == SwiftImportFoundation_Data ? result == "-> @owned Data" : result == "-> Decimal";
+		}
 		if (swift_import_native_owns(fn->result)) {
 			String result = string_trim_whitespace(substring(line, end+1, line.len));
 			String convention = swift_import_indirect(fn->result) && !fn->result.nominal->alignment ? str_lit("@out ") : str_lit("@owned ");
@@ -1140,7 +1154,7 @@ gb_internal JsonValue *swift_import_implicit_raw_value(JsonValue *owner, StringS
 }
 
 gb_internal bool swift_import_needs_value_binding(SwiftImportFunction const &fn) {
-	if (fn.data_result) return true;
+	if (fn.foundation_result) return true;
 	// A nonthrowing static scalar tuple has the same verified ABI as a free function.
 	if (fn.owner && !(fn.is_static && fn.tuple_result && !fn.is_async && !fn.is_throwing)) return true;
 	if (fn.result.nominal || (fn.is_throwing && (!fn.is_async || !fn.tuple_result))) return true;
@@ -1248,7 +1262,12 @@ gb_internal gbString swift_import_emit_value_declaration(gbString source, SwiftI
 	if (receiver) source = gb_string_append_fmt(source, "%s#swift_self receiver: rawptr", count ? ", " : "");
 	if (fn.is_throwing && !fn.is_async) source = gb_string_append_fmt(source, "%s#swift_self _swift_context: rawptr, #swift_error _swift_error: ^rawptr", count ? ", " : "");
 	source = gb_string_appendc(source, ")");
-	if (!fn.is_async && fn.result.odin && !indirect_result && !empty_result) source = gb_string_append_fmt(source, " -> %s", fn.data_result ? "swift.Native_Data" : swift_import_native_type(fn.result));
+	if (!fn.is_async && fn.result.odin && !indirect_result && !empty_result) {
+		char const *type = swift_import_native_type(fn.result);
+		if (fn.foundation_result == SwiftImportFoundation_Data) type = "swift.Native_Data";
+		if (fn.foundation_result == SwiftImportFoundation_Decimal) type = "swift.Native_Decimal";
+		source = gb_string_append_fmt(source, " -> %s", type);
+	}
 	source = gb_string_appendc(source, " ---\n");
 	if (fn.is_async) source = gb_string_append_fmt(source, "\t@(link_name=\"%.*sTu\")\n\t_swift_%.*s_descriptor: runtime.Swift_Async_Descriptor\n", LIT(fn.symbol), LIT(name));
 	source = gb_string_appendc(source, "}\n\n");
@@ -1302,7 +1321,7 @@ gb_internal void swift_import_report_function(Array<String> *report, SwiftImport
 	} else if (fn.is_throwing) {
 		row = gb_string_appendc(row, "  error: owned (Call_Error_destroy); nil means success\n");
 	}
-	if (fn.data_result) row = gb_string_appendc(row, "  owned result: delete(result, allocator)\n");
+	if (fn.foundation_result == SwiftImportFoundation_Data) row = gb_string_appendc(row, "  owned result: delete(result, allocator)\n");
 	if (fn.tuple_fields.len) {
 		row = gb_string_appendc(row, "  owned result: delete each returned string with the result allocator\n");
 	} else if (swift_import_owns(fn.result)) {
@@ -1368,7 +1387,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 	bool owned_result = fn.result.nominal && !string_result && !slice_result && !projected_result;
 	bool allocated_result = owned_result || (projected_result && !fixed_result);
 	bool converted_result = string_result || slice_result || (projected_result && fn.result.nominal->owns);
-	bool fallible = fn.data_result || (projected_result ? fn.result.nominal->owns || !fixed_result : fn.result.nominal != nullptr);
+	bool fallible = fn.foundation_result || (projected_result ? fn.result.nominal->owns || !fixed_result : fn.result.nominal != nullptr);
 	String name = fn.odin_name;
 	bool entry_needs_capture = indirect_result || receiver || fn.is_collection;
 	gbString params = gb_string_make(permanent_allocator(), "");
@@ -1519,7 +1538,8 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 			if (fallible) source = gb_string_appendc(source, "\treturn _swift_result_value, _swift_converted\n");
 			else source = gb_string_appendc(source, "\tassert(_swift_converted)\n\treturn _swift_result_value\n");
 		} else if (slice_result) source = gb_string_append_fmt(source, "\tdefer swift.array_destroy(swift.Native_Array{_swift_value})\n\treturn %.*s\n", LIT(swift_import_array_to(fn.result.nominal, str_lit("swift.Native_Array{_swift_value}"))));
-		else if (fn.data_result) source = gb_string_appendc(source, "\treturn swift.data_take(&_swift_value)\n");
+		else if (fn.foundation_result == SwiftImportFoundation_Decimal) source = gb_string_appendc(source, "\treturn swift.decimal_from_native(_swift_value)\n");
+		else if (fn.foundation_result == SwiftImportFoundation_Data) source = gb_string_appendc(source, "\treturn swift.data_take(&_swift_value)\n");
 		else if (string_result) source = gb_string_appendc(source, "\tdefer swift.string_destroy(&_swift_value)\n\treturn swift.string_to_odin(_swift_value)\n");
 		else if (owned_result) source = gb_string_append_fmt(source, "\treturn %s(_swift_storage), true\n", fn.result.odin);
 		else if (fn.result.odin) source = gb_string_append_fmt(source, "\treturn _swift_value%s\n", fallible ? ", true" : "");
@@ -1856,6 +1876,14 @@ gb_internal bool swift_import_target_paths(Ast *node, String directory) {
 	swift_import_sdk = sdk;
 	swift_import_linker_flags = make_string_c(flags);
 	return true;
+}
+
+gb_internal bool swift_import_matches_layout(LLVMModuleRef module, char const *name, u64 size, u64 alignment) {
+	LLVMValueRef proc = LLVMGetNamedFunction(module, name);
+	LLVMValueRef value = proc ? swift_import_return(proc) : nullptr;
+	return value && LLVMIsAConstantStruct(value) && LLVMGetNumOperands(value) == 2 &&
+	       LLVMIsAConstantInt(LLVMGetOperand(value, 0)) && LLVMIsAConstantInt(LLVMGetOperand(value, 1)) &&
+	       LLVMConstIntGetZExtValue(LLVMGetOperand(value, 0)) == size && LLVMConstIntGetZExtValue(LLVMGetOperand(value, 1)) == alignment;
 }
 
 gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
@@ -2240,8 +2268,14 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	gbString probe = gb_string_make(permanent_allocator(), "");
 	probe = gb_string_append_fmt(probe, "import %.*s\n", LIT(pkg->module));
 	for (auto const &dep : pkg->dependencies) probe = gb_string_append_fmt(probe, "import %.*s\n", LIT(dep.module));
-	bool probe_data = false;
-	for (auto const &fn : functions) probe_data |= fn.data_result;
+	bool probe_data = false, probe_decimal = false;
+	for (auto const &fn : functions) {
+		probe_data |= fn.foundation_result == SwiftImportFoundation_Data;
+		probe_decimal |= fn.foundation_result == SwiftImportFoundation_Decimal;
+	}
+	if (probe_decimal) probe = gb_string_appendc(probe,
+		"import Foundation\n"
+		"@_silgen_name(\"odin_swift_decimal_layout\") public func decimal_layout() -> (Swift.Int, Swift.Int) { (Swift.MemoryLayout<Foundation.Decimal>.size, Swift.MemoryLayout<Foundation.Decimal>.alignment) }\n");
 	if (probe_data) probe = gb_string_appendc(probe,
 		"import Foundation\n"
 		"public func probe_data(_ d: Foundation.Data, _ p: Swift.UnsafeMutablePointer<Swift.UInt8>, _ n: Swift.Int) -> Swift.Int { d.copyBytes(to: p, count: n); return d.count }\n"
@@ -2390,13 +2424,16 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		}
 	}
 	for (auto type : types) if (!type->is_template) swift_import_resolve_enum(type);
+	bool decimal_supported = false;
+	if (probe_decimal) {
+		// NSDecimal.h specifies the exponent, length and sign bit fields followed
+		// by eight little-endian 16-bit limbs on Darwin arm64.
+		decimal_supported = swift_import_matches_layout(inspection, "odin_swift_decimal_layout", 20, 4) &&
+		                    swift_import_has_line(ir, str_lit("%TSo9NSDecimala = type <{ [4 x i8], <{ %Ts6UInt16V, %Ts6UInt16V, %Ts6UInt16V, %Ts6UInt16V, %Ts6UInt16V, %Ts6UInt16V, %Ts6UInt16V, %Ts6UInt16V }> }>"), true);
+	}
 	bool data_supported = false;
 	if (probe_data) {
-		LLVMValueRef layout_proc = LLVMGetNamedFunction(inspection, "odin_swift_data_layout");
-		LLVMValueRef result = layout_proc ? swift_import_return(layout_proc) : nullptr;
-		data_supported = result && LLVMIsAConstantStruct(result) && LLVMGetNumOperands(result) == 2 &&
-		                 LLVMIsAConstantInt(LLVMGetOperand(result, 0)) && LLVMIsAConstantInt(LLVMGetOperand(result, 1)) &&
-		                 LLVMConstIntGetZExtValue(LLVMGetOperand(result, 0)) == 16 && LLVMConstIntGetZExtValue(LLVMGetOperand(result, 1)) == 8 &&
+		data_supported = swift_import_matches_layout(inspection, "odin_swift_data_layout", 16, 8) &&
 		                 swift_import_has_line(ir, str_lit("declare swiftcc i64 @\"$s10Foundation4DataV5countSivg\"(i64, i64)"), true) &&
 		                 swift_import_has_line(ir, str_lit("declare swiftcc void @\"$s10Foundation4DataV9copyBytes2to5countySpys5UInt8VG_SitF\"(ptr, i64, i64, i64)"), true) &&
 		                 swift_import_has_line(sil, str_lit(" @$s10Foundation4DataV5countSivg : $@convention(method) (@guaranteed Data) -> Int"), false) &&
@@ -2426,7 +2463,8 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		bool record_parameters = false;
 		unsigned native_index = 0;
 		String &reason = fn.rejection;
-		if (fn.data_result && !data_supported) reason = str_lit("Foundation.Data storage or byte access ABI could not be verified");
+		if (fn.foundation_result == SwiftImportFoundation_Decimal && !decimal_supported) reason = str_lit("Darwin NSDecimal representation could not be verified");
+		if (fn.foundation_result == SwiftImportFoundation_Data && !data_supported) reason = str_lit("Foundation.Data storage or byte access ABI could not be verified");
 		auto api_types = swift_import_array(fn.api, "children");
 		if (receiver && fn.owner->projected && fn.is_mutating) {
 			// Plain records can use their actual address. Owned fields require
