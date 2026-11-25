@@ -230,6 +230,21 @@ cp "$here/set_sync.odin" "$build/sets/main.odin"
 "$ODIN" build "$build/sets" "${odin_target[@]}" "${odin_opt[@]}" \
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/sets-test"
 run_fixture "$build/sets-test"
+if [[ $sdk == macosx ]]; then
+	cp "$here/set_object.odin" "$build/sets/"
+	"$ODIN" build "$build/sets/set_object.odin" -file "${odin_target[@]}" "${odin_opt[@]}" \
+		-no-entry-point -use-single-module -build-mode:obj -out:"$build/sets.o"
+	echo 'int count_set_members(void);' > "$build/sets.h"
+	cat > "$build/sets.swift" <<'SWIFT'
+import Dispatch
+DispatchQueue.concurrentPerform(iterations: 16) { _ in
+	precondition(count_set_members() == 5)
+}
+SWIFT
+	"${swiftc[@]}" -import-objc-header "$build/sets.h" "$build/sets.swift" \
+		"$build/sets.o" "$build/sets/fixture/SwiftSetSync.o" -o "$build/set-object"
+	"$build/set-object"
+fi
 
 # A static archive and repeated imports use the same normal build path.
 # Keep the original module as the SDK and replace only the binary with a newer

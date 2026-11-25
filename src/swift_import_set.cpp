@@ -146,15 +146,13 @@ gb_internal gbString swift_import_emit_set(gbString source, SwiftImportNominal *
 	source = gb_string_append_fmt(source,
 		"@(private)\nforeign swift_library {\n\t@(link_name=\"%.*s\")\n"
 		"\t_swift_%.*s_construct :: proc \"swift\" (array, metadata, witness: rawptr) -> rawptr ---\n}\n"
-		"@(private)\n_swift_%.*s_conformance_init :: proc \"contextless\" () -> swift.Set_Conformance {\n"
-		"\tcontext = runtime.default_context()\n\treturn swift.set_conformance(%.*s)\n}\n"
-		"@(private)\n_swift_%.*s_conformance := _swift_%.*s_conformance_init()\n"
+		"@(private)\n_swift_%.*s_witness: rawptr\n"
 		"@(private)\n_swift_%.*s_from :: proc(values: []%s) -> (result: swift.Native_Set, ok: bool) #optional_ok {\n"
 		"\tif len(values) == 0 { return {swift.empty_set()}, true }\n"
-		"\tconformance := _swift_%.*s_conformance\n\tif conformance.witness == nil { return }\n"
+		"\tconformance := swift.set_conformance_cached(&_swift_%.*s_witness, %.*s)\n\tif conformance.witness == nil { return }\n"
 		"%s\tarray := %.*s or_return\n"
 		"\treturn {_swift_%.*s_construct(array.storage, conformance.element, conformance.witness)}, true\n}\n\n",
-		LIT(type->set_initializer), LIT(name), LIT(name), LIT(metadata), LIT(name), LIT(name),
-		LIT(name), element.odin, LIT(name), scalar, LIT(swift_import_array_from(type->set_array, str_lit("values"))), LIT(name));
+		LIT(type->set_initializer), LIT(name), LIT(name), LIT(name), element.odin, LIT(name), LIT(metadata),
+		scalar, LIT(swift_import_array_from(type->set_array, str_lit("values"))), LIT(name));
 	return source;
 }

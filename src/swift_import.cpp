@@ -2735,10 +2735,9 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 
 	gbString source = gb_string_make(permanent_allocator(), "");
 	String identity = pkg->framework ? pkg->module : pkg->library;
-	bool has_values = false, has_scalar_async = false, has_sync_throwing = false, has_value_async = false, has_set = false, has_ui = false;
+	bool has_values = false, has_scalar_async = false, has_sync_throwing = false, has_value_async = false, has_ui = false;
 	for (auto type : types) {
 		has_values |= type->supported;
-		has_set |= type->supported && type->kind == SwiftImportValue_Set;
 	}
 	for (auto const &fn : functions) {
 		bool values = swift_import_needs_value_binding(fn);
@@ -2759,7 +2758,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			selected_subtarget == Subtarget_Default ? "AppKit" : "UIKit");
 	}
 	if (has_scalar_async || has_sync_throwing) source = gb_string_appendc(source, "import \"base:intrinsics\"\n");
-	if (has_value_async || has_set) source = gb_string_appendc(source, "import \"base:runtime\"\n");
+	if (has_value_async) source = gb_string_appendc(source, "import \"base:runtime\"\n");
 	for (auto type : types) if (type->supported && type->is_uuid) { source = gb_string_appendc(source, "import _swift_uuid \"core:encoding/uuid\"\n"); break; }
 	if (has_values) source = gb_string_appendc(source, "@(require)\nimport \"core:mem\"\n@(require)\nimport \"core:strings\"\n");
 	if (has_values || has_scalar_async || has_value_async) source = gb_string_appendc(source, "import swift \"core:sys/darwin/Swift\"\n");

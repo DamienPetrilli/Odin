@@ -1,6 +1,8 @@
 #+build darwin, arm64
 package darwin_Swift
 
+import "base:intrinsics"
+
 // Native storage used by generated Set input conversions. Assignment aliases;
 // set_destroy releases one owned reference. Application inputs are Odin slices.
 Native_Set :: struct {
@@ -58,6 +60,19 @@ Set_Conformance :: struct {
 set_conformance :: proc "contextless" (metadata: rawptr) -> Set_Conformance {
 	if metadata == nil { return {} }
 	return {metadata, swift_conformsToProtocol(metadata, &set_hashable_protocol)}
+}
+
+// Each generated cache belongs to one concrete element type. Concurrent first
+// callers may resolve the same process-lifetime witness.
+set_conformance_cached :: #force_inline proc "contextless" (cache: ^rawptr, metadata: rawptr) -> Set_Conformance {
+	if witness := intrinsics.atomic_load_explicit(cache, .Acquire); witness != nil {
+		return {metadata, witness}
+	}
+	conformance := set_conformance(metadata)
+	if conformance.witness != nil {
+		intrinsics.atomic_store_explicit(cache, conformance.witness, .Release)
+	}
+	return conformance
 }
 
 // Only generated bindings whose SDK lowering passed the storage/ABI checks use
