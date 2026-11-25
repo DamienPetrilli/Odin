@@ -657,5 +657,157 @@ responses, and stop the watch. To read the current region once, call
 conversion flag. Destroy a present storefront when finished.
 
 [[Setting up StoreKit Testing in Xcode;https://developer.apple.com/documentation/xcode/setting-up-storekit-testing-in-xcode]]
+
+**Purchase cookbook**
+
+Choose the example above by what the customer keeps after paying. Each uses one
+package import, `import sk "vendor:darwin/StoreKit"`.
+
+- **Unlock Pro once.** Start with `buy_pro` and `deliver_pro`. Enable the
+  feature after a verified purchase. On the next launch rebuild access from
+  `.Entitlements`. If several products grant Pro, keep access while any grant
+  is valid.
+- **Sell 100 credits per pack.** Use `buy_packs(product, 3)` for three packs.
+  In `deliver_packs`, credit the *signed* quantity. Commit one ledger row per
+  transaction ID before finishing. Buying again creates a new row. Replaying
+  the same transaction finds the existing row and can safely retry `finish`.
+  Restore the balance from the app's ledger. StoreKit excludes consumables
+  from current entitlements.
+- **Sell a 30-day pass.** Use `buy_pass`, `refresh_pass` and `has_pass`.
+  Derive the deadline from the signed purchase date. Compare the clock with
+  that deadline when the feature opens. A finished non-renewing pass can
+  still appear in current entitlements after its app-defined term ends.
+- **Sell Basic and Plus monthly.** Use `refresh_monthly` and `active_tier`.
+  The signed transaction identifies the current tier. The renewal preference
+  identifies the next one. An upgrade can replace the current transaction
+  immediately. A scheduled downgrade keeps the current tier through its paid
+  term. Turning off renewal leaves access in place until the deadline.
+  In billing grace, use `access_until`. Outside grace, billing retry alone
+  grants no access. Read fresh verified status when payment recovers.
+
+**Buy credit packs for a signed-in account**
+
+Pass the stable UUID your app assigned to the account. Release the two options
+after starting the purchase. Use the same delivery procedure for the purchase
+completion, transaction updates and unfinished transactions.
+
+```odin
+import "core:encoding/uuid"
+
+ACCOUNT_PACK_ID :: "com.example.editor.credits"
+
+buy_account_packs :: proc(product: sk.Product, account: uuid.Identifier, units: int) -> bool {
+	if !sk.can_make_payments() { return false }
+	id := sk.Product_id(product) or_return
+	defer delete(id)
+	if id != ACCOUNT_PACK_ID { return false }
+	quantity := sk.purchase_quantity(units) or_return
+	defer sk.Purchase_Option_destroy(quantity)
+	token := sk.app_account_token(account) or_return
+	defer sk.Purchase_Option_destroy(token)
+	task := sk.purchase(product, {quantity, token}, account_packs_purchased) or_return
+	sk.task_release(task)
+	return true
+}
+
+account_packs_purchased :: proc(_: sk.Task, result: sk.Purchase_Result, err: sk.Error) {
+	defer sk.Error_destroy(err)
+	defer sk.Purchase_Result_destroy(result)
+	if err != nil { return }
+	if success, ok := result.(sk.Purchase_Success); ok { deliver_account_packs(success.value) }
+}
+
+deliver_account_packs :: proc(item: sk.Verification) {
+	verified, ok := item.(sk.Verified)
+	if !ok { return }
+	tx := verified.value
+	id, read := sk.Transaction_product_id(tx)
+	if !read { return }
+	defer delete(id)
+	if id != ACCOUNT_PACK_ID { return }
+	revoked, checked := sk.Transaction_revocation_date(tx)
+	if !checked || revoked != nil { return }
+	token, converted := sk.Transaction_app_account_token(tx)
+	if !converted { return }
+	account, linked := token.?
+	if !linked { return }
+	units := sk.Transaction_purchased_quantity(tx)
+	if units < 1 || units > 10 { return }
+	if !credit_account_once(account, sk.Transaction_id(tx), 100 * units) { return }
+	if task, started := sk.finish(tx, finished); started { sk.task_release(task) }
+}
+```
+
+`credit_account_once` is your storage operation. It succeeds when this grant
+is committed or the same transaction is already credited to that account.
+Use the signed token even if a different customer is now signed in. Define a
+claim policy for older purchases with no token. A failed commit leaves the
+transaction available for retry.
+
+**Wire a Restore Purchases button**
+
+The 30-day pass can call `refresh_pass` directly at launch. Give the customer
+a separate Restore Purchases button for a missing purchase. StoreKit may ask
+them to authenticate when the button calls `restore`.
+
+```odin
+restore_pass_from_button :: proc() -> bool {
+	task := sk.restore(pass_restored) or_return
+	sk.task_release(task)
+	return true
+}
+
+pass_restored :: proc(_: sk.Task, err: sk.Error) {
+	defer sk.Error_destroy(err)
+	if err != nil {
+		fmt.println("Restore failed. Try again.")
+		return
+	}
+	if !refresh_pass() { fmt.println("Refresh access again when the current scan ends.") }
+}
+```
+
+Disable the button while restoring or scanning. Keep the last verified grant
+on failure. Publish the new state when the scan completes. For monthly plans,
+refresh the subscription group as well.
+
+**Other cases a store needs to handle**
+
+- **Catalog and pricing.** Match returned `Product_id` values to requested
+  SKUs. Leave missing products unavailable. Use `Product_display_name`,
+  `Product_description` and `Product_display_price` for merchandising.
+  Use `price_and_currency` for exact amounts. Refresh the catalog after
+  `watch_storefront` reports a change. `current_storefront` reads it once.
+- **Presenting payment.** A Buy button can live in Metal, UIKit or AppKit.
+  Call `purchase` to present Apple's confirmation. For an explicit presenter
+  use `purchase_confirm_in` with the originating UIKit controller on iOS
+  18.2+ or AppKit window on macOS 15.2+.
+- **Pending, cancelled, or failed.** `Purchase_Pending` leaves delivery
+  waiting for a verified event on `.Updates`. `Purchase_Cancelled` returns
+  the UI to idle. A failed start schedules no callback. A thrown error arrives
+  in the completion's `err`. Keep access unchanged on unverified results,
+  conversion failures and unknown outcomes.
+- **Recovery and history.** Listen to `.Updates` while running. Drain
+  `.Unfinished` after interruption. Use `scan_transactions` with
+  `.Entitlements` for current grants or `.History` for past purchases.
+  A product ID narrows the scan. Stop a scan with `stop_scan` and drain its
+  close callback before reusing its storage.
+- **Refunds, revocation and Family Sharing.** Use `request_refund` from the
+  customer's purchase history. The sheet can be submitted, cancelled, or
+  return an error such as a duplicate request. Change access when verified
+  transaction data shows revocation. `Product_is_family_shareable` describes
+  the product. `Transaction_ownership` identifies a particular shared grant.
+- **Sending evidence to a server.** Forward the original `Verification_jws`
+  when the server verifies a purchase. `Transaction_json_representation` and
+  the verification byte getters return owned slices. Preserve their lengths
+  and release them after use. For diagnosis, `unverified_details` exposes the
+  transaction and reason carried by an unverified result.
+
+Apple's [[store sample;https://developer.apple.com/documentation/storekit/implementing-a-store-in-your-app-using-the-storekit-api]]
+shows a catalog backed by signed purchases and a persisted consumable balance.
+Compare the Odin callbacks above with Apple's
+[[purchase result;https://developer.apple.com/documentation/storekit/product/purchaseresult]],
+[[current entitlements;https://developer.apple.com/documentation/storekit/transaction/currententitlements]]
+and [[customer-initiated restore;https://developer.apple.com/documentation/storekit/appstore/sync()]].
 */
 package darwin_StoreKit
