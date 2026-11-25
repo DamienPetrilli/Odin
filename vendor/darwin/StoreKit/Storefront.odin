@@ -58,9 +58,7 @@ when AVAILABLE {
 	}
 
 	stop_storefront_watch :: proc(watch: ^Storefront_Watch) {
-		if watch == nil || watch.iterator == nil || watch.stopping { return }
-		watch.stopping = true
-		if watch.task != nil { task_cancel(watch.task) }
+		stop_watch(watch)
 	}
 
 	@(private)
@@ -74,21 +72,6 @@ when AVAILABLE {
 	@(private)
 	storefront_received :: proc(task: Task, result: Maybe(Storefront), converted: bool) {
 		watch := take_pending_read(&pending_storefronts, task)
-		reason := Listener_End.Exhausted
-		if !converted {
-			reason = .Conversion_Failed
-		} else if store, present := result.?; present {
-			if !watch.stopping { watch.on_change(watch, store) }
-			Storefront_destroy(store)
-			if !watch.stopping {
-				if read_storefront(watch) { return }
-				reason = .Read_Start_Failed
-			}
-		}
-		if watch.stopping { reason = .Stopped }
-		closed := watch.on_closed
-		api.Storefront_Storefronts_AsyncIterator_destroy(watch.iterator)
-		watch^ = {}
-		closed(watch, reason)
+		deliver_watch_update(watch, result, converted, Storefront_destroy, read_storefront, api.Storefront_Storefronts_AsyncIterator_destroy)
 	}
 }

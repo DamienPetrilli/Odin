@@ -11,6 +11,59 @@ when AVAILABLE {
 	subscription_statuses           :: api.Product_SubscriptionInfo_status_for_
 	subscription_statuses_destroy   :: api.Array_Product_SubscriptionInfo_Status_destroy
 
+	// Zero-initialize and keep at a stable address through on_closed.
+	Subscription_Watch :: struct {
+		iterator:  api.Product_SubscriptionInfo_Status_Statuses_AsyncIterator,
+		task:      Task,
+		next:      ^Subscription_Watch,
+		on_change: proc(^Subscription_Watch, Subscription_Status),
+		on_closed: proc(^Subscription_Watch, Listener_End),
+		stopping:  bool,
+	}
+
+	@(private)
+	pending_subscriptions: ^Subscription_Watch
+
+	// Start on the main executor. Each change borrows a status until on_change
+	// returns. Query subscription_statuses separately for the initial group state.
+	@(require_results)
+	watch_subscriptions :: proc(
+		watch: ^Subscription_Watch, on_change: proc(^Subscription_Watch, Subscription_Status),
+		on_closed: proc(^Subscription_Watch, Listener_End),
+	) -> bool {
+		if watch == nil || watch.iterator != nil || on_change == nil || on_closed == nil { return false }
+		updates := api.Product_SubscriptionInfo_Status_updates() or_return
+		defer api.Product_SubscriptionInfo_Status_Statuses_destroy(updates)
+		iter := api.Product_SubscriptionInfo_Status_Statuses_make_async_iterator(updates) or_return
+		watch^ = {iterator = iter, on_change = on_change, on_closed = on_closed}
+		if read_subscription(watch) { return true }
+		api.Product_SubscriptionInfo_Status_Statuses_AsyncIterator_destroy(iter)
+		watch^ = {}
+		return false
+	}
+
+	// Safe inside on_change. A successful start delivers on_closed once.
+	stop_subscription_watch :: proc(watch: ^Subscription_Watch) {
+		stop_watch(watch)
+	}
+
+	@(private)
+	read_subscription :: proc(watch: ^Subscription_Watch) -> bool {
+		watch.task = api.Product_SubscriptionInfo_Status_Statuses_AsyncIterator_next(watch.iterator, subscription_changed) or_return
+		watch.next = pending_subscriptions
+		pending_subscriptions = watch
+		return true
+	}
+
+	@(private)
+	subscription_changed :: proc(task: Task, result: Maybe(Subscription_Status), converted: bool) {
+		watch := take_pending_read(&pending_subscriptions, task)
+		deliver_watch_update(
+			watch, result, converted, api.Product_SubscriptionInfo_Status_destroy,
+			read_subscription, api.Product_SubscriptionInfo_Status_Statuses_AsyncIterator_destroy,
+		)
+	}
+
 	// The caller owns the returned string.
 	@(require_results)
 	subscription_group_id :: proc(product: Product) -> (id: string, ok: bool) #optional_ok {

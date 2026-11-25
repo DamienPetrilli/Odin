@@ -454,6 +454,34 @@ group, and finish the delivered transaction. Also listen for renewals through
 to renewal preference alone can be observed by refreshing the group when the
 customer returns from subscription management.
 
+To refresh Basic and Plus while your store is open, start a subscription
+watch on the main executor. Start it before the initial group read. StoreKit
+can report a renewal preference change without a new purchase to deliver.
+
+```odin
+subscription_watch: sk.Subscription_Watch
+
+open_monthly_store :: proc(product: sk.Product) -> bool {
+	if !sk.watch_subscriptions(&subscription_watch, plan_changed, watch_closed) { return false }
+	if refresh_monthly(product) { return true }
+	sk.stop_subscription_watch(&subscription_watch)
+	return false
+}
+
+plan_changed :: proc(_: ^sk.Subscription_Watch, _: sk.Subscription_Status) {
+	// Re-read the group so another family member's grant is counted too.
+	if !refresh_group() { fmt.println("Could not start a subscription refresh") }
+}
+
+watch_closed :: proc(_: ^sk.Subscription_Watch, end: sk.Listener_End) {
+	if end != .Stopped { fmt.println("Subscription updates ended", end) }
+}
+```
+
+Call `stop_subscription_watch(&subscription_watch)` when closing the store.
+Keep its storage alive through `watch_closed`. Keep the transaction listener
+running for purchases that still need delivery.
+
 `paid_until` is the signed transaction expiry. During billing grace,
 `access_until` uses the verified grace deadline. `in_billing_retry` reflects the signed renewal info
 and can be true while the subscription still grants access. Keep the paid feature available throughout that
@@ -683,7 +711,8 @@ package import, `import sk "vendor:darwin/StoreKit"`.
   immediately. A scheduled downgrade keeps the current tier through its paid
   term. Turning off renewal leaves access in place until the deadline.
   In billing grace, use `access_until`. Outside grace, billing retry alone
-  grants no access. Read fresh verified status when payment recovers.
+  grants no access. Use `watch_subscriptions` to refresh the group when
+  StoreKit reports changes, including payment recovery.
 
 **Buy credit packs for a signed-in account**
 

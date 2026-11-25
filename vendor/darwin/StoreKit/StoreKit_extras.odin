@@ -100,6 +100,36 @@ when AVAILABLE {
 	}
 
 	@(private)
+	stop_watch :: proc(watch: ^$W) {
+		if watch == nil || watch.iterator == nil || watch.stopping { return }
+		watch.stopping = true
+		if watch.task != nil { task_cancel(watch.task) }
+	}
+
+	@(private)
+	deliver_watch_update :: proc(
+		watch: ^$W, result: Maybe($T), converted: bool,
+		$destroy: proc(T), $read: proc(^W) -> bool, $destroy_iterator: $F,
+	) {
+		reason := Listener_End.Exhausted
+		if !converted {
+			reason = .Conversion_Failed
+		} else if value, present := result.?; present {
+			if !watch.stopping { watch.on_change(watch, value) }
+			destroy(value)
+			if !watch.stopping {
+				if read(watch) { return }
+				reason = .Read_Start_Failed
+			}
+		}
+		if watch.stopping { reason = .Stopped }
+		closed := watch.on_closed
+		destroy_iterator(watch.iterator)
+		watch^ = {}
+		closed(watch, reason)
+	}
+
+	@(private)
 	listener_received :: proc(task: Task, result: Maybe(Verification), converted: bool) {
 		l := take_pending_read(&pending, task)
 		reason := Listener_End.Exhausted

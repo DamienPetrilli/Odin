@@ -53,6 +53,12 @@ store_changed :: proc(_: ^sk.Storefront_Watch, store: sk.Storefront) {
 
 watch_closed :: proc(_: ^sk.Storefront_Watch, _: sk.Listener_End) {}
 
+subscription_changed :: proc(_: ^sk.Subscription_Watch, status: sk.Subscription_Status) {
+	_, _ = sk.subscription_period(status)
+}
+
+subscription_closed :: proc(_: ^sk.Subscription_Watch, _: sk.Listener_End) {}
+
 main :: proc() {
 	kind, classified := sk.Product_type(nil)
 	assert(!classified && kind == .Unknown)
@@ -72,6 +78,11 @@ main :: proc() {
 	assert(!sk.watch_storefront(nil, store_changed, watch_closed))
 	assert(!sk.watch_storefront(&watch, nil, watch_closed))
 	sk.stop_storefront_watch(&watch)
+	subscriptions: sk.Subscription_Watch
+	assert(!sk.watch_subscriptions(nil, subscription_changed, subscription_closed))
+	assert(!sk.watch_subscriptions(&subscriptions, nil, subscription_closed))
+	assert(!sk.watch_subscriptions(&subscriptions, subscription_changed, nil))
+	sk.stop_subscription_watch(&subscriptions)
 	id, country, has_store := sk.storefront_details(nil)
 	assert(!has_store && id == "" && country == "")
 	_, code, priced := sk.price_and_currency(nil)
