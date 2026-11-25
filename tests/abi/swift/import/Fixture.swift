@@ -110,6 +110,14 @@ public func inoutValue(_ value: inout UInt64) { value += 1 }
 @available(macOS 99, iOS 99, *)
 public func future() -> UInt64 { 1 }
 
+@available(macOS 15.1, iOS 18.4, *)
+public func versionedIncrement(_ value: UInt64) -> UInt64 { value + 1 }
+
+public func hasVersionedIncrement() -> Bool {
+	if #available(macOS 15.1, iOS 18.4, *) { return true }
+	return false
+}
+
 @available(macOS 15.2.1, iOS 18.2, *)
 public struct NewValue {
 	public static func number() -> UInt64 { 42 }

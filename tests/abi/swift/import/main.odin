@@ -81,6 +81,14 @@ failed_start :: proc() -> bool {
 }
 
 main :: proc() {
+	#assert(#defined(fixture.future_if_available))
+	#assert(!#defined(fixture.future))
+	assert(fixture.future_if_available() == nil)
+	increment := fixture.versioned_increment_if_available()
+	assert((increment != nil) == fixture.has_versioned_increment())
+	if increment != nil {
+		assert(increment(41) == 42)
+	}
 	low, ready := fixture.Namespace_bounds(min(int))
 	assert(low == min(int) && !ready)
 	low, ready = fixture.Namespace_empty_bounds()

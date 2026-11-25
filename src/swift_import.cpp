@@ -140,6 +140,7 @@ struct SwiftImportParameter {
 struct SwiftImportFunction {
 	String name, title, signature, symbol, odin_name, base_name, rejection;
 	JsonValue *api, *available_since, *deprecated_since;
+	bool runtime_guard;
 	SwiftImportNominal *owner;
 	Array<SwiftImportParameter> parameters;
 	SwiftImportType result;
@@ -1068,13 +1069,14 @@ gb_internal gbString swift_import_append_version(gbString text, JsonValue *versi
 	return text;
 }
 
-gb_internal String swift_import_availability_rejection(JsonValue *symbol, SwiftImportFunction *fn = nullptr) {
+gb_internal String swift_import_availability_rejection(JsonValue *symbol, SwiftImportFunction *fn = nullptr, String *later = nullptr) {
 	char const *domain = selected_subtarget == Subtarget_Default ? "macOS" : "iOS";
 	int minimum[3] = {};
 	sscanf(alloc_cstring(temporary_allocator(), build_context.minimum_os_version_string), "%d.%d.%d", minimum, minimum+1, minimum+2);
 	for (JsonValue *availability : swift_import_array(symbol, "availability")) {
 		String availability_domain = swift_import_string(availability, "domain");
 		if (availability_domain.len && availability_domain != "*" && availability_domain != make_string_c(domain)) continue;
+		bool requires_later = false;
 		char const *why = nullptr;
 		JsonValue *version = nullptr;
 		JsonValue *introduced = swift_import_member(availability, "introduced");
@@ -1087,22 +1089,28 @@ gb_internal String swift_import_availability_rejection(JsonValue *symbol, SwiftI
 			why = "unavailable on";
 		} else if (swift_import_member(availability, "isUnconditionallyDeprecated")) {
 			why = "deprecated on";
-		} else if (introduced && swift_import_version_after_minimum(introduced, minimum)) {
-			why = "requires";
-			version = introduced;
 		} else if ((version = swift_import_member(availability, "obsoleted"))) {
 			// An unguarded import also has to work on systems newer than the minimum.
 			why = "marked obsolete in";
 		} else if (deprecated && !swift_import_version_after_minimum(deprecated, minimum)) {
 			why = "marked deprecated in";
 			version = deprecated;
+		} else if (introduced && swift_import_version_after_minimum(introduced, minimum)) {
+			requires_later = true;
+			why = "requires";
+			version = introduced;
 		}
 		if (!why) continue;
 		gbString text = gb_string_append_fmt(gb_string_make(permanent_allocator(), ""), "%s %s", why, domain);
 		if (version) {
 			text = swift_import_append_version(gb_string_appendc(text, " "), version);
 		}
-		return make_string_c(gb_string_append_fmt(text, " (deployment target %s %.*s)", domain, LIT(build_context.minimum_os_version_string)));
+		String reason = make_string_c(gb_string_append_fmt(text, " (deployment target %s %.*s)", domain, LIT(build_context.minimum_os_version_string)));
+		if (later && requires_later) {
+			*later = reason;
+			continue;
+		}
+		return reason;
 	}
 	return {};
 }
@@ -1213,8 +1221,8 @@ gb_internal gbString swift_import_emit_value_declaration(gbString source, SwiftI
 	bool indirect_result = swift_import_indirect(fn.result);
 	bool empty_result = swift_import_empty(fn.result);
 	String name = fn.odin_name;
-	source = gb_string_append_fmt(source, "@(private)\nforeign swift_library {\n\t@(link_name=\"%.*s\")\n\t_swift_%.*s_native :: proc \"%s\" (",
-		LIT(fn.symbol), LIT(name), fn.is_async ? "swift/async" : "swift");
+	source = gb_string_append_fmt(source, "@(private)\nforeign swift_library {\n\t@(link_name=\"%.*s\"%s)\n\t_swift_%.*s_native :: proc \"%s\" (",
+		LIT(fn.symbol), fn.runtime_guard ? ", linkage=\"weak\"" : "", LIT(name), fn.is_async ? "swift/async" : "swift");
 	isize count = 0;
 	if (indirect_result) {
 		source = gb_string_append_fmt(source, "%sresult: rawptr", fn.is_async ? "" : "#swift_result ");
@@ -1245,10 +1253,11 @@ gb_internal void swift_import_report_function(Array<String> *report, SwiftImport
 	if (!report) return;
 	String signature = make_string(cast(u8 *)source+signature_start, gb_string_length(source)-signature_start);
 	gbString row = gb_string_make(temporary_allocator(), "");
-	row = gb_string_append_fmt(row, "call %.*s :: proc%.*s\n  Swift: ", LIT(name), LIT(signature));
+	row = gb_string_append_fmt(row, "call %.*s :: proc%s%.*s\n  Swift: ", LIT(name), fn.runtime_guard ? "() -> proc" : "", LIT(signature));
 	if (fn.owner) row = gb_string_append_fmt(row, "%.*s: ", LIT(fn.owner->swift_name));
 	row = gb_string_append_fmt(row, "%.*s\n", LIT(fn.signature));
 	char const *platform = selected_subtarget == Subtarget_Default ? "macOS" : "iOS";
+	if (fn.runtime_guard) row = gb_string_appendc(row, "  lookup: nil when the OS version or weak entry point is unavailable\n");
 	if (fn.available_since) {
 		row = swift_import_append_version(gb_string_append_fmt(row, "  introduced: %s ", platform), fn.available_since);
 		row = gb_string_appendc(row, "\n");
@@ -1995,7 +2004,9 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		fn.is_property = property;
 		fn.is_initializer = initializer;
 		fn.title = implicit_raw ? str_lit("rawValue") : swift_import_string(swift_import_member(symbol, "names"), "title");
-		fn.rejection = swift_import_availability_rejection(symbol, &fn);
+		String deployment = {};
+		fn.rejection = swift_import_availability_rejection(symbol, &fn, !property && !initializer ? &deployment : nullptr);
+		fn.runtime_guard = !fn.rejection.len && deployment.len;
 		isize owner_count = implicit_raw ? components.count : components.count-1;
 		if (owner_count > 0) {
 			gbString owner_name = gb_string_make(permanent_allocator(), "");
@@ -2062,6 +2073,24 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			if (!supported && !fn.rejection.len) fn.rejection = str_lit("no supported Swift getter");
 		}
 		fn.odin_name = name;
+		if (fn.runtime_guard) {
+			// Guard the entry point only. Its receiver metadata and every
+			// conversion used by the call must exist at the deployment floor.
+			bool eligible = supported && (!fn.owner || fn.is_static) && !fn.is_async && !fn.is_throwing &&
+			                !fn.tuple_result && !fn.tuple_fields.len &&
+			                (!fn.result.nominal || swift_import_kind(fn.result, SwiftImportValue_String) ||
+			                 swift_import_kind(fn.result, SwiftImportValue_Opaque));
+			for (auto const &param : fn.parameters) {
+				eligible &= !param.objc_borrow && param.borrow == SwiftImportBorrow_None && (!param.type.nominal || swift_import_kind(param.type, SwiftImportValue_String));
+			}
+			fn.rejection = deployment;
+			if (eligible) {
+				swift_import_reject_function(pkg, &lookup_rejections, fn, report);
+				fn.rejection = {};
+				String suffix = string_ends_with(name, str_lit("_")) ? str_lit("if_available") : str_lit("_if_available");
+				fn.base_name = fn.odin_name = name = concatenate_strings(permanent_allocator(), name, suffix);
+			} else supported = false;
+		}
 		if (!supported) {
 			swift_import_reject_function(pkg, &lookup_rejections, fn, report);
 			continue;
@@ -2212,6 +2241,10 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	for_array(i, functions) {
 		auto const &fn = functions[i];
 		bool receiver = swift_import_has_receiver(fn);
+		if (fn.runtime_guard) {
+			probe = gb_string_append_fmt(probe, "@available(%s ", selected_subtarget == Subtarget_Default ? "macOS" : "iOS");
+			probe = gb_string_appendc(swift_import_append_version(probe, fn.available_since), ", *)\n");
+		}
 		if (fn.is_main_actor) probe = gb_string_appendc(probe, "@MainActor\n");
 		probe = gb_string_append_fmt(probe, "public func probe_%td(", i);
 		if (receiver) probe = gb_string_append_fmt(probe, "_ receiver: %s%.*s", fn.is_mutating ? "inout " : "", LIT(fn.owner->swift_name));
@@ -2375,7 +2408,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 			continue;
 		}
 		gbString declaration = gb_string_make(permanent_allocator(), "");
-		declaration = gb_string_append_fmt(declaration, "declare %s %s @\"%.*s\"(", fn.is_async ? "swifttailcc" : "swiftcc",
+		declaration = gb_string_append_fmt(declaration, "declare %s%s %s @\"%.*s\"(", fn.runtime_guard ? "extern_weak " : "", fn.is_async ? "swifttailcc" : "swiftcc",
 			fn.is_async || indirect_result || swift_import_empty(fn.result) || !fn.result.llvm ? "void" : swift_import_projected(fn.result) ? alloc_cstring(permanent_allocator(), swift_import_enum_llvm(fn.result.nominal, true)) : fn.result.llvm, LIT(fn.symbol));
 		isize count = 0;
 		if (fn.tuple_result && make_string_c(fn.result.llvm) == "void") {
@@ -2599,6 +2632,22 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	}
 	if (has_throwing) source = swift_import_emit_call_error(source, types);
 	for (auto const &fn : functions) {
+		if (!fn.runtime_guard) continue;
+		source = gb_string_appendc(source, "@(private)\nforeign {\n\t@(link_name=\"__isPlatformVersionAtLeast\")\n\t_swift_platform_at_least :: proc \"c\" (platform, major, minor, patch: u32) -> i32 ---\n}\n\n");
+		break;
+	}
+	for (auto const &fn : functions) {
+		if (fn.runtime_guard) {
+			source = swift_import_emit_value_declaration(source, fn);
+			SwiftImportFunction impl = fn;
+			impl.odin_name = concatenate3_strings(permanent_allocator(), str_lit("_swift_"), fn.odin_name, str_lit("_call"));
+			source = swift_import_emit_value_function(source, impl, fn.odin_name, report);
+			source = gb_string_append_fmt(source, "%.*s :: proc() -> type_of(%.*s)", LIT(fn.odin_name), LIT(impl.odin_name));
+			source = gb_string_append_fmt(source, " {\n\tif _swift_platform_at_least(%d, %d, %d, %d) == 0 || rawptr(_swift_%.*s_native) == nil { return nil }\n\treturn %.*s\n}\n\n",
+				selected_subtarget == Subtarget_Default ? 1 : 2, swift_import_version_part(fn.available_since, 0),
+				swift_import_version_part(fn.available_since, 1), swift_import_version_part(fn.available_since, 2), LIT(fn.odin_name), LIT(impl.odin_name));
+			continue;
+		}
 		if (swift_import_needs_value_binding(fn)) {
 			source = swift_import_emit_value_declaration(source, fn);
 			bool defaults = false;

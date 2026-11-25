@@ -874,3 +874,21 @@ For a stored `bool`, the importer converts every nonzero Odin byte to Swift
 original record when the call completes, including when an async method throws.
 Records with Swift-owned fields and projected enums still require conversion
 before mutable access can be supported.
+
+
+For a supported synchronous free or static function introduced after the deployment
+target, the importer provides a typed procedure lookup. The lookup checks the
+running OS version and the weakly linked symbol. For example, a macOS 15.0
+consumer of a function introduced in 15.1 can write:
+
+```odin
+if increment := fixture.versioned_increment_if_available(); increment != nil {
+	value = increment(value)
+}
+```
+
+Once the target reaches 15.1, the ordinary direct binding is available. The SDK
+used at build time must describe the declaration. Runtime lookup currently covers
+nonthrowing calls with scalar or String inputs and scalar, String or supported
+opaque results whose types exist at the deployment floor. An available call
+keeps its usual conversion and ownership contract.

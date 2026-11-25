@@ -6962,25 +6962,18 @@ gb_internal bool is_type_normal_pointer(Type *ptr, Type **elem) {
 gb_internal bool check_identifier_exists(Scope *s, Ast *node, bool nested = false, Scope **out_scope = nullptr) {
 	switch (node->kind) {
 	case_ast_node(i, Ident, node);
-		if (nested) {
-			Entity *e = scope_lookup_current(s, i->interned, i->hash);
-			if (e != nullptr) {
-				if (out_scope) *out_scope = e->scope;
-				return true;
-			}
-		} else {
-			Entity *e = scope_lookup(s, i->interned, i->hash);
-			if (e != nullptr) {
-				if (out_scope) *out_scope = e->scope;
-				return true;
-			}
-		}
+		Entity *e = nested ? scope_lookup_current(s, i->interned, i->hash) : scope_lookup(s, i->interned, i->hash);
+		if (e == nullptr) return false;
+		// A package selector looks inside the imported package, rather than
+		// the file scope containing its import name.
+		if (out_scope) *out_scope = e->kind == Entity_ImportName ? e->ImportName.scope : e->scope;
+		return true;
 	case_end;
 	case_ast_node(se, SelectorExpr, node);
 		Ast *lhs = se->expr;
 		Ast *rhs = se->selector;
 		Scope *lhs_scope = nullptr;
-		if (check_identifier_exists(s, lhs, nested, &lhs_scope)) {
+		if (check_identifier_exists(s, lhs, nested, &lhs_scope) && lhs_scope) {
 			return check_identifier_exists(lhs_scope, rhs, true);
 		}
 	case_end;

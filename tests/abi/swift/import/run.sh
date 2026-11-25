@@ -73,6 +73,7 @@ grep -Fq 'call RawCode_adding :: proc(receiver: RawCode, value: u64) -> u64' "$b
 grep -Fq 'owned result: delete(result, allocator)' "$build/mappings.txt"
 grep -Fq 'exclusive borrow through completion' "$build/mappings.txt"
 grep -Fq 'final bool reports result conversion' "$build/mappings.txt"
+grep -Fq 'call versioned_increment_if_available :: proc() -> proc(value: u64) -> u64' "$build/mappings.txt"
 grep -Fq 'skipped future: func future()' "$build/mappings.txt"
 grep -Fq 'lookup fallback future (future()): requires' "$build/mappings.txt"
 xcrun nm "$build/import" > "$build/symbols.txt"
