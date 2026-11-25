@@ -2024,7 +2024,22 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 					}
 				}
 			}
-			name = concatenate3_strings(permanent_allocator(), make_string_c(owner_name), str_lit("_"), name);
+			// An extension can fix the enum's single generic parameter to a
+			// concrete SDK type. Keep the specialization in the binding name.
+			if (fn.owner && fn.owner->is_template && property && !fn.is_static && !implicit_raw && !fn.rejection.len) {
+				auto constraints = swift_import_array(swift_import_member(symbol, "swiftExtension"), "constraints");
+				String signature = swift_import_string(fn.owner->declaration, "genericSig");
+				if (constraints.count == 1 && swift_import_string(constraints[0], "kind") == "sameType" &&
+				    swift_import_string(constraints[0], "lhs") == substring(signature, 1, signature.len-1)) {
+					SwiftImportType argument = {}, concrete = {};
+					String usr = swift_import_string(constraints[0], "rhsPrecise");
+					if (swift_import_named_type(usr, &argument, types) && argument.nominal &&
+					    swift_import_container_type(fn.owner->usr, argument, &concrete, &types)) {
+						fn.owner = concrete.nominal;
+					}
+				}
+			}
+			name = concatenate3_strings(permanent_allocator(), fn.owner ? fn.owner->name : make_string_c(owner_name), str_lit("_"), name);
 		}
 		if (!fn.rejection.len && fn.owner && fn.owner->is_template) fn.rejection = str_lit("unsupported generic Swift receiver");
 		bool supported = (!owner_count || fn.owner) && !fn.rejection.len && swift_import_function(implicit_raw ? nullptr : symbol, declaration, &fn, &types);

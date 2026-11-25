@@ -472,6 +472,13 @@ public func payloadsLater(_ value: Payloads) async -> Payloads {
 		case blocked(code: UInt64, message: String)
 	}
 }
+extension Verification where T == Value {
+	public var label: String { "value verification" }
+}
+extension Verification where T == TextValue {
+	public var label: String { "text verification" }
+}
+
 public func verification(_ value: Value) -> Verification<Value> {
 	.unverified(value, .blocked(code: 7, message: "Verification failed"))
 }

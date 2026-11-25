@@ -115,6 +115,8 @@ when AVAILABLE {
 	restore           :: api.AppStore_sync
 
 	Verification         :: api.VerificationResult_Transaction
+	// The caller owns the compact signed text and releases it with delete.
+	Verification_jws     :: api.VerificationResult_Transaction_jws_representation
 	Verification_copy    :: api.VerificationResult_Transaction_copy
 	Verification_destroy :: api.VerificationResult_Transaction_destroy
 	Verified             :: api.VerificationResult_Transaction_Verified

@@ -526,6 +526,13 @@ verification. Use `Transaction_copy` to keep a transaction past that callback.
 An unrecognized thrown error retains its Swift error box. Use `error_description`
 on the box for diagnostics.
 
+Signed transactions
+
+Pass the verification received by the listener to `Verification_jws` to get the
+original compact signed transaction as an owned Odin string. Release it with
+`delete(signed)`. An unverified result can also carry signed text. Grant access
+only after successful verification.
+
 Transaction history and shared benefits
 
 Use a finite scan to show a purchase history or refresh entitlements for one
