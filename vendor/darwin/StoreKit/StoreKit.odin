@@ -2,6 +2,7 @@
 #+vet tabs style semicolon
 package darwin_StoreKit
 
+import "core:mem"
 import swift "core:sys/darwin/Swift"
 foreign import api "swift:StoreKit"
 
@@ -55,7 +56,8 @@ when AVAILABLE {
 	}
 
 	@(private)
-	take_product_type :: proc(native: api.Product_ProductType) -> (kind: Product_Type, ok: bool) {
+	read_product_type :: proc(receiver: $T, $get: $F) -> (kind: Product_Type, ok: bool) #optional_ok {
+		native := get(receiver) or_return
 		defer api.Product_ProductType_destroy(native)
 		raw := api.Product_ProductType_raw_value(native) or_return
 		defer delete(raw)
@@ -68,10 +70,24 @@ when AVAILABLE {
 		return .Unknown, true
 	}
 
+	@(private)
+	classify_product :: proc(receiver: $T, $get: $F) -> (kind: Product_Type, ok: bool) #optional_ok {
+		if receiver == nil { return }
+		// Only the enum escapes. Both native temporaries fit locally for
+		// the known cases. A larger future value uses the caller's allocator.
+		{
+			buffer: [128]byte = ---
+			arena := mem.Arena{data = buffer[:]}
+			context.allocator = mem.arena_allocator(&arena)
+			kind, ok = read_product_type(receiver, get)
+			if ok { return }
+		}
+		return read_product_type(receiver, get)
+	}
+
 	@(require_results)
 	Product_type :: proc(product: Product) -> (kind: Product_Type, ok: bool) #optional_ok {
-		native := api.Product_type(product) or_return
-		return take_product_type(native)
+		return classify_product(product, api.Product_type)
 	}
 
 	// The callback owns the product slice and its elements. Free the slice on its
@@ -203,7 +219,6 @@ when AVAILABLE {
 	// Classify a delivered or replayed transaction without fetching its product.
 	@(require_results)
 	Transaction_product_type :: proc(tx: Transaction) -> (kind: Product_Type, ok: bool) #optional_ok {
-		native := api.Transaction_product_type(tx) or_return
-		return take_product_type(native)
+		return classify_product(tx, api.Transaction_product_type)
 	}
 }

@@ -54,6 +54,10 @@ store_changed :: proc(_: ^sk.Storefront_Watch, store: sk.Storefront) {
 watch_closed :: proc(_: ^sk.Storefront_Watch, _: sk.Listener_End) {}
 
 main :: proc() {
+	kind, classified := sk.Product_type(nil)
+	assert(!classified && kind == .Unknown)
+	kind, classified = sk.Transaction_product_type(nil)
+	assert(!classified && kind == .Unknown)
 	when (ODIN_PLATFORM_SUBTARGET == .Default && ODIN_MINIMUM_OS_VERSION >= 15_02_00) ||
 	     (ODIN_PLATFORM_SUBTARGET != .Default && ODIN_MINIMUM_OS_VERSION >= 18_02_00) {
 		callback :: proc(_: sk.Task, _: sk.Purchase_Result, _: sk.Error) {
