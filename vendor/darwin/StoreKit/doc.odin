@@ -914,5 +914,91 @@ Compare the Odin callbacks above with Apple's
 [[purchase result;https://developer.apple.com/documentation/storekit/product/purchaseresult]],
 [[current entitlements;https://developer.apple.com/documentation/storekit/transaction/currententitlements]]
 and [[customer-initiated restore;https://developer.apple.com/documentation/storekit/appstore/sync()]].
+
+**Recover a signed purchase for your server**
+
+A customer buys three months at an introductory price and then renews at the
+regular price. Each charge has its own transaction ID. Reading today's catalog
+price would give every row in their purchase history the same amount. Read the
+verified transactions for that product instead. The following example queues
+the original signed purchases for a server, including after an app relaunch.
+
+```odin
+receipt_scan: sk.Transaction_Scan
+retry_receipts: bool
+
+recover_receipts :: proc(product_id: string) -> bool {
+	// Start one scan at a time. Keep its storage alive until receipts_closed.
+	return sk.scan_transactions(&receipt_scan, .History, product_id, queue_receipt, receipts_closed)
+}
+
+queue_receipt :: proc(_: ^sk.Transaction_Scan, item: sk.Verification) {
+	verified, ok := item.(sk.Verified)
+	if !ok { return }
+	signed, read := sk.Verification_jws(item)
+	if !read {
+		retry_receipts = true
+		return
+	}
+	defer delete(signed)
+	// The app copies the signed text into durable storage before returning.
+	if !store_pending_receipt(sk.Transaction_id(verified.value), signed) {
+		retry_receipts = true
+	}
+}
+
+receipts_closed :: proc(_: ^sk.Transaction_Scan, end: sk.Listener_End) {
+	if end != .Exhausted { retry_receipts = true }
+}
+```
+
+The app supplies `store_pending_receipt`. Make repeated writes of the same
+signed record harmless. A later signed revision for the same transaction can
+report a refund or revocation, so retain that revision for delivery too.
+Clear `retry_receipts` before each retry and retry a failed start as well.
+The server verifies the JWS before using its claims. Finishing a purchase
+belongs to the delivery path. Browsing history does not deliver anything.
+[[Apple's signed transaction format;https://developer.apple.com/documentation/storekit/verificationresult/jwsrepresentation-21vgo]]
+
+A history scan ends after returning the transactions available when it began.
+Keep the updates listener running to receive new purchases during the scan.
+By default Apple omits ordinary finished consumables from history. Persist the
+credit grant and its receipt before finishing the purchase, even if the app
+also offers a history screen. [[Apple's transaction history rules;https://developer.apple.com/documentation/storekit/transaction/all]]
+
+For an on-device receipt detail view, `Transaction_json_representation` on
+the verified transaction yields owned bytes. Release them with `delete`.
+Apple represents the optional signed `price` as integer milliunits. For
+example, 990 with currency USD means $0.99. A present zero can mean a free
+trial. Leave the amount unavailable if the field is absent. Use the signed
+currency when interpreting a past charge. The customer's current storefront
+may have changed. [[Apple's transaction price;https://developer.apple.com/documentation/storekit/transaction/price]]
+
+**Choosing a workflow on iOS and macOS**
+
+- **At launch** start the transaction updates listener, recover unfinished
+  deliveries, and rebuild access from verified entitlements or subscription
+  status. On a failed scan keep the last complete snapshot. On shutdown stop
+  listeners and watches, then wait for their close callbacks before reusing
+  the application storage.
+- **When the buyer taps** use the product examples above for an unlock, credit
+  pack, fixed-duration pass or automatically renewing plan. Use
+  `purchase_confirm_in` when the deployment target supports the originating
+  window or controller. A local StoreKit configuration exercises these flows
+  without charging the customer.
+- **When a purchase changes later** use transaction updates for delivery and
+  revocation, a subscription watch for billing state and renewal preferences,
+  and a storefront watch to reload available products and localized prices.
+  A grace deadline, cancellation of the next renewal, a refund request and a
+  signed revocation each have different consequences for access.
+- **When reconciling accounts** persist the signed account token, transaction
+  ID and the delivery decision. Use the account-bound credit example for
+  consumables and the history example for forwarding signed records. Offer a
+  customer-initiated restore for missing purchases.
+
+The vendor package exposes introductory offer terms and group eligibility.
+Promotional-offer signing, win-back offer redemption and server-side JWS
+verification need separate integrations. The examples above use the local
+StoreKit APIs available to an arm64 app on iOS or macOS.
 */
 package darwin_StoreKit
