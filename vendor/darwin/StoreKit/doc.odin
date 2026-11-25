@@ -511,6 +511,32 @@ check `active_tier() == .Plus`. Pass the selected catalog product to
 status again. Only the current product grants its tier. The renewal preference
 can name a different product for the next period, or be nil when renewal is off.
 
+**Switch between standard plans at the same service level**
+
+For example, a reader can select another monthly plan or move from monthly
+to annual billing. Compare levels only for products in the same group.
+`subscription_group_level` is available at deployment targets of iOS 16.4
+and macOS 13.3 or later. An unavailable rank returns `ok == false`.
+
+```odin
+show_plan_change :: proc(status: sk.Subscription_Status) -> bool {
+	current, renewal := sk.subscription_products(status) or_return
+	defer delete(current)
+	show_current_plan(current)
+	if next, recorded := renewal.?; recorded {
+		defer delete(next)
+		if next != current { show_plan_at_renewal(next) }
+	}
+	return true
+}
+```
+
+For standard pay-up-front subscriptions at the same level, a switch between
+plans of equal duration takes effect immediately. A different duration takes
+effect at renewal. Read the verified current product after each change and
+apply its signed access deadline. The app supplies the two display procedures.
+[[Apple's subscription levels;https://developer.apple.com/help/app-store-connect/reference/in-app-purchases-and-subscriptions/auto-renewable-subscription-information]]
+
 **Request a refund in the app**
 
 Use a verified transaction ID and present in the window that owns the Refund

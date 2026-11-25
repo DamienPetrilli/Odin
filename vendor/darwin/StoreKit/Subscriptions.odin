@@ -76,6 +76,29 @@ when AVAILABLE {
 		return api.Product_SubscriptionInfo_subscription_group_id(value)
 	}
 
+	when (ODIN_PLATFORM_SUBTARGET == .Default && ODIN_MINIMUM_OS_VERSION >= 13_03_00) ||
+	     (ODIN_PLATFORM_SUBTARGET != .Default && ODIN_MINIMUM_OS_VERSION >= 16_04_00) {
+		// Level 1 is the highest service level within a subscription group.
+		// StoreKit can report zero when the rank is unavailable.
+		@(require_results)
+		subscription_group_level :: proc(product: Product) -> (level: int, ok: bool) #optional_ok {
+			if product == nil { return 0, false }
+			buffer: [512]byte = ---
+			arena := mem.Arena{data = buffer[:]}
+			allocators := [2]mem.Allocator{swift.value_arena_allocator(&arena), context.allocator}
+			for scratch in allocators {
+				context.allocator = scratch
+				info := api.Product_subscription(product) or_continue
+				defer api.Optional_Product_SubscriptionInfo_destroy(info)
+				value := info.? or_return
+				rank := api.Product_SubscriptionInfo_group_level(value)
+				if rank <= 0 { return 0, false }
+				return rank, true
+			}
+			return 0, false
+		}
+	}
+
 	Subscription_Unit :: enum { Unknown, Day, Week, Month, Year }
 
 	Billing_Interval :: struct {

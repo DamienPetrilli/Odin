@@ -117,6 +117,10 @@ main :: proc() {
 	assert(!converted && reason == nil)
 	current, renewal, ok := sk.subscription_products(nil)
 	assert(!ok && current == "" && renewal == nil)
+	when #defined(sk.subscription_group_level) {
+		rank, ranked := sk.subscription_group_level(nil)
+		assert(!ranked && rank == 0)
+	}
 	period := sk.Non_Renewing_Period{starts_at = 10, expires_at = 20}
 	assert(sk.non_renewing_active(period, 10))
 	assert(!sk.non_renewing_active(period, 20))
