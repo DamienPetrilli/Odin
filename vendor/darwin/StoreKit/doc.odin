@@ -1003,14 +1003,21 @@ show_applied_offer :: proc(tx: sk.Transaction) -> bool {
 		show_offer_identifier(id)
 	}
 	if mode, provided := offer.mode.?; provided && mode == .Free_Trial {
-		show_free_trial()
+		duration := sk.Transaction_offer_period(tx) or_return
+		if interval, recorded := duration.?; recorded {
+			show_trial_length(interval.count, interval.unit)
+		}
 	}
 	return true
 }
 ```
 
-The app supplies the two display procedures. The code identifier is borrowed
-during display. A missing mode leaves `offer.mode` empty. An unfamiliar mode
+The app supplies the two display procedures. The duration is the calendar interval
+recorded on this receipt. It can be absent. A month stays a calendar month.
+Earlier deployment targets read the signed ISO 8601 field. A period that cannot
+be represented as one positive day, week, month or year count fails conversion.
+The code identifier is borrowed during display. A missing mode leaves
+`offer.mode` empty. An unfamiliar mode
 yields a present `.Unknown`. Use the signed price to show the actual charge.
 [[Apple's transaction offer;https://developer.apple.com/documentation/storekit/transaction/offer-swift.property]]
 

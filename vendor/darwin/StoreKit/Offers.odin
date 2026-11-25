@@ -38,6 +38,62 @@ when AVAILABLE {
 		return .Unknown
 	}
 
+	@(private)
+	parse_offer_period :: proc(text: string) -> (interval: Billing_Interval, ok: bool) {
+		if len(text) < 3 || text[0] != 'P' { return {}, false }
+		switch text[len(text)-1] {
+		case 'D': interval.unit = .Day
+		case 'W': interval.unit = .Week
+		case 'M': interval.unit = .Month
+		case 'Y': interval.unit = .Year
+		case:     return {}, false
+		}
+		for i in 1..<len(text)-1 {
+			c := text[i]
+			if c < '0' || c > '9' { return {}, false }
+			digit := int(c - '0')
+			if interval.count > (max(int) - digit) / 10 { return {}, false }
+			interval.count = interval.count * 10 + digit
+		}
+		if interval.count == 0 { return {}, false }
+		return interval, true
+	}
+
+	// The calendar duration of the offer recorded on this transaction.
+	// A successful empty result means StoreKit omitted the period.
+	@(require_results)
+	Transaction_offer_period :: proc(tx: Transaction) -> (period: Maybe(Billing_Interval), ok: bool) #optional_ok {
+		if tx == nil { return nil, false }
+		buffer: [512]byte = ---
+		arena := mem.Arena{data = buffer[:]}
+		allocators := [2]mem.Allocator{swift.value_arena_allocator(&arena), context.allocator}
+		for attempt in 0..<len(allocators) {
+			context.allocator = allocators[attempt]
+			when #defined(api.Transaction_Offer_period) {
+				item := api.Transaction_offer(tx) or_continue
+				defer api.Optional_Transaction_Offer_destroy(item)
+				offer, present := item.?
+				if !present { return nil, true }
+				native := api.Transaction_Offer_period(offer) or_continue
+				defer api.Optional_Product_SubscriptionPeriod_destroy(native)
+				value, recorded := native.?
+				if !recorded { return nil, true }
+				interval := billing_interval(value) or_continue
+				return interval, true
+			} else when #defined(api.Transaction_offer_period_string_representation) {
+				item := api.Transaction_offer_period_string_representation(tx) or_continue
+				code, recorded := item.?
+				if !recorded { return nil, true }
+				defer if attempt != 0 { delete(code) }
+				interval := parse_offer_period(code) or_return
+				return interval, true
+			} else {
+				return nil, false
+			}
+		}
+		return nil, false
+	}
+
 	// Returns the offer that StoreKit recorded for this transaction. The caller
 	// owns a present id. A successful empty result means no offer was applied.
 	@(require_results)

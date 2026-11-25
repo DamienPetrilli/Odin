@@ -50,6 +50,7 @@ if [[ ${2:-debug} == debug ]]; then
 			"$ODIN" "${storekit[@]}" -target:darwin_arm64 -minimum-os-version:15.2 -out:"$build/storekit-window"
 		fi
 		package="$here/../../../vendor/darwin/StoreKit"
+		"$ODIN" test "$package" "${odin_target[@]}" -out:"$build/storekit-tests"
 		"$ODIN" doc "$package" "${odin_target[@]}" > "$build/storekit.txt"
 		grep -Eq '[[:space:]]products :: proc\(' "$build/storekit.txt"
 		grep -Eq '[[:space:]]finish :: proc\(' "$build/storekit.txt"
