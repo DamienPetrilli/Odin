@@ -2370,7 +2370,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		"@_silgen_name(\"odin_swift_decimal_layout\") public func decimal_layout() -> (Swift.Int, Swift.Int) { (Swift.MemoryLayout<Foundation.Decimal>.size, Swift.MemoryLayout<Foundation.Decimal>.alignment) }\n");
 	if (probe_optional_decimal) probe = gb_string_appendc(probe,
 		"@_silgen_name(\"odin_swift_optional_decimal_layout\") public func optional_decimal_layout() -> (Swift.Int, Swift.Int) { (Swift.MemoryLayout<Foundation.Decimal?>.size, Swift.MemoryLayout<Foundation.Decimal?>.alignment) }\n"
-		"@_silgen_name(\"odin_swift_clear_decimal\") public func clear_decimal(_ p: Swift.UnsafeMutablePointer<Foundation.Decimal?>) { p.pointee = nil }\n");
+		"@_silgen_name(\"odin_swift_nil_decimal\") public let odin_swift_nil_decimal: Foundation.Decimal? = nil\n");
 	if (probe_data) probe = gb_string_appendc(probe,
 		"import Foundation\n"
 		"public func probe_data(_ d: Foundation.Data, _ p: Swift.UnsafeMutablePointer<Swift.UInt8>, _ n: Swift.Int) -> Swift.Int { d.copyBytes(to: p, count: n); return d.count }\n"
@@ -2543,19 +2543,16 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	bool data_supported = false;
 	bool optional_decimal_supported = false;
 	if (probe_optional_decimal && decimal_supported && swift_import_matches_layout(inspection, "odin_swift_optional_decimal_layout", 21, 4)) {
-		// In the three-register return, byte 20 is in the third register. Check
-		// that Swift writes the nil discriminator there as a single set bit.
-		LLVMValueRef clear = LLVMGetNamedFunction(inspection, "odin_swift_clear_decimal");
-		if (clear && LLVMCountParams(clear) == 1 && LLVMCountBasicBlocks(clear) == 1) {
-			for (auto inst = LLVMGetFirstInstruction(LLVMGetFirstBasicBlock(clear)); inst; inst = LLVMGetNextInstruction(inst)) {
-				if (!LLVMIsAStoreInst(inst)) continue;
-				LLVMValueRef value = LLVMGetOperand(inst, 0);
-				u64 offset = 0;
-				if (LLVMIsAConstantInt(value) && LLVMGetIntTypeWidth(LLVMTypeOf(value)) == 1 &&
-				    LLVMConstIntGetZExtValue(value) == 1 && swift_import_pointer_offset(layout, LLVMGetOperand(inst, 1), LLVMGetParam(clear, 0), &offset) && offset == 20) {
-					optional_decimal_supported = true;
-				}
-			}
+		// Inspect the constant itself: compilers can store the same nil tag
+		// with different instructions. Byte 20 is in the third return register.
+		LLVMValueRef global = LLVMGetNamedGlobal(inspection, "odin_swift_nil_decimal");
+		LLVMValueRef none = global ? LLVMGetInitializer(global) : nullptr;
+		if (none && LLVMIsAConstantStruct(none) && LLVMGetNumOperands(none) > 0) {
+			unsigned last = LLVMGetNumOperands(none) - 1;
+			LLVMValueRef tag = LLVMGetOperand(none, last);
+			optional_decimal_supported = LLVMOffsetOfElement(layout, LLVMTypeOf(none), last) == 20 &&
+			                             LLVMIsAConstantInt(tag) && LLVMGetIntTypeWidth(LLVMTypeOf(tag)) <= 8 &&
+			                             LLVMConstIntGetZExtValue(tag) == 1;
 		}
 	}
 	if (probe_data) {
