@@ -44,7 +44,22 @@ scan_item :: proc(_: ^sk.Transaction_Scan, item: sk.Verification) {
 
 scan_closed :: proc(_: ^sk.Transaction_Scan, _: sk.Listener_End) {}
 
+store_changed :: proc(_: ^sk.Storefront_Watch, store: sk.Storefront) {
+	id, country, ok := sk.storefront_details(store)
+	if !ok { return }
+	defer delete(id)
+	defer delete(country)
+}
+
+watch_closed :: proc(_: ^sk.Storefront_Watch, _: sk.Listener_End) {}
+
 main :: proc() {
+	watch: sk.Storefront_Watch
+	assert(!sk.watch_storefront(nil, store_changed, watch_closed))
+	assert(!sk.watch_storefront(&watch, nil, watch_closed))
+	sk.stop_storefront_watch(&watch)
+	id, country, has_store := sk.storefront_details(nil)
+	assert(!has_store && id == "" && country == "")
 	_, code, priced := sk.price_and_currency(nil)
 	assert(!priced && code == "")
 	scan: sk.Transaction_Scan

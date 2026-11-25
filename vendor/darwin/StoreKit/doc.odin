@@ -587,6 +587,64 @@ last complete entitlement snapshot in effect.
 the string and can compare it with `OWNERSHIP_PURCHASED` or
 `OWNERSHIP_FAMILY_SHARED`. Release it with `delete(string(ownership))`.
 
+Storefront changes
+
+Start a watch on the main executor when opening the store. Fetch the initial
+catalog after starting the watch. Refetch the product IDs and their prices on
+each change. Use the product’s price currency for calculations.
+
+```odin
+// Keep watch in application state until closed runs.
+started := sk.watch_storefront(&watch, store_changed, closed)
+if started { refresh_catalog() }
+
+latest_catalog: sk.Task
+
+refresh_catalog :: proc() {
+	sk.Product_destroy(pro_product)
+	pro_product = nil
+	disable_buy_button()
+	task, started := sk.products({PRO_ID}, catalog_ready)
+	latest_catalog = task
+	if !started { show_catalog_unavailable() }
+}
+
+catalog_ready :: proc(task: sk.Task, items: []sk.Product, err: sk.Error) {
+	defer sk.task_release(task)
+	defer sk.products_destroy(items)
+	defer sk.Error_destroy(err)
+	if task != latest_catalog { return }
+	latest_catalog = nil
+	if err != nil || len(items) != 1 { show_catalog_unavailable(); return }
+	price, ok := sk.Product_display_price(items[0])
+	if !ok { show_catalog_unavailable(); return }
+	defer delete(price)
+	pro_product = items[0]
+	items[0] = nil
+	show_buy_button(price)
+}
+
+store_changed :: proc(_: ^sk.Storefront_Watch, store: sk.Storefront) {
+	refresh_catalog()
+	id, country, ok := sk.storefront_details(store)
+	if !ok { return }
+	defer delete(id)
+	defer delete(country)
+	show_store_region(id, country)
+}
+
+closed :: proc(_: ^sk.Storefront_Watch, reason: sk.Listener_End) {
+	if reason != .Stopped { report_store_watch_end(reason) }
+}
+```
+
+The change callback borrows `store`. Use `Storefront_copy` if it must outlive
+the callback. `stop_storefront_watch(&watch)` also works inside the callback.
+On closing the store, clear `latest_catalog` to discard outstanding catalog
+responses, and stop the watch. To read the current region once, call
+`current_storefront`. Its callback receives `Maybe(Storefront)` and a
+conversion flag. Destroy a present storefront when finished.
+
 [[Setting up StoreKit Testing in Xcode;https://developer.apple.com/documentation/xcode/setting-up-storekit-testing-in-xcode]]
 */
 package darwin_StoreKit

@@ -87,8 +87,8 @@ when AVAILABLE {
 	}
 
 	@(private)
-	listener_received :: proc(task: Task, result: Maybe(Verification), converted: bool) {
-		link := &pending
+	take_pending_read :: proc(head: ^^$L, task: Task) -> ^L {
+		link := head
 		for link^ != nil && link^.task != task { link = &link^.next }
 		l := link^
 		assert(l != nil)
@@ -96,7 +96,12 @@ when AVAILABLE {
 		l.next = nil
 		task_release(l.task)
 		l.task = nil
+		return l
+	}
 
+	@(private)
+	listener_received :: proc(task: Task, result: Maybe(Verification), converted: bool) {
+		l := take_pending_read(&pending, task)
 		reason := Listener_End.Exhausted
 		if !converted {
 			reason = .Conversion_Failed
