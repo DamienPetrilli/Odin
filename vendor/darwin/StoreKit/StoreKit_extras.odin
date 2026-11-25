@@ -45,9 +45,19 @@ when AVAILABLE {
 		case .Entitlements: sequence = api.Transaction_current_entitlements() or_return
 		case .Unfinished:   sequence = api.Transaction_unfinished() or_return
 		}
+		if !listen_sequence(l, sequence, on_item, on_closed) { return false }
+		l.stream = stream
+		return true
+	}
+
+	@(private)
+	listen_sequence :: proc(
+		l: ^Transaction_Listener, sequence: api.Transaction_Transactions,
+		on_item: proc(^Transaction_Listener, Verification), on_closed: proc(^Transaction_Listener, Listener_End),
+	) -> bool {
 		defer api.Transaction_Transactions_destroy(sequence)
 		iterator := api.Transaction_Transactions_make_async_iterator(sequence) or_return
-		l^ = {iterator = iterator, stream = stream, on_item = on_item, on_closed = on_closed}
+		l^ = {iterator = iterator, stream = l.stream, on_item = on_item, on_closed = on_closed}
 		if listener_read(l) { return true }
 		listener_clear(l)
 		return false

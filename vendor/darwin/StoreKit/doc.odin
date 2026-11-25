@@ -526,6 +526,40 @@ verification. Use `Transaction_copy` to keep a transaction past that callback.
 An unrecognized thrown error retains its Swift error box. Use `error_description`
 on the box for diagnostics.
 
+Transaction history and shared benefits
+
+Use a finite scan to show a purchase history or refresh entitlements for one
+product. Pass an empty ID to read every product. The package uses StoreKit’s
+scoped query when available and filters the sequence locally on older systems.
+
+```odin
+// scan lives in application state through closed. Each item is borrowed.
+started := sk.scan_transactions(&scan, .Entitlements, "reader.unlock", received, closed)
+
+received :: proc(_: ^sk.Transaction_Scan, item: sk.Verification) {
+	if verified, ok := item.(sk.Verified); ok {
+		// Record a candidate grant in the pending snapshot.
+		record_candidate(sk.Transaction_id(verified.value))
+	} else {
+		mark_snapshot_incomplete()
+	}
+}
+
+closed :: proc(_: ^sk.Transaction_Scan, end: sk.Listener_End) {
+	if end == .Exhausted && snapshot_complete() { publish_snapshot() }
+}
+```
+
+When two product IDs unlock one benefit, collect both entitlement snapshots
+before publishing. Keep the benefit active while either product grants access.
+A refund remains visible in history. A failed or stopped refresh leaves the
+last complete entitlement snapshot in effect.
+
+`Product_is_family_shareable(product)` reads the catalog setting.
+`Transaction_ownership(tx)` reads the signed ownership code. The caller owns
+the string and can compare it with `OWNERSHIP_PURCHASED` or
+`OWNERSHIP_FAMILY_SHARED`. Release it with `delete(string(ownership))`.
+
 [[Setting up StoreKit Testing in Xcode;https://developer.apple.com/documentation/xcode/setting-up-storekit-testing-in-xcode]]
 */
 package darwin_StoreKit

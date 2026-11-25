@@ -56,6 +56,13 @@ if [[ ${2:-debug} == debug ]]; then
 	if [[ "$sdk" == macosx ]] && xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1; then
 		"$ODIN" "${storekit[@]}" -target:darwin_arm64 -subtarget:iphonesimulator \
 			-minimum-os-version:15.0 -out:"$build/storekit-simulator"
+		# Both newer entry points must remain optional in a binary that runs on iOS 15.
+		if xcrun --sdk iphonesimulator --show-sdk-version | awk -F. '{ exit !($1 > 18 || ($1 == 18 && $2 >= 4)) }'; then
+			xcrun nm -m "$build/storekit-simulator" | xcrun swift-demangle > "$build/storekit-linkage"
+			for query in all currentEntitlements; do
+				grep -Fq "weak external static StoreKit.Transaction.$query(for:" "$build/storekit-linkage"
+			done
+		fi
 		xcrun nm -ju "$build/storekit-simulator" > "$build/storekit-imports"
 		grep -Fxq '_swift_getTypeByMangledNameInContext' "$build/storekit-imports"
 		if grep -Fxq '_swift_getTypeByMangledNameInContext2' "$build/storekit-imports"; then

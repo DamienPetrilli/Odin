@@ -21,6 +21,7 @@ when AVAILABLE {
 	error_description        :: swift.error_description
 
 	Product               :: api.Product
+	Product_is_family_shareable :: api.Product_is_family_shareable
 	Product_copy          :: api.Product_copy
 	Product_destroy       :: api.Product_destroy
 	// Each successful string getter returns an Odin string owned by the caller.
@@ -160,6 +161,20 @@ when AVAILABLE {
 			return Revocation_Reason(api.Transaction_RevocationReason_raw_value(value)), true
 		}
 		return nil, true
+	}
+
+	// The caller owns the returned raw code, including values added by later systems.
+	Ownership_Type :: distinct string
+	OWNERSHIP_PURCHASED     :: Ownership_Type("PURCHASED")
+	OWNERSHIP_FAMILY_SHARED :: Ownership_Type("FAMILY_SHARED")
+
+	@(require_results)
+	Transaction_ownership :: proc(tx: Transaction) -> (ownership: Ownership_Type, ok: bool) #optional_ok {
+		if tx == nil { return "", false }
+		native := api.Transaction_ownership_type(tx) or_return
+		defer api.Transaction_OwnershipType_destroy(native)
+		code := api.Transaction_OwnershipType_raw_value(native) or_return
+		return Ownership_Type(code), true
 	}
 
 	// Classify a delivered or replayed transaction without fetching its product.
