@@ -680,8 +680,8 @@ gb_internal void lb_generate_swift_exports(lbGenerator *gen) {
 	}
 }
 #if defined(GB_SYSTEM_OSX)
-// Keep the SDK's dispatch and everything its fallback references. Declarations
-// are never rewritten. Restore coalescing of surviving definitions before
+// Keep the SDK's dispatch and everything its fallback references. Preserve
+// imported symbol linkage and restore coalescing of surviving definitions before
 // linking so multiple Odin packages can use the same Swift metadata or code.
 gb_internal bool lb_build_swift_back_deployment(SwiftImportPackage const &pkg, Array<String> const &roots, String object) {
 	LLVMContextRef ctx = LLVMContextCreate();
@@ -746,6 +746,31 @@ gb_internal bool lb_build_swift_back_deployment(SwiftImportPackage const &pkg, A
 	}
 	for (String name : roots) {
 		LLVMSetLinkage(LLVMGetNamedFunction(donor, alloc_cstring(temporary_allocator(), name)), LLVMWeakODRLinkage);
+	}
+	// Newer LLVMs upgrade nocapture to captures(none) and infer additional
+	// optimization promises on intrinsics. Older SDK compilers cannot read
+	// those spellings. Dropping these hints preserves the calling convention.
+	char const no_poison[] = "nocreateundeforpoison";
+	unsigned no_poison_kind = LLVMGetEnumAttributeKindForName(no_poison, sizeof(no_poison)-1);
+	unsigned captures_kind = LLVMGetEnumAttributeKindForName("captures", 8);
+	if (no_poison_kind || captures_kind) {
+		for (auto fn = LLVMGetFirstFunction(donor); fn; fn = LLVMGetNextFunction(fn)) {
+			if (no_poison_kind && LLVMGetIntrinsicID(fn)) {
+				LLVMRemoveEnumAttributeAtIndex(fn, LLVMAttributeFunctionIndex, no_poison_kind);
+			}
+			if (!captures_kind) continue;
+			for (unsigned i = 1, n = LLVMCountParams(fn); i <= n; i++) {
+				LLVMRemoveEnumAttributeAtIndex(fn, i, captures_kind);
+			}
+			for (auto bb = LLVMGetFirstBasicBlock(fn); bb; bb = LLVMGetNextBasicBlock(bb)) {
+				for (auto inst = LLVMGetFirstInstruction(bb); inst; inst = LLVMGetNextInstruction(inst)) {
+					if (!LLVMIsACallInst(inst) && !LLVMIsAInvokeInst(inst) && !LLVMIsACallBrInst(inst)) continue;
+					for (unsigned i = 1, n = LLVMGetNumArgOperands(inst); i <= n; i++) {
+						LLVMRemoveCallSiteEnumAttribute(inst, i, captures_kind);
+					}
+				}
+			}
+		}
 	}
 	// Apple's LLVM emits the SDK code with its own data layout, stack probes
 	// and target attributes. Odin's target machine may differ on all three.
