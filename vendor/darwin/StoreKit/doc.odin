@@ -933,17 +933,12 @@ recover_receipts :: proc(product_id: string) -> bool {
 }
 
 queue_receipt :: proc(_: ^sk.Transaction_Scan, item: sk.Verification) {
-	verified, ok := item.(sk.Verified)
-	if !ok { return }
-	signed, read := sk.Verification_jws(item)
-	if !read {
-		retry_receipts = true
-		return
-	}
-	defer delete(signed)
-	// The app copies the signed text into durable storage before returning.
-	if !store_pending_receipt(sk.Transaction_id(verified.value), signed) {
-		retry_receipts = true
+	if verified, ok := item.(sk.Verified); ok {
+		signed, copied := sk.Verification_jws(item)
+		defer delete(signed)
+		if !copied || !store_pending_receipt(sk.Transaction_id(verified.value), signed) {
+			retry_receipts = true
+		}
 	}
 }
 
@@ -952,7 +947,10 @@ receipts_closed :: proc(_: ^sk.Transaction_Scan, end: sk.Listener_End) {
 }
 ```
 
-The app supplies `store_pending_receipt`. Make repeated writes of the same
+This queue accepts verified transactions. Copying the signed text into an
+Odin string can fail if the allocator runs out of memory. Either a failed
+copy or a failed write leaves the scan marked for retry. The app supplies
+`store_pending_receipt` and copies the text before returning. Make repeated writes of the same
 signed record harmless. A later signed revision for the same transaction can
 report a refund or revocation, so retain that revision for delivery too.
 Clear `retry_receipts` before each retry and retry a failed start as well.
