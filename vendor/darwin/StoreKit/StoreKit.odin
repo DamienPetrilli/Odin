@@ -178,6 +178,23 @@ when AVAILABLE {
 	Transaction_product_id             :: api.Transaction_product_id
 	Transaction_app_account_token      :: api.Transaction_app_account_token
 	Transaction_json_representation    :: api.Transaction_json_representation
+
+	// The signed amount and currency can each be absent. The caller owns a
+	// present currency string. A free purchase has a present zero amount.
+	@(require_results)
+	Transaction_price_and_currency :: proc(tx: Transaction) -> (amount: Maybe(Decimal), currency: Maybe(string), ok: bool) {
+		if tx == nil { return }
+		price := api.Transaction_price(tx) or_return
+		when #defined(api.Transaction_currency) {
+			item := api.Transaction_currency(tx) or_return
+			code, present := item.?
+			if !present { return price, nil, true }
+			return price, string(code), true
+		} else {
+			code := api.Transaction_currency_code(tx) or_return
+			return price, code, true
+		}
+	}
 	Transaction_device_verification    :: api.Transaction_device_verification
 	Transaction_purchase_date          :: api.Transaction_purchase_date
 	Transaction_original_purchase_date :: api.Transaction_original_purchase_date

@@ -98,9 +98,34 @@ main :: proc() {
 	for expected, i in expected_prices {
 		price := fixture.fixture_price(u64(i)) or_else panic("Finite decimal")
 		assert(price == expected)
+		optional := fixture.optional_price(u64(i)) or_else panic("Finite optional decimal")
+		assert(optional.? == expected)
 	}
 	nan, finite := fixture.fixture_price(9)
 	assert(!finite && nan == {})
+	invalid, finite_optional := fixture.optional_price(9)
+	assert(!finite_optional && invalid == nil)
+	absent, read := fixture.optional_price(10)
+	assert(read && absent == nil)
+	when (ODIN_PLATFORM_SUBTARGET == .Default && ODIN_MINIMUM_OS_VERSION >= 13_00_00) ||
+	     (ODIN_PLATFORM_SUBTARGET != .Default && ODIN_MINIMUM_OS_VERSION >= 16_00_00) {
+		for code in ([4]string{"USD", "", "KWD", "unusually-long-currency"}) {
+			currency := fixture.optional_currency(code) or_else panic("Optional currency")
+			defer fixture.Optional_Locale_Currency_destroy(currency)
+			v, present := currency.?
+			assert(present == (code != ""))
+			if present {
+				assert(string(v) == code)
+				copy := fixture.Locale_Currency_copy(v) or_else panic("Independent currency")
+				defer fixture.Locale_Currency_destroy(copy)
+				assert(copy == v && raw_data(string(copy)) != raw_data(string(v)))
+			}
+			echo := fixture.currency_identifier(currency) or_else panic("Currency input")
+			defer fixture.Optional_String_destroy(echo)
+			text, got_text := echo.?
+			assert(got_text == present && text == code)
+		}
+	}
 	for code in ([3]string{"KWD", "", "unexpected-long-currency-identifier"}) {
 		style := fixture.fixture_currency(code) or_else panic("Currency format")
 		{

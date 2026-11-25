@@ -16,6 +16,17 @@ Native_Decimal :: struct {
 	last:          u32,
 }
 
+Native_Optional_Decimal :: struct {
+	first, second, last: u64,
+}
+
+@(require_results)
+optional_decimal_from_native :: proc "contextless" (v: Native_Optional_Decimal) -> (value: Maybe(Decimal), ok: bool) #optional_ok {
+	if v.last & (1 << 32) != 0 { return nil, true }
+	amount := decimal_from_native({v.first, v.second, u32(v.last)}) or_return
+	return amount, true
+}
+
 @(require_results)
 decimal_from_native :: proc "contextless" (v: Native_Decimal) -> (value: Decimal, ok: bool) #optional_ok {
 	length := (v.first >> 8) & 0xf

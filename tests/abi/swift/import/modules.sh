@@ -74,3 +74,22 @@ done
 sed 's/Drawing.width(Left.identity(left))/Drawing.width(right)/' main.odin > invalid.odin
 if "$ODIN" check invalid.odin -file -minimum-os-version:15.0 > names.log 2>&1; then exit 1; fi
 grep -Fq "Cannot assign" names.log
+
+# The importer must verify the payload even when every Decimal result is optional.
+cat > Price.swift <<'SWIFT'
+import Foundation
+public func amount(_ present: Bool) -> Decimal? { present ? Decimal(7) : nil }
+SWIFT
+xcrun swiftc -target arm64-apple-macosx15.0 -parse-as-library -module-name Price \
+	-emit-module-path Price.swiftmodule -emit-object Price.swift -o Price.o
+cat > price.odin <<'ODIN'
+package example
+foreign import price "swift:Price"
+main :: proc() {
+	amount := price.amount(true) or_else panic("Expected a decimal")
+	assert(amount.?.coefficient == 7)
+	none := price.amount(false) or_else panic("Expected an absent price")
+	assert(none == nil)
+}
+ODIN
+"$ODIN" run price.odin -file -minimum-os-version:15.0 -out:"$build/price-client"

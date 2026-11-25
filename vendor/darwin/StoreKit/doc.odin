@@ -966,13 +966,71 @@ By default Apple omits ordinary finished consumables from history. Persist the
 credit grant and its receipt before finishing the purchase, even if the app
 also offers a history screen. [[Apple's transaction history rules;https://developer.apple.com/documentation/storekit/transaction/all]]
 
-For an on-device receipt detail view, `Transaction_json_representation` on
-the verified transaction yields owned bytes. Release them with `delete`.
-Apple represents the optional signed `price` as integer milliunits. For
-example, 990 with currency USD means $0.99. A present zero can mean a free
-trial. Leave the amount unavailable if the field is absent. Use the signed
-currency when interpreting a past charge. The customer's current storefront
-may have changed. [[Apple's transaction price;https://developer.apple.com/documentation/storekit/transaction/price]]
+For an on-device receipt detail view, read the amount and currency from the
+verified transaction. A present zero can mean a free trial. Either field can
+be missing. The following procedure leaves an incomplete price undisplayed.
+
+```odin
+show_receipt_price :: proc(tx: sk.Transaction) -> bool {
+	amount, currency := sk.Transaction_price_and_currency(tx) or_return
+	code, has_currency := currency.?
+	if !has_currency { return true }
+	defer delete(code)
+	price, has_price := amount.?
+	if has_price { display_charge(price, code) }
+	return true
+}
+```
+
+The exact decimal is in currency units. For comparison, the same $0.99
+purchase has a `price` of 990 in the signed JSON, which uses milliunits.
+For a quantity purchase, the signed amount already includes all the packs.
+If a customer buys three $0.99 packs, show $2.97 on the receipt. Use the
+signed quantity to credit three packs in the ledger.
+Use the signed currency even if the customer's storefront has since changed.
+[[Apple's transaction price;https://developer.apple.com/documentation/storekit/transaction/price]]
+
+**Handle a failed purchase in the store UI**
+
+Suppose the customer taps Buy on a product that has just been removed from
+the storefront. The purchase completion receives an error. Reloading the
+catalog gives the customer a useful next action. An invalid quantity calls
+for a different response. This example classifies the borrowed error while
+the purchase completion still owns it.
+
+```odin
+Purchase_Action :: enum {
+	Reload_Catalog, Choose_Quantity, Explain_Restriction,
+	Show_Regular_Price, Check_Offer, Report_Failure,
+}
+
+purchase_action :: proc(err: sk.Error) -> Purchase_Action {
+	if cause, known := err.(sk.Purchase_Error); known {
+		switch _ in cause {
+		case sk.Purchase_Error_Product_Unavailable:  return .Reload_Catalog
+		case sk.Purchase_Error_Invalid_Quantity:     return .Choose_Quantity
+		case sk.Purchase_Error_Purchase_Not_Allowed: return .Explain_Restriction
+		case sk.Purchase_Error_Ineligible_For_Offer: return .Show_Regular_Price
+		case sk.Purchase_Error_Invalid_Offer_Identifier, sk.Purchase_Error_Invalid_Offer_Price,
+		     sk.Purchase_Error_Invalid_Offer_Signature, sk.Purchase_Error_Missing_Offer_Parameters:
+			return .Check_Offer
+		case sk.Purchase_Error_Unknown: return .Report_Failure
+		}
+	}
+	return .Report_Failure
+}
+```
+
+Call `purchase_action(err)` in the `err != nil` branch of `purchase_received`.
+Keep the current entitlement and let the customer initiate any new payment.
+For an ineligible offer, offer the regular purchase after showing its terms.
+An invalid offer identifier, price, signature or missing parameter needs a
+configuration or signing fix before retry. Preserve unknown errors for
+diagnostics. A result conversion failure can occur after the payment began.
+Drain unfinished transactions before inviting another purchase, especially
+for consumables. A pending or cancelled outcome with a nil error goes through
+the purchase-result switch in `purchase_received`.
+[[Apple's purchase errors;https://developer.apple.com/documentation/storekit/product/purchaseerror]]
 
 **Choosing a workflow on iOS and macOS**
 

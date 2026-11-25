@@ -106,7 +106,7 @@ struct SwiftImportNominal {
 	bool is_tuple; // Structural storage used only by a managed tuple result.
 	SwiftImportValueKind kind;
 	bool supported, is_enum, is_frozen, is_template, is_optional, is_scalar, is_record, is_date, is_uuid, is_error;
-	bool is_currency_format;
+	bool is_currency_format, is_locale_currency;
 };
 
 enum SwiftImportBorrow {
@@ -145,6 +145,7 @@ enum SwiftImportFoundationResult {
 	SwiftImportFoundation_None,
 	SwiftImportFoundation_Data,
 	SwiftImportFoundation_Decimal,
+	SwiftImportFoundation_OptionalDecimal,
 };
 
 struct SwiftImportFunction {
@@ -457,20 +458,26 @@ gb_internal bool swift_import_api_type(JsonValue *api, SwiftImportType *type, Ar
 		*type = swift_import_nominal_type(swift_import_string_type(types));
 		return true;
 	}
-	if (usr == "s:So9NSDecimala10FoundationE11FormatStyleV8CurrencyV" && children.count == 0 &&
-	    swift_import_string(api, "printedName") == "Foundation.Decimal.FormatStyle.Currency") {
+	bool currency_format = usr == "s:So9NSDecimala10FoundationE11FormatStyleV8CurrencyV" && swift_import_string(api, "printedName") == "Foundation.Decimal.FormatStyle.Currency";
+	bool locale_currency = usr == "s:10Foundation6LocaleV8CurrencyV" && swift_import_string(api, "printedName") == "Foundation.Locale.Currency";
+	if ((currency_format || locale_currency) && children.count == 0) {
 		int major = atoi(alloc_cstring(temporary_allocator(), build_context.minimum_os_version_string));
-		if (major < (selected_subtarget == Subtarget_Default ? 12 : 15)) return false;
+		int minimum = selected_subtarget == Subtarget_Default ? 12 : 15;
+		if (locale_currency) minimum++;
+		if (major < minimum) return false;
 		SwiftImportNominal *style = nullptr;
 		for (auto t : *types) if (t->usr == usr) style = t;
 		if (!style) {
 			style = gb_alloc_item(permanent_allocator(), SwiftImportNominal);
 			*style = {};
-			style->name = str_lit("Decimal_FormatStyle_Currency");
-			style->swift_name = str_lit("Foundation.Decimal.FormatStyle.Currency");
+			style->name = locale_currency ? str_lit("Locale_Currency") : str_lit("Decimal_FormatStyle_Currency");
+			style->swift_name = swift_import_string(api, "printedName");
 			style->usr = usr;
-			style->symbol = str_lit("$sSo9NSDecimala10FoundationE11FormatStyleV8CurrencyV");
-			style->is_currency_format = true;
+			style->symbol = locale_currency ? str_lit("$s10Foundation6LocaleV8CurrencyV") : str_lit("$sSo9NSDecimala10FoundationE11FormatStyleV8CurrencyV");
+			style->is_currency_format = currency_format;
+			style->is_locale_currency = locale_currency;
+			style->projected = locale_currency;
+			style->owns = locale_currency;
 			array_add(types, style);
 		}
 		*type = swift_import_nominal_type(style);
@@ -890,6 +897,13 @@ gb_internal bool swift_import_function(JsonValue *symbol, JsonValue *api, SwiftI
 		} else if (usr == "c:@SA@NSDecimal" && swift_import_string(api_types[0], "printedName") == "Foundation.Decimal") {
 			fn->foundation_result = SwiftImportFoundation_Decimal;
 			fn->result = {"Foundation.Decimal", "swift.Decimal", "{ i64, i64, i32 }"};
+		} else if (usr == "s:Sq") {
+			auto payload = swift_import_array(api_types[0], "children");
+			if (payload.count == 1 && swift_import_string(payload[0], "usr") == "c:@SA@NSDecimal" &&
+			    swift_import_string(payload[0], "printedName") == "Foundation.Decimal") {
+				fn->foundation_result = SwiftImportFoundation_OptionalDecimal;
+				fn->result = {"Foundation.Decimal?", "Maybe(swift.Decimal)", "{ i64, i64, i64 }"};
+			}
 		}
 	}
 	if (fn->is_property) {
@@ -1048,6 +1062,7 @@ gb_internal bool swift_import_ownership(String sil, SwiftImportFunction *fn) {
 		}
 		if (fn->foundation_result) {
 			String result = string_trim_whitespace(substring(line, end+1, line.len));
+			if (fn->foundation_result == SwiftImportFoundation_OptionalDecimal) return result == "-> Optional<Decimal>";
 			return fn->foundation_result == SwiftImportFoundation_Data ? result == "-> @owned Data" : result == "-> Decimal";
 		}
 		if (swift_import_native_owns(fn->result)) {
@@ -1261,6 +1276,22 @@ gb_internal gbString swift_import_emit_type(gbString source, SwiftImportNominal 
 			"@(private)\nforeign swift_library {\n\t@(link_name=\"%.*sMa\")\n"
 			"\t_swift_%.*s_metadata :: proc \"swift\" (request: u64) -> swift.Metadata_Response ---\n}\n", LIT(type->symbol), LIT(name));
 	}
+	if (type->is_locale_currency) return gb_string_appendc(source,
+		"Locale_Currency :: distinct string\n"
+		"@(private)\nforeign swift_library {\n"
+		"\t@(link_name=\"$s10Foundation6LocaleV8CurrencyV10identifierSSvg\")\n"
+		"\t_swift_currency_identifier :: proc \"swift\" (#swift_self value: rawptr) -> swift.Native_String ---\n"
+		"\t@(link_name=\"$s10Foundation6LocaleV8CurrencyVyAESScfC\")\n"
+		"\t_swift_currency_init :: proc \"swift\" (#swift_result dest: rawptr, bits: u64, object: rawptr) ---\n}\n"
+		"@(private)\n_swift_Locale_Currency_initialize :: proc(dest: rawptr, value: Locale_Currency) -> bool {\n"
+		"\ttext := swift.string_from_odin(string(value)) or_return\n\t_swift_currency_init(dest, text.bits, text.object)\n\treturn true\n}\n"
+		"@(private)\n_swift_Locale_Currency_take :: proc(storage: rawptr) -> (value: Locale_Currency, ok: bool) #optional_ok {\n"
+		"\tdefer swift.value_deinitialize(storage, _swift_Locale_Currency_metadata(0).type)\n"
+		"\ttext := _swift_currency_identifier(storage)\n\tdefer swift.string_destroy(&text)\n"
+		"\tcode := swift.string_to_odin(text) or_return\n\treturn Locale_Currency(code), true\n}\n"
+		"@(require_results)\nLocale_Currency_copy :: proc(value: Locale_Currency, allocator := context.allocator) -> (copy: Locale_Currency, ok: bool) #optional_ok {\n"
+		"\ttext, err := strings.clone(string(value), allocator)\n\treturn Locale_Currency(text), err == nil\n}\n"
+		"Locale_Currency_destroy :: proc(value: Locale_Currency, allocator := context.allocator) {\n\tdelete(string(value), allocator)\n}\n\n");
 	if (type->is_record) return swift_import_emit_struct(source, type);
 	if (type->projected) return swift_import_emit_enum(source, type);
 	if (swift_import_value_slice(type)) return swift_import_emit_array(source, type);
@@ -1320,6 +1351,7 @@ gb_internal gbString swift_import_emit_value_declaration(gbString source, SwiftI
 		char const *type = swift_import_native_type(fn.result);
 		if (fn.foundation_result == SwiftImportFoundation_Data) type = "swift.Native_Data";
 		if (fn.foundation_result == SwiftImportFoundation_Decimal) type = "swift.Native_Decimal";
+		if (fn.foundation_result == SwiftImportFoundation_OptionalDecimal) type = "swift.Native_Optional_Decimal";
 		source = gb_string_append_fmt(source, " -> %s", type);
 	}
 	source = gb_string_appendc(source, " ---\n");
@@ -1393,6 +1425,7 @@ gb_internal void swift_import_report_type(Array<String> *report, SwiftImportNomi
 	else if (type->kind == SwiftImportValue_Set) representation = "input slice";
 	else if (type->is_uuid) representation = "core:encoding/uuid.Identifier";
 	else if (type->is_date) representation = "swift.Date";
+	else if (type->is_locale_currency) representation = "distinct UTF-8 string";
 	else if (type->is_record) representation = "struct";
 	else if (type->projected && type->is_optional) representation = "Maybe";
 	else if (type->projected && swift_import_plain_enum(type)) representation = "enum";
@@ -1594,6 +1627,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 			else source = gb_string_appendc(source, "\tassert(_swift_converted)\n\treturn _swift_result_value\n");
 		} else if (slice_result) source = gb_string_append_fmt(source, "\tdefer swift.array_destroy(swift.Native_Array{_swift_value})\n\treturn %.*s\n", LIT(swift_import_array_to(fn.result.nominal, str_lit("swift.Native_Array{_swift_value}"))));
 		else if (fn.foundation_result == SwiftImportFoundation_Decimal) source = gb_string_appendc(source, "\treturn swift.decimal_from_native(_swift_value)\n");
+		else if (fn.foundation_result == SwiftImportFoundation_OptionalDecimal) source = gb_string_appendc(source, "\treturn swift.optional_decimal_from_native(_swift_value)\n");
 		else if (fn.foundation_result == SwiftImportFoundation_Data) source = gb_string_appendc(source, "\treturn swift.data_take(&_swift_value)\n");
 		else if (string_result) source = gb_string_appendc(source, "\tdefer swift.string_destroy(&_swift_value)\n\treturn swift.string_to_odin(_swift_value)\n");
 		else if (owned_result) source = gb_string_append_fmt(source, "\treturn %s(_swift_storage), true\n", fn.result.odin);
@@ -2324,14 +2358,19 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	gbString probe = gb_string_make(permanent_allocator(), "");
 	probe = gb_string_append_fmt(probe, "import %.*s\n", LIT(pkg->module));
 	for (auto const &dep : pkg->dependencies) probe = gb_string_append_fmt(probe, "import %.*s\n", LIT(dep.module));
-	bool probe_data = false, probe_decimal = false;
+	bool probe_data = false, probe_decimal = false, probe_optional_decimal = false;
 	for (auto const &fn : functions) {
 		probe_data |= fn.foundation_result == SwiftImportFoundation_Data;
 		probe_decimal |= fn.foundation_result == SwiftImportFoundation_Decimal;
+		probe_optional_decimal |= fn.foundation_result == SwiftImportFoundation_OptionalDecimal;
 	}
-	if (probe_decimal) probe = gb_string_appendc(probe,
+	if (probe_decimal || probe_optional_decimal) probe = gb_string_appendc(probe,
 		"import Foundation\n"
+		"public func probe_decimal_value(_ p: Swift.UnsafePointer<Foundation.Decimal>) -> Foundation.Decimal { p.pointee }\n"
 		"@_silgen_name(\"odin_swift_decimal_layout\") public func decimal_layout() -> (Swift.Int, Swift.Int) { (Swift.MemoryLayout<Foundation.Decimal>.size, Swift.MemoryLayout<Foundation.Decimal>.alignment) }\n");
+	if (probe_optional_decimal) probe = gb_string_appendc(probe,
+		"@_silgen_name(\"odin_swift_optional_decimal_layout\") public func optional_decimal_layout() -> (Swift.Int, Swift.Int) { (Swift.MemoryLayout<Foundation.Decimal?>.size, Swift.MemoryLayout<Foundation.Decimal?>.alignment) }\n"
+		"@_silgen_name(\"odin_swift_clear_decimal\") public func clear_decimal(_ p: Swift.UnsafeMutablePointer<Foundation.Decimal?>) { p.pointee = nil }\n");
 	if (probe_data) probe = gb_string_appendc(probe,
 		"import Foundation\n"
 		"public func probe_data(_ d: Foundation.Data, _ p: Swift.UnsafeMutablePointer<Swift.UInt8>, _ n: Swift.Int) -> Swift.Int { d.copyBytes(to: p, count: n); return d.count }\n"
@@ -2339,12 +2378,15 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	bool probe_ui = false;
 	for (auto const &fn : functions) for (auto const &param : fn.parameters) probe_ui |= param.objc_borrow != nullptr;
 	if (probe_ui) probe = gb_string_appendc(probe, selected_subtarget == Subtarget_Default ? "import AppKit\n" : "import UIKit\n");
-	for (auto type : types) if (type->is_date || type->is_uuid || type->is_currency_format) { probe = gb_string_appendc(probe, "import Foundation\n"); break; }
+	for (auto type : types) if (type->is_date || type->is_uuid || type->is_currency_format || type->is_locale_currency) { probe = gb_string_appendc(probe, "import Foundation\n"); break; }
 	for_array(i, types) {
 		if (types[i]->is_template || types[i]->external_name.len) continue;
 		if (types[i]->is_date) probe = swift_import_date_probe(probe, types[i], i);
 		if (types[i]->is_uuid) probe = swift_import_uuid_probe(probe, types[i], i);
 		if (types[i]->is_currency_format) probe = gb_string_appendc(probe, "public func probe_currency_code(_ style: Foundation.Decimal.FormatStyle.Currency) -> Swift.String { style.currencyCode }\n");
+		if (types[i]->is_locale_currency) probe = gb_string_appendc(probe,
+			"public func probe_currency_identifier(_ currency: Foundation.Locale.Currency) -> Swift.String { currency.identifier }\n"
+			"public func probe_currency_init(_ code: Swift.String) -> Foundation.Locale.Currency { Foundation.Locale.Currency(code) }\n");
 		if (types[i]->kind == SwiftImportValue_Set) probe = swift_import_set_probe(probe, types[i], i);
 		if (!types[i]->is_tuple) probe = gb_string_append_fmt(probe, "@_silgen_name(\"odin_swift_import_metadata_%td\")\npublic func metadata_%td() -> Any.Type { %.*s.self }\n", i, i, LIT(types[i]->swift_name));
 		if ((types[i]->is_enum && types[i]->cases.count) || types[i]->is_record) {
@@ -2448,7 +2490,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 				"declare swiftcc %%swift.metadata_response @\"%.*sMa\"(i64)", LIT(type->symbol));
 			String exported = concatenate3_strings(permanent_allocator(), str_lit(" _"), type->symbol, str_lit("Ma"));
 			type->supported = swift_import_has_line(ir, make_string_c(declaration), true) &&
-			                  (pkg->framework || type->is_date || type->is_uuid || type->is_currency_format || swift_import_has_line(exports, exported, false));
+			                  (pkg->framework || type->is_date || type->is_uuid || type->is_currency_format || type->is_locale_currency || swift_import_has_line(exports, exported, false));
 		}
 		if (!type->argument && type->is_frozen) {
 			String symbol = concatenate_strings(permanent_allocator(), type->symbol, str_lit("N"));
@@ -2463,6 +2505,12 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		if (type->is_currency_format) {
 			type->supported &= swift_import_has_line(ir, str_lit("declare swiftcc { i64, ptr } @\"$sSo9NSDecimala10FoundationE11FormatStyleV8CurrencyV12currencyCodeSSvg\"(ptr noalias swiftself)"), true) &&
 			                   swift_import_has_line(sil, str_lit(" @$sSo9NSDecimala10FoundationE11FormatStyleV8CurrencyV12currencyCodeSSvg : $@convention(method) (@in_guaranteed Decimal.FormatStyle.Currency) -> @owned String"), false);
+		}
+		if (type->is_locale_currency) {
+			type->supported &= swift_import_has_line(ir, str_lit("declare swiftcc { i64, ptr } @\"$s10Foundation6LocaleV8CurrencyV10identifierSSvg\"(ptr noalias swiftself)"), true) &&
+			                   swift_import_has_line(sil, str_lit(" @$s10Foundation6LocaleV8CurrencyV10identifierSSvg : $@convention(method) (@in_guaranteed Locale.Currency) -> @owned String"), false) &&
+			                   swift_import_has_line(ir, str_lit("declare swiftcc void @\"$s10Foundation6LocaleV8CurrencyVyAESScfC\"(ptr noalias sret(%swift.opaque), i64, ptr)"), true) &&
+			                   swift_import_has_line(sil, str_lit(" @$s10Foundation6LocaleV8CurrencyVyAESScfC : $@convention(method) (@owned String, @thin Locale.Currency.Type) -> @out Locale.Currency"), false);
 		}
 		if (type->kind == SwiftImportValue_Set) type->supported &= swift_import_set_layout(inspection, layout, sil, type, i);
 		if (type->is_enum) type->supported &= swift_import_enum_layout(inspection, layout, type, i);
@@ -2486,13 +2534,30 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	}
 	for (auto type : types) if (!type->is_template) swift_import_resolve_enum(type);
 	bool decimal_supported = false;
-	if (probe_decimal) {
+	if (probe_decimal || probe_optional_decimal) {
 		// NSDecimal.h specifies the exponent, length and sign bit fields followed
 		// by eight little-endian 16-bit limbs on Darwin arm64.
 		decimal_supported = swift_import_matches_layout(inspection, "odin_swift_decimal_layout", 20, 4) &&
 		                    swift_import_has_line(ir, str_lit("%TSo9NSDecimala = type <{ [4 x i8], <{ %Ts6UInt16V, %Ts6UInt16V, %Ts6UInt16V, %Ts6UInt16V, %Ts6UInt16V, %Ts6UInt16V, %Ts6UInt16V, %Ts6UInt16V }> }>"), true);
 	}
 	bool data_supported = false;
+	bool optional_decimal_supported = false;
+	if (probe_optional_decimal && decimal_supported && swift_import_matches_layout(inspection, "odin_swift_optional_decimal_layout", 21, 4)) {
+		// In the three-register return, byte 20 is in the third register. Check
+		// that Swift writes the nil discriminator there as a single set bit.
+		LLVMValueRef clear = LLVMGetNamedFunction(inspection, "odin_swift_clear_decimal");
+		if (clear && LLVMCountParams(clear) == 1 && LLVMCountBasicBlocks(clear) == 1) {
+			for (auto inst = LLVMGetFirstInstruction(LLVMGetFirstBasicBlock(clear)); inst; inst = LLVMGetNextInstruction(inst)) {
+				if (!LLVMIsAStoreInst(inst)) continue;
+				LLVMValueRef value = LLVMGetOperand(inst, 0);
+				u64 offset = 0;
+				if (LLVMIsAConstantInt(value) && LLVMGetIntTypeWidth(LLVMTypeOf(value)) == 1 &&
+				    LLVMConstIntGetZExtValue(value) == 1 && swift_import_pointer_offset(layout, LLVMGetOperand(inst, 1), LLVMGetParam(clear, 0), &offset) && offset == 20) {
+					optional_decimal_supported = true;
+				}
+			}
+		}
+	}
 	if (probe_data) {
 		data_supported = swift_import_matches_layout(inspection, "odin_swift_data_layout", 16, 8) &&
 		                 swift_import_has_line(ir, str_lit("declare swiftcc i64 @\"$s10Foundation4DataV5countSivg\"(i64, i64)"), true) &&
@@ -2545,6 +2610,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		unsigned native_index = 0;
 		String &reason = fn.rejection;
 		if (fn.foundation_result == SwiftImportFoundation_Decimal && !decimal_supported) reason = str_lit("Darwin NSDecimal representation could not be verified");
+		if (fn.foundation_result == SwiftImportFoundation_OptionalDecimal && !optional_decimal_supported) reason = str_lit("Darwin optional NSDecimal representation could not be verified");
 		if (fn.foundation_result == SwiftImportFoundation_Data && !data_supported) reason = str_lit("Foundation.Data storage or byte access ABI could not be verified");
 		auto api_types = swift_import_array(fn.api, "children");
 		if (receiver && fn.owner->projected && fn.is_mutating) {

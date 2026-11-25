@@ -1462,3 +1462,17 @@ public func fixturePrice(_ kind: UInt64) -> Decimal {
 	default: return .nan
 	}
 }
+
+public func optionalPrice(_ kind: UInt64) -> Decimal? {
+	kind == 10 ? nil : fixturePrice(kind)
+}
+
+@available(macOS 13, iOS 16, *)
+public func optionalCurrency(_ code: String) -> Locale.Currency? {
+	code.isEmpty ? nil : Locale.Currency(code)
+}
+
+@available(macOS 13, iOS 16, *)
+public func currencyIdentifier(_ currency: Locale.Currency?) -> String? {
+	currency?.identifier
+}
