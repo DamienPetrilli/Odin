@@ -2,6 +2,8 @@
 #+vet tabs style semicolon
 package darwin_StoreKit
 
+import "core:mem"
+import "core:sync"
 import swift "core:sys/darwin/Swift"
 foreign import api "swift:StoreKit"
 
@@ -124,6 +126,9 @@ when AVAILABLE {
 		native := api.Product_SubscriptionInfo_Status_state(status) or_return
 		defer api.Product_SubscriptionInfo_RenewalState_destroy(native)
 		raw := api.Product_SubscriptionInfo_RenewalState_raw_value(native)
+		// Cache only the integer from each immutable Swift constant. Zero is
+		// read again if it is a valid raw value on a future runtime.
+		@(static) raw_values: [Subscription_State]int
 		getters := [Subscription_State]type_of(api.Product_SubscriptionInfo_RenewalState_subscribed) {
 			.Unknown       = nil,
 			.Subscribed    = api.Product_SubscriptionInfo_RenewalState_subscribed,
@@ -134,9 +139,14 @@ when AVAILABLE {
 		}
 		for get, kind in getters {
 			if get == nil { continue }
-			known := get() or_return
-			defer api.Product_SubscriptionInfo_RenewalState_destroy(known)
-			if raw == api.Product_SubscriptionInfo_RenewalState_raw_value(known) { return kind, true }
+			code := sync.atomic_load_explicit(&raw_values[kind], .Relaxed)
+			if code == 0 {
+				known := get() or_return
+				defer api.Product_SubscriptionInfo_RenewalState_destroy(known)
+				code = api.Product_SubscriptionInfo_RenewalState_raw_value(known)
+				sync.atomic_store_explicit(&raw_values[kind], code, .Relaxed)
+			}
+			if raw == code { return kind, true }
 		}
 		return .Unknown, true
 	}
@@ -162,6 +172,20 @@ when AVAILABLE {
 	@(require_results)
 	subscription_period :: proc(status: Subscription_Status) -> (period: Subscription_Period, ok: bool) #optional_ok {
 		if status == nil { return {}, false }
+		// Both signed values are consumed before returning the scalar snapshot.
+		// Swift supplies their layouts. Larger layouts use the caller's allocator.
+		{
+			buffer: [3 * 1024]byte = ---
+			arena := mem.Arena{data = buffer[:]}
+			context.allocator = mem.arena_allocator(&arena)
+			period, ok = read_subscription_period(status)
+			if ok { return }
+		}
+		return read_subscription_period(status)
+	}
+
+	@(private)
+	read_subscription_period :: proc(status: Subscription_Status) -> (period: Subscription_Period, ok: bool) #optional_ok {
 		tx_result := api.Product_SubscriptionInfo_Status_transaction(status) or_return
 		defer Verification_destroy(tx_result)
 		tx := tx_result.(Verified) or_return

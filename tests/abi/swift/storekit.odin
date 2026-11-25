@@ -83,6 +83,8 @@ main :: proc() {
 	assert(!sk.watch_subscriptions(&subscriptions, nil, subscription_closed))
 	assert(!sk.watch_subscriptions(&subscriptions, subscription_changed, nil))
 	sk.stop_subscription_watch(&subscriptions)
+	_, verified := sk.subscription_period(nil)
+	assert(!verified)
 	id, country, has_store := sk.storefront_details(nil)
 	assert(!has_store && id == "" && country == "")
 	_, code, priced := sk.price_and_currency(nil)

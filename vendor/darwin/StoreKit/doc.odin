@@ -798,7 +798,23 @@ pass_restored :: proc(_: sk.Task, err: sk.Error) {
 
 Disable the button while restoring or scanning. Keep the last verified grant
 on failure. Publish the new state when the scan completes. For monthly plans,
-refresh the subscription group as well.
+use the same button with a completion that refreshes the subscription group:
+
+```odin
+monthly_restored :: proc(_: sk.Task, err: sk.Error) {
+	defer sk.Error_destroy(err)
+	if err != nil {
+		fmt.println("Restore failed. Try again.")
+		return
+	}
+	if !refresh_group() { fmt.println("Could not start a subscription refresh") }
+}
+```
+
+A successful restore means StoreKit finished synchronizing. The verified group
+status determines access. For example, someone who turned off renewal yesterday
+can still use Plus today if the paid period ends tomorrow. Show the renewal
+setting in the billing UI. Gate the feature with `subscription_active`.
 
 **Other cases a store needs to handle**
 
@@ -812,7 +828,9 @@ refresh the subscription group as well.
   use `purchase_confirm_in` with the originating UIKit controller on iOS
   18.2+ or AppKit window on macOS 15.2+.
 - **Pending, cancelled, or failed.** `Purchase_Pending` leaves delivery
-  waiting for a verified event on `.Updates`. `Purchase_Cancelled` returns
+  waiting for a verified event on `.Updates`. For example, a parent can approve
+  an Ask to Buy request after the child closes the app. Start the listener
+  again at launch and recover unfinished deliveries. `Purchase_Cancelled` returns
   the UI to idle. A failed start schedules no callback. A thrown error arrives
   in the completion's `err`. Keep access unchanged on unverified results,
   conversion failures and unknown outcomes.
@@ -832,8 +850,18 @@ refresh the subscription group as well.
   and release them after use. For diagnosis, `unverified_details` exposes the
   transaction and reason carried by an unverified result.
 
+**Follow along with Apple's examples**
+
+In [[Meet StoreKit 2;https://developer.apple.com/videos/play/wwdc2021/10114/]],
+Apple builds a shop for fuel, cars and navigation plans. For fuel, follow
+`deliver_packs` to credit a balance once per transaction. For a car, follow
+`deliver_pro` to unlock a permanent feature. For the tiered navigation plans,
+follow `refresh_monthly` to determine which features the customer can use today.
+
 Apple's [[store sample;https://developer.apple.com/documentation/storekit/implementing-a-store-in-your-app-using-the-storekit-api]]
 shows a catalog backed by signed purchases and a persisted consumable balance.
+Apple lists iOS 27 and Xcode 27 for that sample project. The Odin package starts
+at iOS 15 and macOS 12. The presentation overloads above have their own minimums.
 Compare the Odin callbacks above with Apple's
 [[purchase result;https://developer.apple.com/documentation/storekit/product/purchaseresult]],
 [[current entitlements;https://developer.apple.com/documentation/storekit/transaction/currententitlements]]
