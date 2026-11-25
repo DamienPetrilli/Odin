@@ -269,6 +269,25 @@ gb_internal bool swift_import_enum_layout(LLVMModuleRef module, LLVMTargetDataRe
 	return end == type->size;
 }
 
+// Require zero for none and the two unchanged native String words for some.
+// Other Optional<String> lowerings keep the general enum witness path.
+gb_internal bool swift_import_optional_string_words(LLVMModuleRef module, SwiftImportNominal *type) {
+	if (!type->supported || type->size != 16 || type->alignment != 8 || type->components.count != 2) return false;
+	for (auto const &component : type->components) if (make_string_c(component.llvm) != "i64") return false;
+	LLVMValueRef some = LLVMGetNamedFunction(module, "odin_swift_present_text");
+	LLVMValueRef none = LLVMGetNamedFunction(module, "odin_swift_absent_text");
+	if (!none || !some || LLVMCountParams(some) != 2) return false;
+	LLVMValueRef empty = swift_import_return(none);
+	LLVMValueRef object = swift_import_return(some);
+	if (!empty || !LLVMIsAConstantAggregateZero(empty) || !object || !LLVMIsAInsertValueInst(object)) return false;
+	if (LLVMGetNumIndices(object) != 1 || LLVMGetIndices(object)[0] != 1) return false;
+	LLVMValueRef word = LLVMGetOperand(object, 1);
+	if (!LLVMIsAPtrToIntInst(word) || LLVMGetOperand(word, 0) != LLVMGetParam(some, 1)) return false;
+	LLVMValueRef bits = LLVMGetOperand(object, 0);
+	return LLVMIsAInsertValueInst(bits) && LLVMGetNumIndices(bits) == 1 && LLVMGetIndices(bits)[0] == 0 &&
+	       LLVMGetOperand(bits, 1) == LLVMGetParam(some, 0);
+}
+
 // Reject cycles and incomplete payloads instead of emitting a union with lost
 // cases. Dependent concrete types are resolved before their parent.
 gb_internal bool swift_import_resolve_enum(SwiftImportNominal *type) {

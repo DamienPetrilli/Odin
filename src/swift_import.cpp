@@ -106,7 +106,7 @@ struct SwiftImportNominal {
 	bool is_tuple; // Structural storage used only by a managed tuple result.
 	SwiftImportValueKind kind;
 	bool supported, is_enum, is_frozen, is_template, is_optional, is_scalar, is_record, is_date, is_uuid, is_error;
-	bool is_currency_format, is_locale_currency;
+	bool is_currency_format, is_locale_currency, optional_string_words;
 };
 
 enum SwiftImportBorrow {
@@ -1612,8 +1612,24 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		if (fixed_result) source = gb_string_append_fmt(source, "\t_swift_storage: %s\n", swift_import_enum_native(fn.result.nominal));
 		if (projected_result && fn.result.nominal->is_date) source = gb_string_appendc(source, "\t_swift_result_temporary: swift.Value_Temporary = ---\n\t_swift_storage := swift.value_temporary_from_layout(&_swift_result_temporary, _swift_date_layout) or_return\n\tdefer if !_swift_date_layout.inline_temporary { swift.value_free_uninitialized(_swift_storage) }\n");
 		else if (projected_result && fn.result.nominal->is_uuid) source = gb_string_appendc(source, "\t_swift_result_temporary: swift.Value_Temporary = ---\n\t_swift_storage := swift.value_temporary_from_layout(&_swift_result_temporary, _swift_uuid_layout) or_return\n\tdefer if !_swift_uuid_layout.inline_temporary { swift.value_free_uninitialized(_swift_storage) }\n");
-		else if (projected_result && !fixed_result) source = gb_string_append_fmt(source, "\t_swift_result_temporary: swift.Value_Temporary = ---\n\t_swift_storage := swift.value_temporary(&_swift_result_temporary, _swift_%.*s_metadata(0).type) or_return\n\tdefer swift.value_temporary_free(&_swift_result_temporary, _swift_storage)\n", LIT(fn.result.nominal->name));
-		else if (allocated_result) source = gb_string_append_fmt(source, "\t_swift_storage := swift.value_allocate(_swift_%.*s_metadata(0).type) or_return\n", LIT(fn.result.nominal->name));
+		else if (projected_result && !fixed_result) {
+			auto optional = fn.result.nominal;
+			auto payload = optional->argument;
+			if (receiver && fn.is_property && fn.parameters.count == 0 && !fn.is_mutating && indirect_result &&
+			    optional->is_optional && payload && payload->kind == SwiftImportValue_Opaque && !payload->projected && !payload->is_scalar) {
+				for (auto const &c : optional->cases) {
+					if (!c.has_payload || c.fields.count != 1) continue;
+					source = gb_string_append_fmt(source,
+						"\t_swift_metadata := _swift_%.*s_metadata(0).type\n"
+						"\tif _swift_owner, reserved := swift.optional_owner_reserve(_swift_metadata); reserved {\n"
+						"\t\t_swift_%.*s_native(_swift_owner, %s)\n"
+						"\t\treturn swift.optional_owner_project(_swift_owner, _swift_metadata, %.*s, %s), true\n\t}\n",
+						LIT(optional->name), LIT(native_name), arguments, LIT(c.tag_name), c.fields[0].type.odin);
+					break;
+				}
+			}
+			source = gb_string_append_fmt(source, "\t_swift_result_temporary: swift.Value_Temporary = ---\n\t_swift_storage := swift.value_temporary(&_swift_result_temporary, _swift_%.*s_metadata(0).type) or_return\n\tdefer swift.value_temporary_free(&_swift_result_temporary, _swift_storage)\n", LIT(fn.result.nominal->name));
+		} else if (allocated_result) source = gb_string_append_fmt(source, "\t_swift_storage := swift.value_allocate(_swift_%.*s_metadata(0).type) or_return\n", LIT(fn.result.nominal->name));
 		source = swift_import_emit_inout_bools(source, fn, "receiver", false);
 		char const *assignment = !fn.result.odin || indirect_result || empty_result ? "" : projected_result ? "_swift_storage = " : owned_result ? "(cast(^rawptr)_swift_storage)^ = " : "_swift_value := ";
 		source = gb_string_append_fmt(source, "\t%s_swift_%.*s_native(%s%s%s)\n", assignment, LIT(native_name), indirect_result ? (fixed_result ? "&_swift_storage" : "_swift_storage") : "", indirect_result && gb_string_length(arguments) ? ", " : "", arguments);
@@ -1621,6 +1637,13 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		if (consumes) source = gb_string_appendc(source, "\t_swift_called = true\n");
 		if (release_inputs) source = gb_string_appendc(source, release_inputs);
 		if (projected_result) {
+			if (fixed_result && fn.result.nominal->optional_string_words) {
+				return gb_string_appendc(source,
+					"\t_swift_text := transmute(swift.Native_String)_swift_storage\n"
+					"\tif _swift_text.bits == 0 && _swift_text.object == nil { return nil, true }\n"
+					"\tdefer swift.string_destroy(&_swift_text)\n"
+					"\t_swift_copy := swift.string_to_odin(_swift_text) or_return\n\treturn _swift_copy, true\n}\n\n");
+			}
 			bool cached_layout = fn.result.nominal->is_date || fn.result.nominal->is_uuid;
 			source = gb_string_append_fmt(source, "\t_swift_result_value, _swift_converted := _swift_%.*s_take%s(%s_swift_storage%s)\n", LIT(fn.result.nominal->name), cached_layout ? "_with_layout" : "", fixed_result ? "&" : "", fn.result.nominal->is_date ? ", _swift_date_layout" : fn.result.nominal->is_uuid ? ", _swift_uuid_layout" : "");
 			if (fallible) source = gb_string_appendc(source, "\treturn _swift_result_value, _swift_converted\n");
@@ -2382,6 +2405,11 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 	for_array(i, types) {
 		if (types[i]->is_template || types[i]->external_name.len) continue;
 		if (types[i]->is_date) probe = swift_import_date_probe(probe, types[i], i);
+		if (types[i]->is_optional && types[i]->argument->kind == SwiftImportValue_String) {
+			probe = gb_string_appendc(probe,
+				"@_silgen_name(\"odin_swift_absent_text\") public func absent_text() -> Swift.String? { nil }\n"
+				"@_silgen_name(\"odin_swift_present_text\") public func present_text(_ value: Swift.String) -> Swift.String? { value }\n");
+		}
 		if (types[i]->is_uuid) probe = swift_import_uuid_probe(probe, types[i], i);
 		if (types[i]->is_currency_format) probe = gb_string_appendc(probe, "public func probe_currency_code(_ style: Foundation.Decimal.FormatStyle.Currency) -> Swift.String { style.currencyCode }\n");
 		if (types[i]->is_locale_currency) probe = gb_string_appendc(probe,
@@ -2514,6 +2542,9 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		}
 		if (type->kind == SwiftImportValue_Set) type->supported &= swift_import_set_layout(inspection, layout, sil, type, i);
 		if (type->is_enum) type->supported &= swift_import_enum_layout(inspection, layout, type, i);
+		if (type->is_optional && type->argument->kind == SwiftImportValue_String) {
+			type->optional_string_words = swift_import_optional_string_words(inspection, type);
+		}
 		if (type->is_record) swift_import_struct_layout(inspection, layout, type, i);
 		if (type->is_tuple) {
 			type->supported = type->projected;

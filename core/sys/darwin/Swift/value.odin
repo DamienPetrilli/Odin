@@ -34,6 +34,20 @@ Value_Allocation :: struct {
 }
 
 @(private)
+arena_value_header: Value_Allocation
+
+// Select an arena for Swift intermediates destroyed together at the end of
+// a scope. Its Swift owners must be destroyed before reusing the arena.
+value_arena_allocator :: proc(arena: ^mem.Arena) -> mem.Allocator {
+	return {procedure = value_arena_allocator_proc, data = arena}
+}
+
+@(private)
+value_arena_allocator_proc :: proc(data: rawptr, mode: mem.Allocator_Mode, size, alignment: int, old: rawptr, old_size: int, loc := #caller_location) -> ([]byte, mem.Allocator_Error) {
+	return mem.arena_allocator_proc(data, mode, size, alignment, old, old_size, loc)
+}
+
+@(private)
 value_witnesses :: proc "contextless" (metadata: rawptr) -> ^Value_Witnesses {
 	return (cast(^^Value_Witnesses)(uintptr(metadata) - size_of(rawptr)))^
 }
@@ -43,22 +57,39 @@ value_witnesses :: proc "contextless" (metadata: rawptr) -> ^Value_Witnesses {
 // the Odin context which created the value. This does not initialize a value.
 @(require_results)
 value_allocate :: proc(metadata: rawptr, allocator := context.allocator) -> (value: rawptr, ok: bool) #optional_ok {
+	if allocator.procedure == value_arena_allocator_proc {
+		return allocate_value_storage(metadata, allocator, true)
+	}
+	return allocate_value_storage(metadata, allocator, false)
+}
+
+@(private)
+allocate_value_storage :: proc(metadata: rawptr, allocator: mem.Allocator, $in_arena: bool) -> (value: rawptr, ok: bool) #optional_ok {
 	if metadata == nil {
 		return
 	}
 	witness := value_witnesses(metadata)
 	alignment := max(uint(witness.flags & 0xff) + 1, uint(align_of(Value_Allocation)))
-	header_size := mem.align_forward_uint(size_of(Value_Allocation) + size_of(rawptr), alignment)
+	header_size := alignment if in_arena else mem.align_forward_uint(size_of(Value_Allocation) + size_of(rawptr), alignment)
 	if witness.stride < witness.size || witness.stride == 0 ||
 	   witness.stride > uint(max(int))-header_size || alignment & (alignment-1) != 0 {
 		return
 	}
-	allocation, err := mem.alloc(int(header_size + witness.stride), int(alignment), allocator)
+	allocation: rawptr
+	err: mem.Allocator_Error
+	when in_arena {
+		allocation, err = mem.arena_alloc_non_zeroed(cast(^mem.Arena)allocator.data, int(header_size + witness.stride), int(alignment))
+	} else {
+		allocation, err = mem.alloc(int(header_size + witness.stride), int(alignment), allocator)
+	}
 	if err != .None || allocation == nil {
 		return
 	}
-	header := cast(^Value_Allocation)allocation
-	header.allocator = allocator
+	header := &arena_value_header
+	when !in_arena {
+		header = cast(^Value_Allocation)allocation
+		header.allocator = allocator
+	}
 	value = rawptr(uintptr(allocation) + uintptr(header_size))
 	(cast(^^Value_Allocation)(uintptr(value) - size_of(rawptr)))^ = header
 	return value, true
@@ -71,6 +102,7 @@ value_free_uninitialized :: proc(value: rawptr) {
 		return
 	}
 	header := (cast(^^Value_Allocation)(uintptr(value) - size_of(rawptr)))^
+	if header == &arena_value_header { return }
 	mem.free(header, header.allocator)
 }
 
@@ -92,7 +124,8 @@ value_destroy :: proc(value, metadata: rawptr) {
 	if value == nil {
 		return
 	}
-	value_witnesses(metadata).destroy(value, metadata)
+	witness := value_witnesses(metadata)
+	if witness.flags & 0x10000 != 0 { witness.destroy(value, metadata) }
 	value_free_uninitialized(value)
 }
 
@@ -250,7 +283,7 @@ value_destroy_many :: proc(values: []$T, metadata: rawptr) where intrinsics.type
 		header := (cast(^^Value_Allocation)(uintptr(value)-size_of(rawptr)))^
 		if header.allocator.procedure != value_batch_free {
 			if non_trivial { destroy_value(rawptr(value), metadata) }
-			mem.free(header, header.allocator)
+			if header != &arena_value_header { mem.free(header, header.allocator) }
 			index += 1
 			continue
 		}
@@ -301,6 +334,26 @@ value_temporary_free :: proc(temporary: ^Value_Temporary, value: rawptr) {
 	if value != rawptr(temporary) {
 		value_free_uninitialized(value)
 	}
+}
+
+// Only the scoped value arena reserves storage before it knows the enum tag.
+// If it is full the ordinary projection can still deliver an empty optional.
+@(require_results)
+optional_owner_reserve :: #force_inline proc(metadata: rawptr) -> (value: rawptr, ok: bool) #optional_ok {
+	if context.allocator.procedure != value_arena_allocator_proc { return }
+	return allocate_value_storage(metadata, context.allocator, true)
+}
+
+// Swift.Optional is a single-payload enum. Once Swift identifies .some,
+// the payload is already initialized at the start of its allocation.
+optional_owner_project :: proc(storage, metadata: rawptr, some: u32, $T: typeid) -> Maybe(T) where intrinsics.type_is_pointer(T) {
+	tag, valid := enum_tag(storage, metadata)
+	assert(valid)
+	if tag != some {
+		value_free_uninitialized(storage)
+		return nil
+	}
+	return T(storage)
 }
 
 // Complete Swift metadata and value witnesses are immutable.

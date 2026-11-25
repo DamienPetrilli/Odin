@@ -180,7 +180,44 @@ mutation_finished :: proc(task: swift.Task) {
 	value_calls += 1
 }
 
+check_optional_owner :: proc() {
+	zero := fixture.Value_init(0) or_else panic("Missing zero receiver")
+	defer fixture.Value_destroy(zero)
+	one := fixture.Value_init(1) or_else panic("Missing receiver")
+	defer fixture.Value_destroy(one)
+	buffer: [256]byte
+	arena := mem.Arena{data = buffer[:]}
+	owned: fixture.Value
+	{
+		context.allocator = mem.arena_allocator(&arena)
+		absent := fixture.Value_successor(zero) or_else panic("Missing empty optional")
+		assert(absent == nil && arena.offset == 0)
+		context.allocator = swift.value_arena_allocator(&arena)
+		item := fixture.Value_successor(one) or_else panic("Optional value allocation failed")
+		owned = item.(fixture.Value)
+		assert(fixture.Value_value(owned) == 2)
+	}
+	kept := fixture.Value_copy(owned) or_else panic("Copy failed")
+	mixed := make([]fixture.Value, 2)
+	mixed[0] = owned
+	mixed[1] = fixture.Value_copy(one) or_else panic("Copy failed")
+	fixture.Array_Value_destroy(mixed)
+	for &b in buffer { b = 0xcc }
+	assert(fixture.Value_value(kept) == 2)
+	fixture.Value_destroy(kept)
+	assert(fixture.live_value_count() == 2)
+	{
+		arena = {data = buffer[:1]}
+		context.allocator = swift.value_arena_allocator(&arena)
+		absent := fixture.Value_successor(zero) or_else panic("Empty optional needs no allocation")
+		assert(absent == nil)
+		item, ok := fixture.Value_successor(one)
+		assert(!ok && item == nil && fixture.live_value_count() == 2)
+	}
+}
+
 check_values :: proc() {
+	check_optional_owner()
 	assert(fixture.live_value_count() == 0)
 	state := Value_Allocator{backing = context.allocator, remaining = -1}
 	allocator := mem.Allocator{procedure = value_allocator, data = &state}

@@ -195,6 +195,7 @@ public struct Value {
 	private var storage: [UInt64]
 	public init(_ value: UInt64) { storage = [value, 0x123456789abcdef0] }
 	public var value: UInt64 { storage[0] }
+	public var successor: Value? { value == 0 ? nil : Value(value + 1) }
 	public mutating func increment(_ amount: UInt64) {
 		precondition(storage[1] == 0x123456789abcdef0)
 		storage[0] += amount

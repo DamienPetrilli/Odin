@@ -79,15 +79,20 @@ check_projected_enums :: proc() {
 	assert(state.allocations == 0)
 	state.remaining = -1
 
-	for sample in ([]string{"", "Café 📚", "embedded\x00zero"}) {
+	heap_text :: "A longer UTF-8 value with an embedded\x00byte and a book 📚"
+	for sample in ([]string{"", "Café 📚", "embedded\x00zero", heap_text}) {
 		input: Maybe(string) = sample
 		result := fixture.optional_text(input) or_else panic("Optional text")
 		text, found := result.?
 		assert(found && text == sample)
 		delete(text)
 	}
+	state.remaining = 0
 	none := fixture.optional_text(nil) or_else panic("Absent text")
 	assert(none == nil)
+	failed, text_copied := fixture.optional_text(Maybe(string)(heap_text))
+	assert(!text_copied && failed == nil)
+	state.remaining = -1
 	words: Maybe([]u64) = []u64{17, 29}
 	returned := fixture.optional_words(words) or_else panic("Optional array")
 	values, found := returned.?

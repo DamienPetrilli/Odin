@@ -56,7 +56,15 @@ string_to_odin :: proc(value: Native_String) -> (result: string, ok: bool) #opti
 	if length == 0 {
 		return "", true
 	}
-	allocated, err := mem.alloc_bytes_non_zeroed(int(length))
+	allocated: []byte
+	err: mem.Allocator_Error
+	allocator := context.allocator
+	if allocator.procedure == value_arena_allocator_proc {
+		allocated, err = mem.arena_alloc_bytes_non_zeroed(cast(^mem.Arena)allocator.data, int(length), align_of(u8))
+	} else {
+		if allocator.procedure == nil { return }
+		allocated, err = allocator.procedure(allocator.data, .Alloc_Non_Zeroed, int(length), align_of(u8), nil, 0, #location())
+	}
 	storage := raw_data(allocated)
 	if err != .None || storage == nil {
 		return
@@ -74,7 +82,7 @@ string_to_odin :: proc(value: Native_String) -> (result: string, ok: bool) #opti
 }
 
 string_destroy :: proc(value: ^Native_String) {
-	// This is the native String destructor. Swift handles tagged, native and
-	// foreign storage; the object word must not be masked or dereferenced here.
-	string_release(value.object)
+	// Bit 63 of the Darwin arm64 String discriminator denotes immortal storage,
+	// including inline strings. Pass every mortal object unchanged to Swift.
+	if uintptr(value.object) & 0x8000_0000_0000_0000 == 0 { string_release(value.object) }
 }
