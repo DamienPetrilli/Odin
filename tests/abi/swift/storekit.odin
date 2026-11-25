@@ -104,6 +104,8 @@ main :: proc() {
 	assert(!priced && code == "")
 	amount, currency, signed := sk.Transaction_price_and_currency(nil)
 	assert(!signed && amount == nil && currency == nil)
+	applied, got_offer := sk.Transaction_offer(nil)
+	assert(!got_offer && applied == nil)
 	scan: sk.Transaction_Scan
 	assert(!sk.scan_transactions(nil, .History, "sample", scan_item, scan_closed))
 	sk.stop_scan(&scan)

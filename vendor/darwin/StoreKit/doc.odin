@@ -988,6 +988,32 @@ signed quantity to credit three packs in the ledger.
 Use the signed currency even if the customer's storefront has since changed.
 [[Apple's transaction price;https://developer.apple.com/documentation/storekit/transaction/price]]
 
+To label a receipt, read the offer on the verified transaction. A free trial
+and its first full-price renewal share a product ID. Only the trial receipt
+has the introductory offer. A code redemption can also carry an identifier.
+
+```odin
+show_applied_offer :: proc(tx: sk.Transaction) -> bool {
+	item := sk.Transaction_offer(tx) or_return
+	offer, present := item.?
+	if !present { return true }
+	id, has_id := offer.id.?
+	if has_id {
+		defer delete(id)
+		show_offer_identifier(id)
+	}
+	if mode, provided := offer.mode.?; provided && mode == .Free_Trial {
+		show_free_trial()
+	}
+	return true
+}
+```
+
+The app supplies the two display procedures. The code identifier is borrowed
+during display. A missing mode leaves `offer.mode` empty. An unfamiliar mode
+yields a present `.Unknown`. Use the signed price to show the actual charge.
+[[Apple's transaction offer;https://developer.apple.com/documentation/storekit/transaction/offer-swift.property]]
+
 **Handle a failed purchase in the store UI**
 
 Suppose the customer taps Buy on a product that has just been removed from
