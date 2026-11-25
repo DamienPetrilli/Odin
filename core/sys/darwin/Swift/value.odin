@@ -3,6 +3,7 @@ package darwin_Swift
 
 import "base:intrinsics"
 import "core:mem"
+import "core:sync"
 
 // Returned by a Swift metadata accessor. A blocking request of zero asks for
 // complete metadata, including the layout and value witnesses.
@@ -302,9 +303,7 @@ value_temporary_free :: proc(temporary: ^Value_Temporary, value: rawptr) {
 	}
 }
 
-// Snapshot complete metadata once when a generated import is initialized. These
-// fields are immutable after startup; native calls cannot modify their storage.
-// Keep a runtime-checked fallback rather than assuming a resilient value's size.
+// Complete Swift metadata and value witnesses are immutable.
 Value_Layout :: struct {
 	metadata: rawptr,
 	destroy: proc "c" (value, metadata: rawptr),
@@ -322,6 +321,19 @@ value_layout :: proc "contextless" (metadata: rawptr) -> Value_Layout {
 	destroy := witness.destroy
 	if witness.flags & 0x10000 == 0 { destroy = nil }
 	return {metadata, destroy, fits}
+}
+
+@(private)
+Value_Layout_Cache :: struct {
+	once:   sync.Once,
+	layout: Value_Layout,
+}
+
+// One layout per concrete accessor, including when Swift owns the entry point.
+value_layout_for :: #force_inline proc "contextless" ($accessor: proc "swift" (request: u64) -> Metadata_Response) -> Value_Layout {
+	@(static) cache: Value_Layout_Cache
+	sync.once_do(&cache.once, proc "contextless" () { cache.layout = value_layout(accessor(0).type) })
+	return cache.layout
 }
 
 @(require_results)

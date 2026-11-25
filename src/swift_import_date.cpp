@@ -53,20 +53,19 @@ gb_internal bool swift_import_date_layout(LLVMModuleRef module, String sil, Swif
 
 gb_internal gbString swift_import_emit_date(gbString source, SwiftImportNominal *type) {
 	String name = type->name;
+	source = swift_import_emit_cached_layout(source, name);
 	source = gb_string_append_fmt(source,
 		"@(private)\nforeign swift_library {\n\t@(link_name=\"%.*sMa\")\n"
-		"\t_swift_%.*s_metadata_native :: proc \"swift\" (request: u64) -> swift.Metadata_Response ---\n}\n"
-		"@(private)\n_swift_%.*s_layout := swift.value_layout(_swift_%.*s_metadata_native(0).type)\n"
-		"@(private)\n_swift_%.*s_metadata :: proc(_: u64) -> swift.Metadata_Response { return {_swift_%.*s_layout.metadata, 0} }\n",
-		LIT(type->symbol), LIT(name), LIT(name), LIT(name), LIT(name), LIT(name));
+		"\t_swift_%.*s_metadata :: proc \"swift\" (request: u64) -> swift.Metadata_Response ---\n}\n",
+		LIT(type->symbol), LIT(name));
 	return gb_string_append_fmt(source,
 		"%.*s :: swift.Date\n"
 		"@(private)\nforeign swift_library {\n"
 		"\t@(link_name=\"%.*s\")\n\t_swift_%.*s_seconds :: proc \"swift\" (#swift_self value: rawptr) -> f64 ---\n"
 		"\t@(link_name=\"%.*s\")\n\t_swift_%.*s_construct :: proc \"swift\" (#swift_result storage: rawptr, seconds: f64) ---\n}\n"
 		"@(private)\n_swift_%.*s_initialize :: proc(storage: rawptr, value: %.*s) -> bool {\n\t_swift_%.*s_construct(storage, f64(value))\n\treturn true\n}\n"
-		"@(private)\n_swift_%.*s_take :: proc(storage: rawptr, layout := _swift_%.*s_layout) -> (result: %.*s, ok: bool) #optional_ok {\n"
+		"@(private)\n_swift_%.*s_take_with_layout :: proc(storage: rawptr, layout: swift.Value_Layout) -> (result: %.*s, ok: bool) #optional_ok {\n"
 		"\tseconds := _swift_%.*s_seconds(storage)\n\tswift.value_deinitialize_from_layout(storage, layout)\n\treturn %.*s(seconds), true\n}\n\n",
 		LIT(name), LIT(type->date_getter), LIT(name), LIT(type->date_initializer), LIT(name),
-		LIT(name), LIT(name), LIT(name), LIT(name), LIT(name), LIT(name), LIT(name), LIT(name));
+		LIT(name), LIT(name), LIT(name), LIT(name), LIT(name), LIT(name), LIT(name));
 }

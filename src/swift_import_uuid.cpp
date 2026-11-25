@@ -69,24 +69,23 @@ gb_internal bool swift_import_uuid_layout(LLVMModuleRef module, String sil, Swif
 }
 
 gb_internal gbString swift_import_emit_uuid(gbString source, SwiftImportNominal *type) {
+	source = swift_import_emit_cached_layout(source, type->name);
 	source = gb_string_append_fmt(source,
 		"UUID :: _swift_uuid.Identifier\n"
 		"@(private)\n_swift_UUID_Words :: struct { low, high: u64 }\n"
 		"@(private)\nforeign swift_library {\n"
-		"\t@(link_name=\"%.*sMa\")\n\t_swift_UUID_metadata_native :: proc \"swift\" (request: u64) -> swift.Metadata_Response ---\n"
+		"\t@(link_name=\"%.*sMa\")\n\t_swift_UUID_metadata :: proc \"swift\" (request: u64) -> swift.Metadata_Response ---\n"
 		"\t@(link_name=\"%.*s\")\n\t_swift_UUID_bytes :: proc \"swift\" (#swift_self value: rawptr) -> _swift_UUID_Words ---\n"
 		"\t@(link_name=\"%.*s\")\n\t_swift_UUID_construct :: proc \"swift\" (#swift_result storage: rawptr",
 		LIT(type->symbol), LIT(type->uuid_getter), LIT(type->uuid_initializer));
 	for (isize i = 0; i < 16; i++) source = gb_string_append_fmt(source, ", b%td: u8", i);
 	source = gb_string_appendc(source,
 		") ---\n}\n"
-		"@(private)\n_swift_UUID_layout := swift.value_layout(_swift_UUID_metadata_native(0).type)\n"
-		"@(private)\n_swift_UUID_metadata :: proc(_: u64) -> swift.Metadata_Response { return {_swift_UUID_layout.metadata, 0} }\n"
 		"@(private)\n_swift_UUID_initialize :: proc(storage: rawptr, value: UUID) -> bool {\n\t_swift_UUID_construct(storage");
 	for (isize i = 0; i < 16; i++) source = gb_string_append_fmt(source, ", value[%td]", i);
 	return gb_string_appendc(source,
 		")\n\treturn true\n}\n"
 		"@(private)\n_swift_UUID_read :: proc(storage: rawptr) -> UUID { return transmute(UUID)_swift_UUID_bytes(storage) }\n"
-		"@(private)\n_swift_UUID_take :: proc(storage: rawptr, layout := _swift_UUID_layout) -> (result: UUID, ok: bool) #optional_ok {\n"
+		"@(private)\n_swift_UUID_take_with_layout :: proc(storage: rawptr, layout: swift.Value_Layout) -> (result: UUID, ok: bool) #optional_ok {\n"
 		"\tvalue := _swift_UUID_read(storage)\n\tswift.value_deinitialize_from_layout(storage, layout)\n\treturn value, true\n}\n\n");
 }

@@ -234,11 +234,12 @@ if [[ $sdk == macosx ]]; then
 	cp "$here/set_object.odin" "$build/sets/"
 	"$ODIN" build "$build/sets/set_object.odin" -file "${odin_target[@]}" "${odin_opt[@]}" \
 		-no-entry-point -use-single-module -build-mode:obj -out:"$build/sets.o"
-	echo 'int count_set_members(void);' > "$build/sets.h"
+	printf '#include <stdbool.h>\nint count_set_members(void);\nbool check_foundation_layouts(void);\n' > "$build/sets.h"
 	cat > "$build/sets.swift" <<'SWIFT'
 import Dispatch
 DispatchQueue.concurrentPerform(iterations: 16) { _ in
 	precondition(count_set_members() == 5)
+	precondition(check_foundation_layouts())
 }
 SWIFT
 	"${swiftc[@]}" -import-objc-header "$build/sets.h" "$build/sets.swift" \

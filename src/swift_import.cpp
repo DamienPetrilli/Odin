@@ -1225,6 +1225,20 @@ gb_internal bool swift_import_string_array(SwiftImportType const &type) {
 #include "swift_import_array.cpp"
 #include "swift_import_set.cpp"
 #include "swift_import_struct.cpp"
+
+// Only an Odin executable can rely on its startup code initializing the layout.
+gb_internal gbString swift_import_emit_cached_layout(gbString source, String name) {
+	return gb_string_append_fmt(source,
+		"when ODIN_BUILD_MODE == .Executable && !ODIN_NO_ENTRY_POINT && !ODIN_BEDROCK {\n"
+		"\t@(private)\n\t_swift_%.*s_cached_layout := swift.value_layout(_swift_%.*s_metadata(0).type)\n"
+		"\t@(private)\n\t_swift_%.*s_layout :: #force_inline proc \"contextless\" () -> swift.Value_Layout { return _swift_%.*s_cached_layout }\n"
+		"} else {\n"
+		"\t@(private)\n\t_swift_%.*s_layout :: #force_inline proc \"contextless\" () -> swift.Value_Layout { return swift.value_layout_for(_swift_%.*s_metadata) }\n}\n"
+		"@(private)\n_swift_%.*s_take :: proc(storage: rawptr) -> (result: %.*s, ok: bool) #optional_ok {\n"
+		"\treturn _swift_%.*s_take_with_layout(storage, _swift_%.*s_layout())\n}\n",
+		LIT(name), LIT(name), LIT(name), LIT(name), LIT(name), LIT(name), LIT(name), LIT(name), LIT(name), LIT(name));
+}
+
 #include "swift_import_date.cpp"
 #include "swift_import_uuid.cpp"
 #include "swift_import_error.cpp"
@@ -1521,8 +1535,8 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 			has_date |= param.type.nominal && param.type.nominal->is_date;
 			has_uuid |= param.type.nominal && param.type.nominal->is_uuid;
 		}
-		if (has_date) source = gb_string_appendc(source, "\t_swift_date_layout := _swift_Date_layout\n");
-		if (has_uuid) source = gb_string_appendc(source, "\t_swift_uuid_layout := _swift_UUID_layout\n");
+		if (has_date) source = gb_string_appendc(source, "\t_swift_date_layout := _swift_Date_layout()\n");
+		if (has_uuid) source = gb_string_appendc(source, "\t_swift_uuid_layout := _swift_UUID_layout()\n");
 		if (receiver) source = gb_string_appendc(source, "\tassert(receiver != nil, \"Cannot borrow a nil Swift value\")\n");
 		for_array(i, fn.parameters) {
 			auto const &param = fn.parameters[i];
@@ -1574,7 +1588,8 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		if (consumes) source = gb_string_appendc(source, "\t_swift_called = true\n");
 		if (release_inputs) source = gb_string_appendc(source, release_inputs);
 		if (projected_result) {
-			source = gb_string_append_fmt(source, "\t_swift_result_value, _swift_converted := _swift_%.*s_take(%s_swift_storage%s)\n", LIT(fn.result.nominal->name), fixed_result ? "&" : "", fn.result.nominal->is_date ? ", _swift_date_layout" : fn.result.nominal->is_uuid ? ", _swift_uuid_layout" : "");
+			bool cached_layout = fn.result.nominal->is_date || fn.result.nominal->is_uuid;
+			source = gb_string_append_fmt(source, "\t_swift_result_value, _swift_converted := _swift_%.*s_take%s(%s_swift_storage%s)\n", LIT(fn.result.nominal->name), cached_layout ? "_with_layout" : "", fixed_result ? "&" : "", fn.result.nominal->is_date ? ", _swift_date_layout" : fn.result.nominal->is_uuid ? ", _swift_uuid_layout" : "");
 			if (fallible) source = gb_string_appendc(source, "\treturn _swift_result_value, _swift_converted\n");
 			else source = gb_string_appendc(source, "\tassert(_swift_converted)\n\treturn _swift_result_value\n");
 		} else if (slice_result) source = gb_string_append_fmt(source, "\tdefer swift.array_destroy(swift.Native_Array{_swift_value})\n\treturn %.*s\n", LIT(swift_import_array_to(fn.result.nominal, str_lit("swift.Native_Array{_swift_value}"))));
