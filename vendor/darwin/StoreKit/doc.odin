@@ -533,6 +533,17 @@ original compact signed transaction as an owned Odin string. Release it with
 `delete(signed)`. An unverified result can also carry signed text. Grant access
 only after successful verification.
 
+Read `price := sk.Product_price(product) or_return` for calculations. The
+magnitude is `coefficient * 10^exponent`; `negative` carries the sign. For example,
+2.99 has coefficient 299 and exponent -2, and 0.125 has coefficient 125 and
+exponent -3. The value is allocation-free. Use `Product_display_price` for
+localized price text. Check the currency separately before combining amounts.
+
+Use `Transaction_json_representation` to read the transaction JSON as an owned
+`[]u8`. The header, payload, signature and signed bytes are available from the
+verification. Each call creates an independent slice. Release it with
+`delete(bytes)`. Forward the original JWS for signature verification.
+
 Transaction history and shared benefits
 
 Use a finite scan to show a purchase history or refresh entitlements for one

@@ -30,6 +30,9 @@ when AVAILABLE {
 	Product_description   :: api.Product_description
 	Product_display_price :: api.Product_display_price
 
+	Decimal       :: swift.Decimal
+	Product_price :: api.Product_price
+
 	// StoreKit uses an open, string-backed type. Unknown includes product types
 	// introduced by newer SDKs. A failed getter returns ok = false.
 	Product_Type :: enum {
@@ -117,6 +120,11 @@ when AVAILABLE {
 	Verification         :: api.VerificationResult_Transaction
 	// The caller owns the compact signed text and releases it with delete.
 	Verification_jws     :: api.VerificationResult_Transaction_jws_representation
+	// Each successful bytes getter transfers an independent slice to the caller.
+	Verification_header_data    :: api.VerificationResult_Transaction_header_data
+	Verification_signed_data    :: api.VerificationResult_Transaction_signed_data
+	Verification_payload_data   :: api.VerificationResult_Transaction_payload_data
+	Verification_signature_data :: api.VerificationResult_Transaction_signature_data
 	Verification_copy    :: api.VerificationResult_Transaction_copy
 	Verification_destroy :: api.VerificationResult_Transaction_destroy
 	Verified             :: api.VerificationResult_Transaction_Verified
@@ -142,6 +150,8 @@ when AVAILABLE {
 	Transaction_id                     :: api.Transaction_id
 	Transaction_product_id             :: api.Transaction_product_id
 	Transaction_app_account_token      :: api.Transaction_app_account_token
+	Transaction_json_representation    :: api.Transaction_json_representation
+	Transaction_device_verification    :: api.Transaction_device_verification
 	Transaction_purchase_date          :: api.Transaction_purchase_date
 	Transaction_original_purchase_date :: api.Transaction_original_purchase_date
 	Transaction_expiration_date        :: api.Transaction_expiration_date
