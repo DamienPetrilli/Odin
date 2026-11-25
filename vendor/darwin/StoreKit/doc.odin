@@ -136,6 +136,8 @@ An approval can become visible after a scan ends. Keep the updates listener acti
 For content
 that requires a download or database write, finish only after delivery succeeds.
 Key any one-time side effect by `Transaction_id` so a retry cannot deliver twice.
+StoreKit Testing on iOS can issue transaction ID zero. Use a separate flag or
+optional value when tracking whether a purchase callback has delivered an ID.
 
 Rebuild the Pro flag at launch from `.Entitlements`. Collect verified, unrevoked
 matches for `PRO_ID` and publish that snapshot once the stream ends with
@@ -815,6 +817,52 @@ A successful restore means StoreKit finished synchronizing. The verified group
 status determines access. For example, someone who turned off renewal yesterday
 can still use Plus today if the paid period ends tomorrow. Show the renewal
 setting in the billing UI. Gate the feature with `subscription_active`.
+
+**Show a free trial on a monthly plan**
+
+Read the product's offer and check the
+customer's eligibility for its group. A group can be eligible even when this
+product has no offer. The example keeps one product selected. Call
+`check_trial` again when the selection changes, and clear `trial_query` when
+the store closes so a late answer cannot update the old button.
+
+```odin
+trial_query: sk.Task
+trial_period: sk.Billing_Interval
+
+check_trial :: proc(product: sk.Product) -> bool {
+	trial_query = nil
+	show_regular_price() // App UI, including while eligibility is pending.
+	terms := sk.Product_introductory_offer(product) or_return
+	offer, present := terms.?
+	if !present { return true }
+	defer delete(offer.display_price)
+	if offer.mode != .Free_Trial || offer.period.unit == .Unknown { return true }
+	trial_period = offer.period
+	group := sk.subscription_group_id(product) or_return
+	defer delete(group)
+	trial_query = sk.eligible_for_intro_offer(group, trial_checked) or_return
+	return true
+}
+
+trial_checked :: proc(task: sk.Task, eligible: bool) {
+	defer sk.task_release(task)
+	if task != trial_query { return }
+	trial_query = nil
+	if eligible { show_free_trial(trial_period.count, trial_period.unit) }
+}
+```
+
+For a paid introduction, show `offer.display_price` and its calendar
+`period`. With `.Pay_As_You_Go`, that price applies to each of
+`period_count` periods. With `.Pay_Up_Front`, it covers the full offer
+period in one payment. Show the regular price and renewal interval alongside
+the introduction. For example, Apple's Food Truck monthly plan shows $2.49
+per month for three months, then $4.99 per month in its US test store. Use
+StoreKit's localized prices in the actual storefront. Keep the regular button
+when the mode is unknown. Use the ordinary purchase procedure for the selected
+product. [[Food Truck's StoreKit configuration;https://github.com/apple/sample-food-truck/blob/main/App/Store/Products.storekit]]
+[[Apple's group eligibility rules;https://developer.apple.com/documentation/storekit/product/subscriptioninfo/iseligibleforintrooffer(for:)]]
 
 **Other cases a store needs to handle**
 

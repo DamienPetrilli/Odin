@@ -93,6 +93,11 @@ when AVAILABLE {
 		subscription := info.? or_return
 		period := api.Product_SubscriptionInfo_subscription_period(subscription) or_return
 		defer api.Product_SubscriptionPeriod_destroy(period)
+		return billing_interval(period)
+	}
+
+	@(private)
+	billing_interval :: proc(period: api.Product_SubscriptionPeriod) -> (interval: Billing_Interval, ok: bool) #optional_ok {
 		unit := api.Product_SubscriptionPeriod_unit(period) or_return
 		defer api.Product_SubscriptionPeriod_Unit_destroy(unit)
 		interval.count = api.Product_SubscriptionPeriod_value(period)
@@ -104,6 +109,65 @@ when AVAILABLE {
 		case api.Product_SubscriptionPeriod_Unit_Unknown: interval.unit = .Unknown
 		}
 		return interval, true
+	}
+
+	Offer_Payment_Mode :: enum { Unknown, Free_Trial, Pay_As_You_Go, Pay_Up_Front }
+
+	Introductory_Offer :: struct {
+		mode:          Offer_Payment_Mode,
+		period:        Billing_Interval,
+		period_count:  int,
+		price:         Decimal,
+		display_price: string,
+	}
+
+	// Checks the customer once for the whole subscription group.
+	eligible_for_intro_offer :: api.Product_SubscriptionInfo_is_eligible_for_intro_offer_for_
+
+	// A successful empty result means the product has no introductory offer.
+	// The caller owns a present offer's display_price.
+	@(require_results)
+	Product_introductory_offer :: proc(product: Product) -> (offer: Maybe(Introductory_Offer), ok: bool) #optional_ok {
+		if product == nil { return nil, false }
+		// Swift controls the temporary layouts. Retry with the caller's allocator
+		// if a larger layout no longer fits. Only display_price escapes.
+		caller := context.allocator
+		buffer: [1024]byte = ---
+		arena := mem.Arena{data = buffer[:]}
+		allocators := [2]mem.Allocator{mem.arena_allocator(&arena), caller}
+		for scratch in allocators {
+			context.allocator = scratch
+			info := api.Product_subscription(product) or_continue
+			defer api.Optional_Product_SubscriptionInfo_destroy(info)
+			subscription, is_subscription := info.?
+			if !is_subscription { return nil, true }
+			item := api.Product_SubscriptionInfo_introductory_offer(subscription) or_continue
+			defer api.Optional_Product_SubscriptionOffer_destroy(item)
+			value, present := item.?
+			if !present { return nil, true }
+
+			mode := api.Product_SubscriptionOffer_payment_mode(value) or_continue
+			defer api.Product_SubscriptionOffer_PaymentMode_destroy(mode)
+			code := api.Product_SubscriptionOffer_PaymentMode_raw_value(mode) or_continue
+			defer delete(code)
+			terms: Introductory_Offer
+			switch code {
+			case "FreeTrial":  terms.mode = .Free_Trial
+			case "PayAsYouGo": terms.mode = .Pay_As_You_Go
+			case "PayUpFront": terms.mode = .Pay_Up_Front
+			}
+			period := api.Product_SubscriptionOffer_period(value) or_continue
+			defer api.Product_SubscriptionPeriod_destroy(period)
+			terms.period = billing_interval(period) or_continue
+			terms.period_count = api.Product_SubscriptionOffer_period_count(value)
+			terms.price = api.Product_SubscriptionOffer_price(value) or_continue
+			{
+				context.allocator = caller
+				terms.display_price = api.Product_SubscriptionOffer_display_price(value) or_return
+			}
+			return terms, true
+		}
+		return nil, false
 	}
 
 	Subscription_State :: enum {

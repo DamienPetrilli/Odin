@@ -15,6 +15,15 @@ loaded :: proc(task: sk.Task, products: []sk.Product, err: sk.Error) {
 		if kind == .Auto_Renewable_Subscription {
 			interval := sk.Product_subscription_period(product) or_continue
 			assert(interval.count > 0)
+			terms := sk.Product_introductory_offer(product) or_continue
+			if offer, present := terms.?; present {
+				defer delete(offer.display_price)
+				assert(offer.period_count > 0)
+				group := sk.subscription_group_id(product) or_continue
+				defer delete(group)
+				eligibility := sk.eligible_for_intro_offer(group, eligibility_received) or_continue
+				sk.task_release(eligibility)
+			}
 		}
 		if kind == .Consumable {
 			option := sk.purchase_quantity(2) or_continue
@@ -28,6 +37,8 @@ loaded :: proc(task: sk.Task, products: []sk.Product, err: sk.Error) {
 		defer delete(currency)
 	}
 }
+
+eligibility_received :: proc(_: sk.Task, _: bool) {}
 
 refund_completed :: proc(_: sk.Task, result: sk.Refund_Result, err: sk.Error) {
 	defer sk.Refund_Result_destroy(result)
@@ -85,6 +96,8 @@ main :: proc() {
 	sk.stop_subscription_watch(&subscriptions)
 	_, verified := sk.subscription_period(nil)
 	assert(!verified)
+	offer, read := sk.Product_introductory_offer(nil)
+	assert(!read && offer == nil)
 	id, country, has_store := sk.storefront_details(nil)
 	assert(!has_store && id == "" && country == "")
 	_, code, priced := sk.price_and_currency(nil)
