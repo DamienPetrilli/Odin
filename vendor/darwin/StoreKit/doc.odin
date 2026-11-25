@@ -512,6 +512,17 @@ notification use App Store Server Notifications V2.
 For a multiwindow iPad app targeting iOS 18.2+, use
 `purchase_confirm_in(pro_product, view_controller, purchase_received)` with the
 UIKit view controller from the window where the buyer tapped.
+On macOS apps targeting 15.2+, pass the AppKit window where the buyer clicked
+to tell StoreKit where to present confirmation. The binding retains the window
+through the async call, so the app can release its own reference after starting.
+
+```odin
+buy_in_window :: proc(product: sk.Product, window: ^AppKit.Window) -> bool {
+	task := sk.purchase_confirm_in(product, window, purchase_received) or_return
+	sk.task_release(task)
+	return true
+}
+```
 
 Releasing a started task handle leaves the operation running. Use `task_cancel`
 to request cancellation. Completion borrows the task. The catalog callback owns

@@ -128,6 +128,7 @@ gb_global SwiftImportObjcPresenter const swift_import_objc_presenters[] = {
 	{"c:objc(cs)UIViewController", {"UIKit.UIViewController", "^_swift_ui.ViewController", "ptr"}, "@guaranteed UIViewController", false},
 	{"c:objc(cs)UIWindowScene",    {"UIKit.UIWindowScene",    "^_swift_ui.WindowScene",    "ptr"}, "@guaranteed UIWindowScene",    false},
 	{"c:objc(cs)NSViewController", {"AppKit.NSViewController", "^_swift_ui.ViewController", "ptr"}, "@guaranteed NSViewController", true},
+	{"c:objc(cs)NSWindow",         {"AppKit.NSWindow",         "^_swift_ui.Window",         "ptr"}, "@guaranteed NSWindow",         true},
 };
 
 struct SwiftImportParameter {
@@ -1624,7 +1625,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		auto const &param = fn.parameters[i];
 		if (param.empty_set) continue;
 		if (param.objc_borrow) {
-			source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = %.*s\n\t_swift_ns.ObjectProtocol_retain(cast(^_swift_ns.ObjectProtocol)%.*s)\n\tdefer if !ok { _swift_ns.ObjectProtocol_release(cast(^_swift_ns.ObjectProtocol)%.*s) }\n", i, LIT(param.name), LIT(param.name), LIT(param.name));
+			source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = %.*s\n\t_swift_objc.objc_retain(cast(_swift_objc.id)%.*s)\n\tdefer if !ok { _swift_objc.objc_release(cast(_swift_objc.id)%.*s) }\n", i, LIT(param.name), LIT(param.name), LIT(param.name));
 		} else if (swift_import_projected(param.type)) {
 			auto type = param.type.nominal;
 			if (!type->alignment) source = gb_string_append_fmt(source, "\t_swift_capture.arg%td = swift.value_allocate(_swift_%.*s_metadata(0).type) or_return\n\tdefer if !ok { swift.value_free_uninitialized(_swift_capture.arg%td) }\n", i, LIT(type->name), i);
@@ -1663,7 +1664,7 @@ gb_internal gbString swift_import_emit_value_function(gbString source, SwiftImpo
 		auto const &param = fn.parameters[i];
 		if (param.empty_set) continue;
 		if (param.objc_borrow) {
-			source = gb_string_append_fmt(source, "\t\t_swift_ns.ObjectProtocol_release(cast(^_swift_ns.ObjectProtocol)capture.arg%td)\n", i);
+			source = gb_string_append_fmt(source, "\t\t_swift_objc.objc_release(cast(_swift_objc.id)capture.arg%td)\n", i);
 		} else if (swift_import_projected(param.type)) {
 			auto type = param.type.nominal;
 			if (!param.consumed && swift_import_native_owns(param.type)) source = gb_string_append_fmt(source, "\t\tswift.value_deinitialize(%scapture.arg%td, _swift_%.*s_metadata(0).type)\n", type->alignment ? "&" : "", i, LIT(type->name));
@@ -2754,7 +2755,7 @@ gb_internal bool swift_import_generate(Ast *node, SwiftImportPackage *pkg) {
 		source = gb_string_append_fmt(source, "import _swift_dependency_%.*s %.*s\n", LIT(pkg->dependencies[i].module), LIT(path));
 	}
 	if (has_ui) {
-		source = gb_string_append_fmt(source, "import _swift_ui \"vendor:darwin/%s\"\nimport _swift_ns \"core:sys/darwin/Foundation\"\n",
+		source = gb_string_append_fmt(source, "import _swift_ui \"vendor:darwin/%s\"\nimport _swift_objc \"core:sys/darwin/ObjectiveC\"\n",
 			selected_subtarget == Subtarget_Default ? "AppKit" : "UIKit");
 	}
 	if (has_scalar_async || has_sync_throwing) source = gb_string_appendc(source, "import \"base:intrinsics\"\n");

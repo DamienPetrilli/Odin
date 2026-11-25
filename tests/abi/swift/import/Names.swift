@@ -67,4 +67,11 @@ public func controllerAddress(options: Set<Swift.UInt64> = []) async -> Swift.UI
 }
 
 public func controllerAddress(presenting scene: some UIScene, options: Set<Swift.UInt64> = []) async -> Swift.UInt { 0 }
+#elseif canImport(AppKit)
+import AppKit
+
+@MainActor public func controllerAddress(_ controller: NSViewController) async -> Swift.UInt {
+	await Task.yield()
+	return Swift.UInt(bitPattern: Unmanaged.passUnretained(controller).toOpaque())
+}
 #endif

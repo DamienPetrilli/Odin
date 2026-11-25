@@ -114,6 +114,24 @@ if [[ "$sdk" != macosx ]]; then cp "$here/controller.odin" "$build/names/"; fi
 "$ODIN" build "$build/names" "${odin_target[@]}" "${odin_opt[@]}" \
 	-vet -vet-tabs -strict-style -vet-style -warnings-as-errors -disallow-do -out:"$build/names-test"
 
+if [[ $sdk == macosx ]]; then
+	# Swift owns main. A standalone Odin object must manage the presenter
+	# even when no Odin executable initialized Objective-C selectors.
+	mkdir "$build/appkit"
+	cp "$here/appkit_object.odin" "$build/appkit/"
+	cat > "$build/appkit.h" <<'HEADER'
+#include <stdbool.h>
+#include <stdint.h>
+bool start_presenter(void *);
+uintptr_t received_presenter(void);
+HEADER
+	"$ODIN" build "$build/appkit" "${odin_target[@]}" "${odin_opt[@]}" -no-entry-point \
+		-use-single-module -build-mode:obj -vet -vet-tabs -strict-style -warnings-as-errors -out:"$build/appkit.o"
+	"${swiftc[@]}" -parse-as-library -import-objc-header "$build/appkit.h" "$here/AppKitObject.swift" \
+		"$build/appkit.o" "$build/names/fixture/SwiftNamesFixture.o" -o "$build/appkit-test"
+	"$build/appkit-test"
+fi
+
 # Check rejections in one invocation on every target, including link-only iOS runs.
 rejected=(text_bounds owned_tuple unsupported_text_tuple tuple_case_collision ArrayRecord_recursive_result TextRecord_clear RawCollision_raw_value RawCode_replace async_buffer returned_buffer generic checked_input checked_output checked_typed Value_checked_method isolated_sync overloaded future inout_value typed_throwing
 	unsupported_nested_array indirect_payload recursive_payload existential_payload colliding_fields

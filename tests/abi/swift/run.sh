@@ -46,6 +46,9 @@ if [[ ${2:-debug} == debug ]]; then
 	storekit=(build "$here/storekit.odin" -file -vet -vet-tabs -strict-style -vet-style -warnings-as-errors)
 	"$ODIN" "${storekit[@]}" "${odin_target[@]}" -out:"$build/storekit"
 	if [[ "$sdk" == macosx ]]; then
+		if xcrun --sdk macosx --show-sdk-version | awk -F. '{ exit !($1 > 15 || ($1 == 15 && $2 >= 2)) }'; then
+			"$ODIN" "${storekit[@]}" -target:darwin_arm64 -minimum-os-version:15.2 -out:"$build/storekit-window"
+		fi
 		package="$here/../../../vendor/darwin/StoreKit"
 		"$ODIN" doc "$package" "${odin_target[@]}" > "$build/storekit.txt"
 		grep -Eq '[[:space:]]products :: proc\(' "$build/storekit.txt"

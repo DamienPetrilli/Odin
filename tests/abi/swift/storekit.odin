@@ -54,6 +54,16 @@ store_changed :: proc(_: ^sk.Storefront_Watch, store: sk.Storefront) {
 watch_closed :: proc(_: ^sk.Storefront_Watch, _: sk.Listener_End) {}
 
 main :: proc() {
+	when (ODIN_PLATFORM_SUBTARGET == .Default && ODIN_MINIMUM_OS_VERSION >= 15_02_00) ||
+	     (ODIN_PLATFORM_SUBTARGET != .Default && ODIN_MINIMUM_OS_VERSION >= 18_02_00) {
+		callback :: proc(_: sk.Task, _: sk.Purchase_Result, _: sk.Error) {
+			panic("A failed purchase start cannot complete")
+		}
+		purchase, confirmed := sk.purchase_confirm_in(nil, nil, callback)
+		assert(!confirmed && purchase == nil)
+		purchase, confirmed = sk.purchase_confirm_in(nil, nil, nil, callback)
+		assert(!confirmed && purchase == nil)
+	}
 	watch: sk.Storefront_Watch
 	assert(!sk.watch_storefront(nil, store_changed, watch_closed))
 	assert(!sk.watch_storefront(&watch, nil, watch_closed))

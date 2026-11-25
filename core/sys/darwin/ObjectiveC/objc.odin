@@ -83,6 +83,8 @@ objc_AssociationPolicy :: enum c.uintptr_t {
 
 @(default_calling_convention="c")
 foreign lib {
+	objc_retain                   :: proc(value: id) -> id ---
+	objc_release                  :: proc(value: id) ---
 	objc_getClass                 :: proc(name: cstring) -> Class ---
 	objc_getMetaClass             :: proc(name: cstring) -> id ---
 	objc_lookUpClass              :: proc(name: cstring) -> Class ---
